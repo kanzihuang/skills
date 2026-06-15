@@ -26,9 +26,11 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 **Dependencies:** `weread-skills` (for highlight data via WeRead API), Python packages: `genanki`, `gtts`, `requests`
 
 **Design principles:**
-- Separation of concerns: knowledge work vs mechanical work
-- Graceful degradation: audio failures don't block card generation
-- Incremental safety: sync mode only adds, never modifies existing cards
+- **Separation of concerns**: knowledge work (Claude) vs mechanical work (Python)
+- **Cross-book independence**: `WordId = {word}_{bookId}` as first model field, allowing same word from different books to coexist as independent cards. Card display still uses `{{Word}}`, WordId is invisible to user
+- **Graceful degradation**: audio failures don't block card generation（Free Dictionary API → gTTS fallback）
+- **Incremental safety**: sync mode only adds, never modifies existing cards. Deck-only dedup via WordId field
+- **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})` matching `generate_apkg.py` convention
 
 ## Integration
 
