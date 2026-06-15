@@ -1,0 +1,7 @@
+# Generated .apkg files
+*.apkg
+
+# Python virtual environment
+.env/
+.venv/
+
