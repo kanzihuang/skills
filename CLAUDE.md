@@ -4,7 +4,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a skills repository for Claude Code. It is currently in its initial state with no source code or project structure yet.
+This is a skills repository for Claude Code. Skills are reusable workflow bundles that extend Claude Code's capabilities.
+
+## Skills
+
+### vocab-anki (`vocab-anki/`)
+
+Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book highlights.
+
+**Architecture:** Claude ↔ Python two-phase design:
+- **Claude**: knowledge work — recalls real book sentences for each highlighted word, provides Chinese definitions and translations
+- **Python**: mechanical work — fetches IPA/audio from Free Dictionary API (gTTS fallback), generates sentence TTS, packages into `.apkg` or syncs to Anki via AnkiConnect
+
+**Scripts:**
+| Script | Purpose |
+|--------|---------|
+| `generate_apkg.py` | Generate standalone `.apkg` file with embedded audio |
+| `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress) |
+| `ankiconnect.py` | AnkiConnect JSON-RPC client library |
+
+**Dependencies:** `weread-skills` (for highlight data via WeRead API), Python packages: `genanki`, `gtts`, `requests`
+
+**Design principles:**
+- Separation of concerns: knowledge work vs mechanical work
+- Graceful degradation: audio failures don't block card generation
+- Incremental safety: sync mode only adds, never modifies existing cards
+
+## Integration
+
+This repo's skills integrate with the `weread-skills` skill (installed from `Tencent/WeChatReading`) for WeRead API access. Skills reuse the same gateway URL, auth header (`Authorization: Bearer $WEREAD_API_KEY`), and flat JSON parameter conventions.
 
 ## License
 
