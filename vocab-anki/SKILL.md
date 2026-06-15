@@ -2,20 +2,26 @@
 name: vocab-anki
 description: >
   Generate Anki vocabulary flashcard decks (.apkg) from WeRead (微信读书)
-  English book highlights. Use when user wants to create Anki cards from their
-  WeRead highlights, e.g. "/vocab-anki The Little Prince" or "为这本书的划线生词
-  生成 Anki 牌组". Integrates with weread-skills for data; Claude does knowledge
-  work (sentences, translations), Python script handles audio + packaging.
+  English book highlights. Supports two modes: (1) export .apkg file for manual
+  import, (2) sync directly to Anki via AnkiConnect plugin. Use when user wants
+  to create Anki cards from WeRead highlights, e.g. "/vocab-anki The Little Prince"
+  or "为这本书的划线生词生成 Anki 牌组". Integrates with weread-skills for data;
+  Claude does knowledge work (sentences, translations), Python scripts handle
+  audio + packaging + sync.
 ---
 
 # vocab-anki — 英文书词汇 Anki 牌组生成
 
 将微信读书英文原版书的划线生词转换为 Anki 牌组（`.apkg`），嵌入发音音频。
+支持两种交付模式：
+- **导出一**：生成 `.apkg` 文件，手动导入 Anki
+- **同步二**：通过 AnkiConnect 直接同步到正在运行的 Anki，自动对比已有卡片，仅添加新词
 
 ## 前置条件
 
 - `weread-skills` 已安装，`WEREAD_API_KEY` 环境变量已设置
 - Python 3 + venv（脚本会自动创建 venv 并安装依赖）
+- **同步模式额外需要**：Anki 正在运行 + [AnkiConnect 插件](https://ankiweb.net/shared/info/2055492159) 已安装
 
 ## 工作流
 
@@ -85,58 +91,103 @@ Content-Type: application/json
 
 **内容生成完后，展示 2-3 个样卡预览给用户确认。**
 
-### Step 3: 构建 JSON 并运行脚本
+### Step 3: 选择交付模式
 
-**3a. 构建输入 JSON：**
+生成 JSON 后，根据用户语境和可用性选择模式：
 
-```json
-{
-  "book_title": "The Little Prince",
-  "book_author": "Antoine de Saint-Exupéry",
-  "words": [
-    {
-      "word": "pondered",
-      "sentence": "I <b>pondered</b> deeply, then, over the adventures of the jungle.",
-      "ipa": "/ˈpɒndər/",
-      "definition_cn": "沉思，深思",
-      "translation_cn": "我于是对丛林中的冒险深深思索起来。"
-    }
-  ]
-}
-```
+**默认逻辑：**
+1. 如果用户明确说"同步到 Anki"或"添加到我的 Anki" → 用同步模式
+2. 如果用户说"生成牌组文件"或"导出" → 用导出模式
+3. 都不明确时，先检查 AnkiConnect 是否可用（运行 `curl -s http://localhost:8765` 看是否有回应），可用则用同步模式，不可用则导出 `.apkg` 并提示安装 AnkiConnect 可支持增量同步
 
+**构建 JSON（两种模式共用）：**
 - `book_title` 和 `book_author` 来自 `/book/info` 的返回值
 - `ipa` 可以为空字符串，脚本会自动从 Free Dictionary API 获取
 - 将 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`
 
-**3b. 确定输出路径：**
+#### 模式 A: 导出 .apkg（generate_apkg.py）
 
-默认放在用户当前工作目录：`{book_title_sanitized}_vocab.apkg`。
-书名中的特殊字符用下划线替代，空格保留或转为下划线。
-
-示例：`The_Little_Prince_vocab.apkg`
-
-**3c. 运行 Python 脚本：**
+适用于：首次创建牌组、分享给他人、Anki 未运行时
 
 ```bash
-# 创建/复用 venv
 python3 -m venv /tmp/vocab-anki-venv
 /tmp/vocab-anki-venv/bin/pip install -q -r <skill_dir>/requirements.txt
-
-# 运行生成
 /tmp/vocab-anki-venv/bin/python <skill_dir>/generate_apkg.py \
   /tmp/vocab-anki-input-<bookId>.json \
   -o ./<book_title_sanitized>_vocab.apkg \
   -v
 ```
 
-`<skill_dir>` 是本 SKILL.md 所在的目录路径。
-
 脚本会：
 1. 对每个单词调用 Free Dictionary API 获取 IPA + 发音音频
 2. API 无结果时 fallback 到 gTTS
 3. 用 gTTS 生成例句朗读
 4. 打包为 `.apkg` 文件，音频嵌入其中
+
+#### 模式 B: 同步到 Anki（sync_anki.py）
+
+适用于：Anki 正在运行、已安装 AnkiConnect 插件、需增量更新
+
+**同步流程：**
+1. 连接 AnkiConnect（`localhost:8765`）
+2. 查找目标牌组中已有的卡片 → 提取所有已存在的 Word 字段
+3. 对比输入 JSON 中的生词列表 → 找出新词（不在牌组中的）
+4. **仅对新词**生成音频并上传到 Anki 媒体库
+5. 添加新卡片到牌组，带上音频引用
+6. **已有卡片完全不动**，保留复习进度和调度数据
+
+```bash
+python3 -m venv /tmp/vocab-anki-venv
+/tmp/vocab-anki-venv/bin/pip install -q -r <skill_dir>/requirements.txt
+/tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
+  /tmp/vocab-anki-input-<bookId>.json \
+  --deck "<book_title> Vocabulary" \
+  -v
+```
+
+额外参数：
+- `--dry-run`：只显示会添加哪些新词，不实际添加
+- `--no-audio`：跳过音频生成和上传（纯文本卡片）
+
+**同步输出示例：**
+```
+Connecting to AnkiConnect...
+  Deck: "The Little Prince Vocabulary"
+  Model: Vocabulary Card (WeRead)
+
+Querying existing cards in deck...
+  Found 28 existing cards
+
+  New words to add: 5
+  Already in deck: 28
+
+Generating audio for 5 new words...
+Uploading 10 media files...
+Adding 5 new cards to Anki...
+
+==================================================
+Sync complete for "The Little Prince"
+  New cards added:  5
+  Already in deck:  28
+  Media uploaded:   10
+==================================================
+```
+
+**学习记录保护机制：**
+- 同步只添加新卡片（`addNotes`），从未修改或删除已有卡片
+- Anki 根据 `modelName` + 字段内容进行重复检测（相同 Word 字段值不会重复添加）
+- 已有卡片的学习进度、复习间隔、到期时间全部不变
+- 同步后用户在 Anki 中直接可以开始背诵新词，之前背过的词不受影响
+
+#### 模式判断流程图
+
+```
+用户说"同步/添加到Anki" → 同步模式 (sync_anki.py)
+用户说"导出/生成文件" → 导出模式 (generate_apkg.py)
+都没说 → curl localhost:8765
+        有响应 → 同步模式
+        无响应 → 导出模式 + 提示可安装 AnkiConnect
+```
 
 ## 卡片格式
 
@@ -188,15 +239,32 @@ python3 -m venv /tmp/vocab-anki-venv
 | 脚本运行失败 | 检查依赖安装、网络连接，打印错误信息 |
 | 词典 API 不可用 | 脚本自动 fallback 到 gTTS，无音频时生成纯文本版本 |
 | `WEREAD_API_KEY` 未设置 | 提示用户设置：`export WEREAD_API_KEY=<your-key>` |
+| AnkiConnect 不可达 | 提示启动 Anki 并安装 AnkiConnect 插件后重试；fallback 到导出 .apkg |
+| 模型不在 Anki 中 | 提示先导入一次 .apkg 建立模型，再进行同步 |
+| 牌组中全是新词 | 全部添加，和首次导出效果一样 |
 
 ## 输出
 
+**导出模式：**
 - 最终交付：`.apkg` 文件路径
 - 告知用户导入方式："在 Anki 中 File → Import 导入此文件即可"
-- 如果用户有 AnkiConnect 插件，可以提示通过 AnkiConnect API 直接导入
+
+**同步模式：**
+- 打印新增/跳过的单词数量
+- 用户直接在 Anki 中看到新卡片出现
+- 复习进度完整的牌组不受影响
+
+## 脚本清单
+
+| 脚本 | 用途 | 输入 | 输出 |
+|------|------|------|------|
+| `generate_apkg.py` | 生成 .apkg 文件 | JSON → Free Dict API + gTTS | `.apkg` 文件 |
+| `sync_anki.py` | 增量同步到 Anki | JSON + AnkiConnect | 直接添加卡片到 Anki |
+| `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
 
 ## 设计原则
 
-- **职责分离**：Claude 做知识工作（理解语境、翻译），Python 做机械工作（HTTP、TTS、打包）
+- **职责分离**：Claude 做知识工作（理解语境、翻译），Python 做机械工作（HTTP、TTS、打包、同步）
 - **不重复造轮**：划线获取复用 weread-skills 的 API 规范
 - **故障降级**：音频获取失败不阻塞整体流程，尽可能生成可用牌组
+- **增量安全**：同步模式只添加不修改，保留学习记录不受影响
