@@ -25,6 +25,18 @@ description: >
 
 ## 工作流
 
+### Step 0: 前置检查
+
+在开始任何 API 调用之前，先检查环境：
+
+```bash
+# 检查 WEREAD_API_KEY 是否已设置
+[ -n "$WEREAD_API_KEY" ] || echo "MISSING"
+```
+
+- 若未设置，提示用户：`export WEREAD_API_KEY=<你的 key>`，然后终止。
+- 若已设置，继续。
+
 ### Step 1: 获取划线
 
 通过 weread API gateway 获取用户在某本书中的所有划线：
@@ -41,7 +53,11 @@ Content-Type: application/json
 {"api_name": "/store/search", "keyword": "<书名>", "scope": 10, "count": 5, "skill_version": "1.0.3"}
 ```
 
-如果搜索到多个版本，列出让用户选择。如果只有一个结果，直接使用。
+搜索结果处理：
+
+- 若只有一个结果 → 直接使用。
+- 若多个版本 → **并行检查所有英文版（标题含"英文"、"English"、"双语"）的划线数量**，只展示有划线内容的版本给用户选择。若所有版本均无划线，告知用户并终止。
+- 划线最多的版本排在前面，标注划线数。
 
 **1b. 获取书籍信息：**
 
@@ -102,6 +118,7 @@ Content-Type: application/json
 
 **构建 JSON（两种模式共用）：**
 - `book_title` 和 `book_author` 来自 `/book/info` 的返回值
+- `book_id` 为微信读书 bookId，用于生成 `WordId = "{word}_{bookId}"` 实现同词跨书独立
 - `ipa` 可以为空字符串，脚本会自动从 Free Dictionary API 获取
 - 将 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`
 
@@ -130,10 +147,10 @@ python3 -m venv /tmp/vocab-anki-venv
 
 **同步流程：**
 1. 连接 AnkiConnect（`localhost:8765`）
-2. 查找目标牌组中已有的卡片 → 提取所有已存在的 Word 字段
-3. 对比输入 JSON 中的生词列表 → 找出新词（不在牌组中的）
+2. 查找目标牌组中已有的卡片 → 提取已存在的 WordId 字段（`{word}_{bookId}`）
+3. 对比输入 JSON 中的 WordId → 找出真正的新词
 4. **仅对新词**生成音频并上传到 Anki 媒体库
-5. 添加新卡片到牌组，带上音频引用
+5. 添加新卡片到目标牌组，带上音频引用
 6. **已有卡片完全不动**，保留复习进度和调度数据
 
 ```bash
@@ -141,9 +158,10 @@ python3 -m venv /tmp/vocab-anki-venv
 /tmp/vocab-anki-venv/bin/pip install -q -r <skill_dir>/requirements.txt
 /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
   /tmp/vocab-anki-input-<bookId>.json \
-  --deck "<book_title> Vocabulary" \
   -v
 ```
+
+牌组名自动从 JSON 的 `book_title` 和 `book_author` 推导（`"{title} ({author})"`），与 `generate_apkg.py` 保持一致。也可手动指定 `--deck "自定义牌组名"`。
 
 额外参数：
 - `--dry-run`：只显示会添加哪些新词，不实际添加
@@ -152,7 +170,7 @@ python3 -m venv /tmp/vocab-anki-venv
 **同步输出示例：**
 ```
 Connecting to AnkiConnect...
-  Deck: "The Little Prince Vocabulary"
+  Deck: "The Little Prince (Antoine de Saint-Exupéry)"
   Model: Vocabulary Card (WeRead)
 
 Querying existing cards in deck...

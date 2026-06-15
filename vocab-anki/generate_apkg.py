@@ -79,6 +79,8 @@ def validate_input(data: dict) -> list[str]:
     errors = []
     if "book_title" not in data:
         errors.append("Missing required field: book_title")
+    if "book_id" not in data:
+        errors.append("Missing required field: book_id")
     if "words" not in data:
         errors.append("Missing required field: words")
     elif not isinstance(data["words"], list):
@@ -294,6 +296,7 @@ def create_model() -> "genanki.Model":
         MODEL_ID,
         "Vocabulary Card (WeRead)",
         fields=[
+            {"name": "WordId"},
             {"name": "Word"},
             {"name": "Sentence"},
             {"name": "IPA"},
@@ -457,9 +460,12 @@ def generate_package(
         word_sound = f"[sound:{safe}_word.mp3]" if word_audio else ""
         sent_sound = f"[sound:{safe}_sent.mp3]" if sent_audio else ""
 
+        word_id = f"{entry['word'].strip().lower()}_{data['book_id']}"
+
         note = genanki.Note(
             model=model,
             fields=[
+                word_id,
                 entry["word"],
                 entry["sentence"],
                 entry.get("ipa", ""),

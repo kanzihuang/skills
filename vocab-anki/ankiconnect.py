@@ -210,6 +210,25 @@ class AnkiConnect:
                 word_map[word_value] = n["noteId"]
         return word_map
 
+    def get_word_id_map(self, deck_name: str) -> dict[str, int]:
+        """Return {WordId: note_id} for all notes in a deck.
+
+        Uses the 'WordId' field (composite key like 'pondered_22720170').
+        If the deck doesn't exist or has no notes, returns an empty dict.
+        """
+        note_ids = self.find_notes_in_deck(deck_name)
+        if not note_ids:
+            return {}
+
+        info = self.notes_info(note_ids)
+        word_id_map: dict[str, int] = {}
+        for n in info:
+            fields = n.get("fields", {})
+            val = fields.get("WordId", {}).get("value", "").strip()
+            if val:
+                word_id_map[val] = n["noteId"]
+        return word_id_map
+
     def ensure_deck_and_model(self, deck_name: str, model_name: str) -> bool:
         """Verify that the deck exists and the model is available.
 
