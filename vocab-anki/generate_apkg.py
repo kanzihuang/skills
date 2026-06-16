@@ -289,7 +289,7 @@ def process_sentence_audio(
 
 
 def create_model() -> "genanki.Model":
-    """Create the genanki Model for vocabulary cards."""
+    """Create the genanki Model for vocabulary cards (COCA-English styled)."""
     import genanki
 
     return genanki.Model(
@@ -308,115 +308,571 @@ def create_model() -> "genanki.Model":
         templates=[
             {
                 "name": "Vocabulary Card",
-                "qfmt": """<div class="card">
-  <div class="word">{{Word}}</div>
-  <hr>
-  <div class="sentence">{{Sentence}}</div>
-</div>""",
+                "qfmt": """<article class="card">
+  <header class="card-header">
+    <h1 class="word">{{Word}}</h1>
+  </header>
+  <section class="pronunciation-audio">
+    <span class="pronunciation">{{IPA}}</span>
+    {{#IPA}}<span class="audio-button replay-button soundLink">{{WordAudio}}</span>{{/IPA}}
+  </section>
+  <hr class="divider">
+  <section class="examples-section">
+    <h2 class="section-title">Sentence</h2>
+    <div class="example-single">{{Sentence}}</div>
+  </section>
+</article>""",
                 "afmt": """{{FrontSide}}
-<hr id="answer">
-<div class="card back">
-  <div class="section">
-    <div class="label">IPA</div>
-    <div class="ipa">{{IPA}}</div>
-  </div>
-  <div class="section">
-    <div class="label">释义</div>
-    <div class="definition">{{DefinitionCN}}</div>
-  </div>
-  <div class="section">
-    <div class="label">例句翻译</div>
-    <div class="translation">{{TranslationCN}}</div>
-  </div>
-  <div class="audio-row">{{WordAudio}} {{SentenceAudio}}</div>
-</div>""",
+<hr class="divider">
+<article class="card">
+  <section class="definition-section">
+    <h2 class="section-title">Definition</h2>
+    <div class="definition-content">{{DefinitionCN}}</div>
+  </section>
+  <hr class="divider">
+  <section class="examples-section">
+    <h2 class="section-title">Translation</h2>
+    <div class="example-single translation-text">{{TranslationCN}}</div>
+    <div class="example-audio-row">{{SentenceAudio}}</div>
+  </section>
+</article>""",
             }
         ],
-        css="""/* Base */
+        css=COCA_CSS,
+    )
+
+
+# ---------------------------------------------------------------------------
+# COCA-English inspired CSS (adapted for vocab-anki model)
+# ---------------------------------------------------------------------------
+
+COCA_CSS = """\
+/* ===== CSS Custom Properties (Theme System) ===== */
+:root {
+  --fg: #1f2937;
+  --fg-subtle: #6b7280;
+  --canvas: #fffff;
+  --canvas-elevated: #ffffff;
+  --canvas-inset: #f9fafb;
+  --border: #e5e7eb;
+  --border-subtle: #f3f4f6;
+  --border-radius: 10px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  
+  --word-color: #111827;
+  --pos-bg: #dbeafe;
+  --pos-color: #1e40af;
+  --pronunciation-color: #374151;
+  --audio-color: #4b5563;
+  --audio-hover-color: #1f2937;
+  --definition-color: #374151;
+  --example-color: #4b5563;
+  --example-highlight: #3b82f6;
+  --grammar-color: #14B8A6;
+  --hr-color: #9ca3af;
+  
+  --button-bg: #f3f4f6;
+  --button-hover-bg: #e5e7eb;
+  --svg-path: #6b7280;
+  
+  --font-family: Georgia Regular;
+  --font-serif: Georgia Regular;
+  
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+  --text-4xl: 36px;
+  --text-5xl: 48px;
+  
+  --word-size: var(--text-5xl);
+  --pos-size: var(--text-sm);
+  --pronunciation-size: var(--text-xl);
+  --definition-size: var(--text-lg);
+  --example-size: var(--text-base);
+  --grammar-size: var(--text-base);
+  
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-base: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  
+  --audio-button-size: calc(var(--text-base) * (40 / 18));
+  
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.625;
+}
+
+/* ===== Responsive Font Sizes ===== */
+@media (min-width: 475px) {
+  :root {
+    --text-xs: 14px;
+    --text-sm: 16px;
+    --text-base: 18px;
+    --text-lg: 20px;
+    --text-xl: 22px;
+    --text-2xl: 26px;
+    --text-3xl: 32px;
+    --text-4xl: 40px;
+    --text-5xl: 52px;
+  }
+}
+
+/* ===== Basic Style Reset ===== */
+*,
+::after,
+::before {
+  box-sizing: border-box;
+  border-width: 0;
+  border-style: solid;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  line-height: var(--line-height-normal);
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  font-family: var(--font-family);
+  color: var(--fg);
+}
+
+h1, h2, h3, h4, h5, h6, p {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+
+ul, ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ===== Card Body Style ===== */
 .card {
-  font-family: "Helvetica Neue", "PingFang SC", "Noto Sans SC", Arial, sans-serif;
-  font-size: 20px;
-  text-align: center;
-  color: #333;
-  padding: 20px;
+  position: relative;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--spacing-lg);
+  background-color: var(--canvas);
+  border-radius: var(--border-radius);
+  color: var(--fg);
+  text-align: left;
+  font-size: var(--text-base);
+  line-height: var(--line-height-normal);
 }
 
-/* Front */
+/* Logo Link Styles */
+.dictionary-logo-link {
+  position: absolute;
+  top: var(--spacing-lg);
+  right: var(--spacing-lg);
+  width: 50px;
+  height: 50px;
+  z-index: 999;
+  display: block;
+}
+
+.dictionary-logo-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.dictionary-logo-link .logo-dark {
+  display: none;
+}
+
+.dictionary-logo-link .logo-light {
+  display: block;
+}
+
+/* ===== Card Header ===== */
+.card-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-lg);
+  flex-wrap: wrap;
+  padding-right: calc(50px + var(--spacing-lg) + var(--spacing-sm));
+}
+
 .word {
-  font-size: 40px;
+  font-size: var(--word-size);
   font-weight: 700;
-  color: #1a1a1a;
-  margin-bottom: 20px;
+  color: var(--word-color);
+  line-height: var(--line-height-tight);
+  font-family: var(--font-serif);
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 
-.sentence {
-  font-size: 22px;
-  line-height: 1.6;
-  color: #444;
-  padding: 0 12px;
-}
-
-.sentence b, .sentence strong {
-  color: #2563eb;
-  font-weight: 700;
-}
-
-/* Back */
-.back { text-align: center; }
-
-.section {
-  margin: 14px 0;
-}
-
-.label {
-  font-size: 13px;
-  color: #999;
-  margin-bottom: 4px;
+.pos-badge {
+  background: var(--pos-bg);
+  color: var(--pos-color);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: calc(var(--border-radius) / 2);
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.ipa {
-  font-size: 22px;
-  color: #555;
+.pos-badge.is-empty {
+  visibility: hidden;
+}
+
+/* ===== Grammar Information ===== */
+.grammar {
+  color: var(--grammar-color);
+  font-size: var(--grammar-size);
   font-style: italic;
+  margin-bottom: var(--spacing-base);
+  line-height: var(--line-height-normal);
 }
 
-.definition {
-  font-size: 22px;
-  color: #1e40af;
+/* ===== Pronunciation and Audio ===== */
+.pronunciation-audio {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-base);
+}
+
+.pronunciation {
+  font-size: var(--pronunciation-size);
+  color: var(--pronunciation-color);
+  font-style: italic;
+  font-family: var(--font-serif);
+}
+
+.audio-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--audio-button-size);
+  height: var(--audio-button-size);
+  cursor: pointer;
+  border-radius: 50% !important;
+}
+
+.audio-button svg {
+  width: 80%;
+  height: 80%;
+}
+
+.audio-button svg path {
+  fill: var(--svg-path);
+  transition: fill 0.2s ease;
+}
+
+.audio-button:hover svg path {
+  fill: var(--audio-hover-color);
+}
+
+.tts-button {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--audio-button-size);
+  height: var(--audio-button-size);
+  border-radius: 50% !important;
+  text-decoration: none;
+  color: inherit;
+  margin: 0;
+}
+
+/* ===== Separator Line ===== */
+.divider {
+  margin: var(--spacing-lg) 0;
+  border: none;
+  border-top: 1px solid var(--hr-color);
+}
+
+/* ===== Definition Section ===== */
+.definition-section {
+  margin-bottom: var(--spacing-lg);
+}
+
+.section-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: var(--spacing-sm);
+}
+
+.definition-content {
+  font-size: var(--definition-size);
+  color: var(--definition-color);
+  line-height: var(--line-height-relaxed);
+}
+
+/* ===== Example Sentences Section ===== */
+.examples-section {
+  margin-bottom: var(--spacing-lg);
+}
+
+.examples-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.example-sentence {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+  min-width: 0;
+}
+
+.example-sentence:last-child {
+  margin-bottom: 0;
+}
+
+.example-item {
+  font-size: var(--example-size);
+  color: var(--example-color);
+  line-height: var(--line-height-relaxed);
+  padding-left: var(--spacing-base);
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Support for front side simple list structure */
+.examples-list > .example-item {
+  margin-bottom: var(--spacing-sm);
+}
+
+.examples-list > .example-item:last-child {
+  margin-bottom: 0;
+}
+
+.example-item::before {
+  content: '•';
+  color: var(--example-highlight);
+  font-weight: bold;
+  position: absolute;
+  left: 0;
+}
+
+.example-item em {
+  color: var(--example-highlight);
+  font-style: italic;
+  font-weight: 500;
+}
+
+.example-audio {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 0.2em;
+}
+
+/* ===== Mobile Optimization ===== */
+@media (max-width: 475px) {
+  .card {
+    padding: var(--spacing-base);
+    margin: var(--spacing-xs);
+  }
+  
+  .word {
+    font-size: var(--text-4xl);
+  }
+  
+  .pronunciation {
+    font-size: var(--text-lg);
+  }
+  
+  .audio-button {
+    border-radius: 50% !important;
+  }
+}
+
+/* ===== Large Screen Optimization ===== */
+@media (min-width: 1024px) {
+  :root {
+    --text-xs: 16px;
+    --text-sm: 18px;
+    --text-base: 20px;
+    --text-lg: 24px;
+    --text-xl: 26px;
+    --text-2xl: 32px;
+    --text-3xl: 38px;
+    --text-4xl: 46px;
+    --text-5xl: 58px;
+    
+    --spacing-base: 20px;
+    --spacing-lg: 28px;
+    --spacing-xl: 36px;
+  }
+  
+  .card {
+    max-width: 1024px;
+  }
+}
+
+@media (min-width: 475px) {
+  .example-audio {
+    flex-direction: row;
+  }
+}
+
+/* ===== Mobile Border Handling ===== */
+.ios .card,
+.android .card {
+  border-radius: 0;
+  margin: 0;
+}
+
+.ios *,
+.android * {
+  border-left-width: 0;
+  border-right-width: 0;
+  border-radius: 0;
+}
+
+/* ===== iOS Specific Styles ===== */
+.ios .card {
+  padding-bottom: calc(var(--spacing-lg) + env(safe-area-inset-bottom));
+}
+
+/* ===== AnkiWeb Style Adaptation ===== */
+#quiz {
+  --canvas: #fff;
+}
+
+#quiz #qa {
+  margin-top: 0;
+}
+
+#quiz .card {
+  padding: var(--spacing-base);
+  margin: 0;
+  max-width: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* ===== Hidden Class ===== */
+.hidden {
+  display: none !important;
+}
+
+/* ===== Text Alignment ===== */
+.text-center {
+  text-align: center;
+}
+
+/* ===== Accessibility (Reduced Motion) ===== */
+@media (prefers-reduced-motion: reduce) {
+  .audio-button svg path {
+    transition: none;
+  }
+}
+
+/* ===== Print Styles ===== */
+@media print {
+  .audio-button {
+    display: none;
+  }
+}
+
+/* ===== Dark Mode CSS Variables ===== */
+:root.night-mode,
+:root .night_mode,
+:root .nightMode,
+[data-bs-theme='dark'] {
+  --fg: #e5e7eb;
+  --fg-subtle: #d1d5db;
+  --canvas: #2c2c2c;
+  --canvas-elevated: #363636;
+  --canvas-inset: #2c2c2c;
+  --border: #494949;
+  --border-subtle: #4b5563;
+  
+  --word-color: #f9fafb;
+  --pos-bg: #1e40af;
+  --pos-color: #dbeafe;
+  --pronunciation-color: #e5e7eb;
+  --audio-color: #d1d5db;
+  --audio-hover-color: #f3f4f6;
+  --definition-color: #e5e7eb;
+  --example-color: #d1d5db;
+  --example-highlight: #60a5fa;
+  --grammar-color: #34d399;
+  --hr-color: #374151;
+  
+  --button-bg: #404040;
+  --button-hover-bg: #4b5563;
+  --svg-path: #d1d5db;
+}
+
+/* Dark mode for logo link */
+:root.night-mode .dictionary-logo-link .logo-light,
+:root .night_mode .dictionary-logo-link .logo-light,
+:root .nightMode .dictionary-logo-link .logo-light,
+[data-bs-theme='dark'] .dictionary-logo-link .logo-light {
+  display: none;
+}
+
+:root.night-mode .dictionary-logo-link .logo-dark,
+:root .night_mode .dictionary-logo-link .logo-dark,
+:root .nightMode .dictionary-logo-link .logo-dark,
+[data-bs-theme='dark'] .dictionary-logo-link .logo-dark {
+  display: block;
+}
+/* ===== vocab-anki specific ===== */
+.example-single b, .example-single strong, .example-single em {
+  color: var(--example-highlight);
+  font-style: italic;
   font-weight: 600;
 }
-
-.translation {
-  font-size: 20px;
-  color: #666;
-  line-height: 1.5;
+.translation-text { margin-bottom: var(--spacing-sm); }
+.example-audio-row {
+  display: flex; align-items: center; gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
 }
 
-.audio-row {
-  margin-top: 20px;
-  display: flex;
-  justify-content: center;
-  gap: 12px;
+/* ===== vocab-anki spacing ===== */
+.card {
+  padding-top: var(--spacing-sm);
+  padding-bottom: var(--spacing-sm);
 }
-
-/* Override Anki's default play button styling for Chinese labels */
-.replay-button {
-  display: inline-block;
+.divider { margin: var(--spacing-sm) 0; }
+.definition-section { margin-bottom: 0; }
+.examples-section { margin-bottom: 0; }
+.definition-section .section-title { margin-bottom: var(--spacing-xs); }
+.examples-section .section-title { margin-bottom: var(--spacing-xs); }
+.example-single b, .example-single strong, .example-single em {
+  color: var(--example-highlight);
+  font-style: italic;
+  font-weight: 600;
 }
-
-/* Night mode */
-.night_mode .card { color: #e5e7eb; }
-.night_mode .word { color: #f0f0f0; }
-.night_mode .sentence { color: #d1d5db; }
-.night_mode .sentence b, .night_mode .sentence strong { color: #60a5fa; }
-.night_mode .label { color: #9ca3af; }
-.night_mode .ipa { color: #d1d5db; }
-.night_mode .definition { color: #93c5fd; }
-.night_mode .translation { color: #a8a29e; }
-""",
-    )
+.translation-text { margin-bottom: var(--spacing-sm); }
+.example-audio-row {
+  display: flex; align-items: center; gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+.card-header { margin-bottom: var(--spacing-sm); }
+.pronunciation-audio { margin-bottom: 0; }
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +885,30 @@ def generate_package(
     audio_results: list[dict],
     output_path: str,
 ) -> None:
-    """Create and write the genanki .apkg package."""
+    """Create and write the genanki .apkg package.
+/* ===== vocab-anki spacing ===== */
+.card {
+  padding-top: var(--spacing-sm);
+  padding-bottom: var(--spacing-sm);
+}
+.divider { margin: var(--spacing-sm) 0; }
+.definition-section { margin-bottom: 0; }
+.examples-section { margin-bottom: 0; }
+.definition-section .section-title { margin-bottom: var(--spacing-xs); }
+.examples-section .section-title { margin-bottom: var(--spacing-xs); }
+.example-single b, .example-single strong, .example-single em {
+  color: var(--example-highlight);
+  font-style: italic;
+  font-weight: 600;
+}
+.translation-text { margin-bottom: var(--spacing-sm); }
+.example-audio-row {
+  display: flex; align-items: center; gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+.card-header { margin-bottom: var(--spacing-sm); }
+.pronunciation-audio { margin-bottom: 0; }
+"""
     import genanki
 
     model = create_model()
