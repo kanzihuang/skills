@@ -286,6 +286,8 @@ Sync complete for "The Little Prince"
 | `generate_apkg.py` | 生成 .apkg 文件 | JSON → Free Dict API + gTTS | `.apkg` 文件 |
 | `sync_anki.py` | 增量同步到 Anki | JSON + AnkiConnect | 直接添加卡片到 Anki |
 | `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
+| `coca_lookup.py` | COCA 20000 高频词查询 | 单词 → lemminflect + 后缀剥离 | 是否在 COCA 前 20000 词中 |
+| `coca_20000.txt` | COCA 20000 词表数据 | — | 17,640 个唯一 lemma |
 
 ## 设计原则
 
