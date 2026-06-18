@@ -99,10 +99,22 @@ def fetch_word_audio(word: str) -> tuple[str | None, bytes | None]:
 
         entry = data[0]
 
-        # Extract IPA
-        ipa = entry.get("phonetic")
+        # Extract IPA: prefer US, then root, then any
+        ipa = None
+        phonetics = entry.get("phonetics", [])
+        for p in phonetics:
+            audio = p.get("audio", "")
+            text = p.get("text", "")
+            is_us = "us" in audio.lower() or "-us" in str(text).lower()
+            if not is_us:
+                is_us = any(c in text for c in ("ɚ", "ɑ", "ɝ"))
+            if is_us and text:
+                ipa = text
+                break
         if not ipa:
-            for p in entry.get("phonetics", []):
+            ipa = entry.get("phonetic")
+        if not ipa:
+            for p in phonetics:
                 if p.get("text"):
                     ipa = p["text"]
                     break
@@ -143,7 +155,7 @@ def generate_tts_bytes(text: str, lang: str = "en") -> bytes | None:
     try:
         from gtts import gTTS
 
-        tts = gTTS(text=text, lang=lang, slow=False)
+        tts = gTTS(text=text, lang=lang, tld="com", slow=False)
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
             tmp_path = tmp.name
         tts.save(tmp_path)

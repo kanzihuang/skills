@@ -140,10 +140,26 @@ def fetch_word_data(word: str) -> dict | None:
 
         entry = data[0]
 
-        # Extract IPA: try root phonetic first, then phonetics array
-        ipa = entry.get("phonetic")
+        # Extract IPA: prefer US, then root, then any
+        ipa = None
+        phonetics = entry.get("phonetics", [])
+        # Prefer US pronunciation (check audio URL and text markers)
+        for p in phonetics:
+            audio = p.get("audio", "")
+            text = p.get("text", "")
+            is_us = "us" in audio.lower() or "-us" in str(text).lower()
+            if not is_us:
+                # Heuristic: US IPA uses ɚ ɑ ɝ; UK uses ɒ ɪə eə
+                is_us = any(c in text for c in ("ɚ", "ɑ", "ɝ"))
+            if is_us and text:
+                ipa = text
+                break
+        # Fallback: root phonetic
         if not ipa:
-            for p in entry.get("phonetics", []):
+            ipa = entry.get("phonetic")
+        # Fallback: first available
+        if not ipa:
+            for p in phonetics:
                 if p.get("text"):
                     ipa = p["text"]
                     break
@@ -199,7 +215,7 @@ def generate_tts(text: str, dest_path: str, lang: str = "en") -> bool:
     try:
         from gtts import gTTS
 
-        tts = gTTS(text=text, lang=lang, slow=False)
+        tts = gTTS(text=text, lang=lang, tld="com", slow=False)
         tts.save(dest_path)
         return True
     except Exception:
