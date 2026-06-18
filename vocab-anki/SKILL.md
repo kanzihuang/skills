@@ -127,6 +127,7 @@ Content-Type: application/json
 - `book_title` 和 `book_author` 来自 `/book/info` 的返回值
 - `book_id` 为微信读书 bookId，用于生成 `WordId = "{word}_{bookId}"` 实现同词跨书独立
 - `ipa` 可以为空字符串，脚本会自动从 Free Dictionary API 获取
+- `excluded` 数组记录已排除的单词及原因，下次 sync 时直接跳过，避免重复分析
 - 将 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`
 
 #### 模式 A: 导出 .apkg（generate_apkg.py）
