@@ -41,13 +41,18 @@ description: >
 
 若未设置 → 提示 `export WEREAD_API_KEY=<你的 key>`，终止。
 
-**0b. 检查 AnkiConnect 可达性并建立 bookId 映射：**
+**0b. 检查 AnkiConnect 可达性并建立 bookId 映射（并行两次 curl）：**
 
 ```bash
-curl -s http://localhost:8765 -d '{"action":"deckNamesAndIds","version":6}'
+# 并行：牌组列表 + Vocabulary Card (WeRead) 笔记总数
+curl -s http://localhost:8765 -d '{"action":"deckNamesAndIds","version":6}' &
+curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"query":"note:\"Vocabulary Card (WeRead)\""}}' &
+wait
 ```
 
-若可达 → 对每个使用 "Vocabulary Card (WeRead)" 模型的牌组，取一张卡片的 `WordId` 字段（格式 `{lemma}_{bookId}`），解析出 `bookId`。形成映射表：
+若 AnkiConnect 可达：
+- **全库 0 张 "Vocabulary Card (WeRead)" 笔记** → Step 2 直接得 A=0，**不查 Anki**。
+- 若有卡片 → 对每个使用 "Vocabulary Card (WeRead)" 模型的牌组，取一张卡片的 `WordId` 字段（格式 `{lemma}_{bookId}`），解析出 `bookId`。形成映射表：
 
 ```
 {牌组名: bookId}
@@ -156,7 +161,9 @@ for lemma, rep, reason in rejected:
 
 > 输入为 Step 1d 输出的 COCA 通过的原形列表。
 
-若 AnkiConnect 可达 → 查询目标牌组已有卡片。WordId 格式为 `{lemma}_{bookId}`，用原形列表精确匹配已在牌组中的词，直接跳过。
+**若 Step 0b 已确认全库 0 张 Vocabulary Card (WeRead) 笔记 → 直接 A=0，跳过本步骤。**
+
+否则（已有牌组），查目标牌组已有卡片：WordId 格式为 `{lemma}_{bookId}`，用原形列表精确匹配已在牌组中的词，直接跳过。
 
 **输出汇总（仅数字，不确认）：**
 
@@ -207,8 +214,8 @@ for lemma, rep, reason in rejected:
 
 - 所有单词由 Claude 在单次响应中直接生成全部内容（IPA、例句、释义、翻译），按字母序写入 JSON 文件
 - **不再使用 SubAgent**：SubAgent 启动慢（权限确认、模型初始化），常误触发 WebSearch 浪费额度，多个 agent 的协调开销远超串行生成的实际耗时
-- 对于知名英文书（The Little Prince、Harry Potter 等），Claude 直接从训练数据回忆书中真实例句
-- 对于不熟悉的书籍：用 `WebFetch` 一次性获取书中段落辅助定位句子，仍由 Claude 直接生成全部内容
+- **知名书禁止 WebFetch/WebSearch**：对于 Claude 训练数据中充分覆盖的知名英文书（The Little Prince、Harry Potter、Animal Farm、1984、Pride and Prejudice、Charlotte's Web 等），**严禁使用 WebFetch 或 WebSearch**——直接从训练数据回忆书中真实例句。查外部资源只会浪费时间，且 WebFetch 可能被网络策略拦截导致流程卡死
+- 对于不熟悉的书籍：如 Claude 确实无法从训练数据回忆该书的句子，**仅此时**才用 `WebFetch` 一次性获取书中段落辅助定位
 
 **性能说明：**
 - 内容生成本身是流程瓶颈（Claude 需要为每个词回忆句子+IPA+释义+翻译），对 50+ 单词通常需要 1-3 分钟，这是知识工作的固有开销，不可免
