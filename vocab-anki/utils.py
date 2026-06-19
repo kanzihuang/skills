@@ -21,6 +21,8 @@ FREE_DICT_API = "https://api.dictionaryapi.dev/api/v2/entries/en"
 API_DELAY = 0.35  # seconds between Free Dictionary API requests
 REQUEST_TIMEOUT = 12
 MAX_RETRIES = 1
+EDGE_TTS_MAX_RETRIES = 2  # Retry Edge TTS up to 2 extra times (3 total) on transient failure
+EDGE_TTS_RETRY_DELAY = 0.75  # seconds between Edge TTS retries
 
 # ---------------------------------------------------------------------------
 # Filename utilities
@@ -219,15 +221,22 @@ def edge_tts_bytes(
     """Generate TTS audio bytes using Edge TTS.
 
     If IPA is provided, uses SSML <phoneme> tag for accurate pronunciation.
-    Returns None on failure.
+    Retries on transient failure (up to EDGE_TTS_MAX_RETRIES extra attempts).
+    Returns None on persistent failure.
     """
     import asyncio
 
     ssml = _build_ssml(text, ipa, voice)
-    try:
-        return asyncio.run(_edge_tts_gen(ssml, voice))
-    except Exception:
-        return None
+    for attempt in range(EDGE_TTS_MAX_RETRIES + 1):
+        try:
+            result = asyncio.run(_edge_tts_gen(ssml, voice))
+            if result:
+                return result
+        except Exception:
+            pass
+        if attempt < EDGE_TTS_MAX_RETRIES:
+            time.sleep(EDGE_TTS_RETRY_DELAY)
+    return None
 
 
 def edge_tts_file(
@@ -239,6 +248,7 @@ def edge_tts_file(
     """Generate TTS audio to a file using Edge TTS.
 
     If IPA is provided, uses SSML <phoneme> tag for accurate pronunciation.
+    Retries on transient failure (up to EDGE_TTS_MAX_RETRIES extra attempts).
     Returns True on success.
     """
     import asyncio
@@ -255,10 +265,15 @@ def edge_tts_file(
         except Exception:
             return False
 
-    try:
-        return asyncio.run(_gen())
-    except Exception:
-        return False
+    for attempt in range(EDGE_TTS_MAX_RETRIES + 1):
+        try:
+            if asyncio.run(_gen()):
+                return True
+        except Exception:
+            pass
+        if attempt < EDGE_TTS_MAX_RETRIES:
+            time.sleep(EDGE_TTS_RETRY_DELAY)
+    return False
 
 
 # ---------------------------------------------------------------------------

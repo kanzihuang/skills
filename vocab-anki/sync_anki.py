@@ -20,8 +20,10 @@ Usage:
 
 import argparse
 import concurrent.futures
+import glob
 import json
 import os
+import platform
 import re
 import sys
 import tempfile
@@ -82,6 +84,11 @@ def parse_args() -> argparse.Namespace:
         "--audio-dir",
         required=False,
         help="Use pre-generated audio from directory (skips audio generation)",
+    )
+    parser.add_argument(
+        "--no-direct-media",
+        action="store_true",
+        help="Always upload media via AnkiConnect API instead of direct filesystem copy",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Show detailed progress"
@@ -188,6 +195,72 @@ def build_note_entry(
     }
 
 
+def _find_anki_media_dir() -> str | None:
+    """Locate Anki's collection.media directory on the local filesystem.
+
+    Probes common OS paths (including WSL2 → Windows host). Returns the
+    first writable collection.media directory found, or None.
+    """
+    candidates: list[str] = []
+    home = os.path.expanduser("~")
+
+    if platform.system() == "Windows":
+        candidates.append(os.path.join(os.getenv("APPDATA", ""), "Anki2"))
+    else:
+        # Native Linux
+        candidates.append(os.path.join(home, ".local", "share", "Anki2"))
+        # Flatpak
+        candidates.append(
+            os.path.join(home, ".var", "app", "net.ankiweb.Anki", "data", "Anki2")
+        )
+        # macOS
+        candidates.append(
+            os.path.join(home, "Library", "Application Support", "Anki2")
+        )
+        # WSL2 — Anki runs on the Windows host; search /mnt/c/Users/**
+        wsl_users = glob.glob("/mnt/c/Users/*/AppData/Roaming/Anki2")
+        candidates.extend(wsl_users)
+
+    for base in candidates:
+        if not os.path.isdir(base):
+            continue
+        for profile in os.listdir(base):
+            media_dir = os.path.join(base, profile, "collection.media")
+            if os.path.isdir(media_dir) and os.access(media_dir, os.W_OK):
+                return media_dir
+    return None
+
+
+def _upload_media_direct(
+    audio_uploads: list[tuple[str, bytes]], media_dir: str, verbose: bool = False
+) -> int:
+    """Copy audio files directly into Anki's collection.media directory.
+
+    Much faster than AnkiConnect storeMediaFile (~0.7s for 124 files vs
+    ~80s through the API) because it bypasses per-file base64 decode +
+    SQLite write inside AnkiConnect.
+
+    Returns the number of files successfully copied.
+    """
+    total = len(audio_uploads)
+    copied = 0
+    for i, (filename, data) in enumerate(audio_uploads, 1):
+        dest = os.path.join(media_dir, filename)
+        try:
+            with open(dest, "wb") as f:
+                f.write(data)
+            copied += 1
+            if verbose:
+                print_progress_bar(i, total, f"{filename} ({len(data)} bytes)")
+            else:
+                print_progress_bar(i, total)
+        except OSError:
+            print()
+            print(f"  ✗ {filename}: write failed")
+            print_progress_bar(i, total)
+    return copied
+
+
 def sync(
     data: dict,
     deck_name: str,
@@ -197,6 +270,7 @@ def sync(
     word_timeout: int = WORD_TIMEOUT,
     prefetch: bool = False,
     audio_dir: str | None = None,
+    no_direct_media: bool = False,
 ) -> dict:
     """Run the full sync workflow. Returns a summary dict."""
     words = data["words"]
@@ -391,38 +465,49 @@ def sync(
                 "prefetch_stats": manifest["stats"],
             }
 
-    # 6. Upload media files (batched via AnkiConnect multi actions)
+    # 6. Upload media files (direct filesystem copy, fallback to AnkiConnect)
     audio_count = 0
     if audio_uploads and not dry_run:
         total_media = len(audio_uploads)
-        batch_size = 20
-        print(f"\nUploading {total_media} media files (batched ×{batch_size})...")
-        for batch_start in range(0, total_media, batch_size):
-            batch = audio_uploads[batch_start:batch_start + batch_size]
-            try:
-                results = ac.store_media_files_batch(batch, batch_size=batch_size)
-                for i, result in enumerate(results):
-                    filename, data = batch[i]
-                    global_idx = batch_start + i + 1
-                    if result is not None:
-                        audio_count += 1
-                        if verbose:
-                            print_progress_bar(global_idx, total_media, f"{filename} ({len(data)} bytes)")
+        media_dir = None if no_direct_media else _find_anki_media_dir()
+
+        if media_dir:
+            # Fast path: copy files directly into collection.media (~0.7s for 124 files)
+            print(f"\nCopying {total_media} media files to Anki media dir...")
+            if verbose:
+                print(f"  {media_dir}")
+            audio_count = _upload_media_direct(audio_uploads, media_dir, verbose=verbose)
+            print()
+            print(f"  Copied: {audio_count}/{total_media}")
+        else:
+            # Slow path: upload through AnkiConnect (per-file base64 + SQLite overhead)
+            batch_size = 40
+            print(f"\nUploading {total_media} media files via AnkiConnect (batched ×{batch_size})...")
+            for batch_start in range(0, total_media, batch_size):
+                batch = audio_uploads[batch_start:batch_start + batch_size]
+                try:
+                    results = ac.store_media_files_batch(batch, batch_size=batch_size)
+                    for i, result in enumerate(results):
+                        filename, data = batch[i]
+                        global_idx = batch_start + i + 1
+                        if result is not None:
+                            audio_count += 1
+                            if verbose:
+                                print_progress_bar(global_idx, total_media, f"{filename} ({len(data)} bytes)")
+                            else:
+                                print_progress_bar(global_idx, total_media)
                         else:
+                            print()
+                            print(f"  ✗ {filename}: failed (duplicate or error)")
                             print_progress_bar(global_idx, total_media)
-                    else:
+                except AnkiConnectError as e:
+                    for i, (filename, _data) in enumerate(batch):
+                        global_idx = batch_start + i + 1
                         print()
-                        print(f"  ✗ {filename}: failed (duplicate or error)")
+                        print(f"  ✗ {filename}: {e}")
                         print_progress_bar(global_idx, total_media)
-            except AnkiConnectError as e:
-                for i, (filename, _data) in enumerate(batch):
-                    global_idx = batch_start + i + 1
-                    print()
-                    print(f"  ✗ {filename}: {e}")
-                    print_progress_bar(global_idx, total_media)
-        # Finalize media progress bar
-        print()
-        print(f"  Uploaded: {audio_count}/{total_media}")
+            print()
+            print(f"  Uploaded: {audio_count}/{total_media}")
 
     # 7. Add notes
     added_count = 0
@@ -527,6 +612,7 @@ def main() -> None:
             word_timeout=args.word_timeout,
             prefetch=args.prefetch,
             audio_dir=args.audio_dir,
+            no_direct_media=args.no_direct_media,
         )
         if result.get("error"):
             sys.exit(1)

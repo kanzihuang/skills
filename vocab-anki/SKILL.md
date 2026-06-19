@@ -73,7 +73,9 @@ Content-Type: application/json
   - `book_title` 和 `book_author` 从牌组名 `"{title} ({author})"` 解析，确保与 Anki 一致
 
 - **若未匹配到**（新书，尚无牌组）：
-  - 走完整搜索流程：`/store/search` → 选书 → `/book/info` → `/book/bookmarklist`
+  - **先查书架**：调 `/shelf/sync` 获取用户已加入书架的所有书籍，按书名匹配（支持中英文模糊匹配）。书架命中 → 直接用 bookId 调用 `/book/bookmarklist` 和 `/book/info`，跳过搜索
+  - 书架未命中时走搜索：`/store/search` → 选书 → `/book/info` → `/book/bookmarklist`
+    - **搜索关键词优先用中文书名**：微信读书搜索 API 对英文标题支持差（常见返回空结果），中文书名搜索命中率远高于英文
   - 多版本时，并行检查英文版划线数量，标出划线最多的版本
   - `book_title` 和 `book_author` 用微信读书 API 返回值
 
