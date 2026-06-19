@@ -111,7 +111,13 @@ Content-Type: application/json
 **2b. COCA 20000 批量检查（以原形查询）：**
 
 ```bash
-python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
+# 若 .venv 不存在则创建（仅首次）
+if [ ! -d <skill_dir>/.venv ]; then
+    python3 -m venv <skill_dir>/.venv
+    <skill_dir>/.venv/bin/pip install -q -r <skill_dir>/requirements.txt
+fi
+
+<skill_dir>/.venv/bin/python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 ```
 
 输出格式：`word\tTrue/False\tdetail`。不在 COCA 20000 中的单词直接排除，记录原因。
@@ -180,11 +186,14 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 > 在确认之前提前下载所有音频。此步骤不连 Anki，纯并发 HTTP 下载。
 
 ```bash
-python3 -m venv /tmp/vocab-anki-venv
-/tmp/vocab-anki-venv/bin/pip install -q -r <skill_dir>/requirements.txt
+# 若 .venv 不存在则创建（仅首次）
+if [ ! -d <skill_dir>/.venv ]; then
+    python3 -m venv <skill_dir>/.venv
+    <skill_dir>/.venv/bin/pip install -q -r <skill_dir>/requirements.txt
+fi
 
 # 并发生成全部音频 → 保存到临时目录 → 输出 AUDIO_DIR 路径
-/tmp/vocab-anki-venv/bin/python -u <skill_dir>/sync_anki.py \
+<skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
   /tmp/vocab-anki-input-<bookId>.json \
   --prefetch -v
 ```
@@ -224,7 +233,7 @@ WORD_COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/vocab-anki-
 SYNC_TIMEOUT=$(( WORD_COUNT * 3 + 30 ))
 [ "$SYNC_TIMEOUT" -lt 60 ] && SYNC_TIMEOUT=60
 
-timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <skill_dir>/sync_anki.py \
+timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
   /tmp/vocab-anki-input-<bookId>.json \
   --audio-dir <AUDIO_DIR_FROM_STEP_3.5> \
   -v
@@ -233,7 +242,7 @@ timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <skill_dir>/sync_anki.p
 > **导出模式**：音频并发已足够快（~30s），直接前台运行即可。
 
 ```bash
-/tmp/vocab-anki-venv/bin/python -u <skill_dir>/generate_apkg.py \
+<skill_dir>/.venv/bin/python -u <skill_dir>/generate_apkg.py \
   /tmp/vocab-anki-input-<bookId>.json \
   -o ./<book_title_sanitized>_vocab.apkg \
   -v

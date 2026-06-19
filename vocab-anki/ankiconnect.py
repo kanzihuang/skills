@@ -161,6 +161,37 @@ class AnkiConnect:
         )
         return result
 
+    def store_media_files_batch(
+        self, files: list[tuple[str, bytes]], batch_size: int = 20
+    ) -> list[str | None]:
+        """Store multiple media files via AnkiConnect multi actions.
+
+        Args:
+            files: List of (filename, data) tuples.
+            batch_size: Max actions per AnkiConnect multi request.
+
+        Returns a flat list of stored filenames (None for failures).
+        """
+        all_results: list[str | None] = []
+        for batch_start in range(0, len(files), batch_size):
+            batch = files[batch_start:batch_start + batch_size]
+            actions = [
+                {
+                    "action": "storeMediaFile",
+                    "params": {
+                        "filename": name,
+                        "data": base64.b64encode(data).decode("ascii"),
+                    },
+                }
+                for name, data in batch
+            ]
+            results = self._call("multi", actions=actions)
+            if isinstance(results, list):
+                all_results.extend(results)
+            else:
+                all_results.extend([None] * len(batch))
+        return all_results
+
     def store_media_file_from_path(self, filepath: str) -> str | None:
         """Store a media file from a local file path."""
         with open(filepath, "rb") as f:

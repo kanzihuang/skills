@@ -295,7 +295,7 @@ def sync(
         print(f"  Loaded {len(notes_to_add)} notes + {len(audio_uploads)} audio files from cache")
     else:
         # Generate audio concurrently
-        max_workers = min(8, len(new_words))
+        max_workers = min(16, len(new_words))
         if verbose:
             print(f"  ({max_workers} workers)")
 
@@ -391,24 +391,35 @@ def sync(
                 "prefetch_stats": manifest["stats"],
             }
 
-    # 6. Upload media files
+    # 6. Upload media files (batched via AnkiConnect multi actions)
     audio_count = 0
     if audio_uploads and not dry_run:
         total_media = len(audio_uploads)
-        print(f"\nUploading {total_media} media files...")
-        for i_media, (filename, data) in enumerate(audio_uploads, 1):
+        batch_size = 20
+        print(f"\nUploading {total_media} media files (batched ×{batch_size})...")
+        for batch_start in range(0, total_media, batch_size):
+            batch = audio_uploads[batch_start:batch_start + batch_size]
             try:
-                ac.store_media_file(filename, data)
-                audio_count += 1
-                if verbose:
-                    print_progress_bar(i_media, total_media, f"{filename} ({len(data)} bytes)")
-                else:
-                    print_progress_bar(i_media, total_media)
+                results = ac.store_media_files_batch(batch, batch_size=batch_size)
+                for i, result in enumerate(results):
+                    filename, data = batch[i]
+                    global_idx = batch_start + i + 1
+                    if result is not None:
+                        audio_count += 1
+                        if verbose:
+                            print_progress_bar(global_idx, total_media, f"{filename} ({len(data)} bytes)")
+                        else:
+                            print_progress_bar(global_idx, total_media)
+                    else:
+                        print()
+                        print(f"  ✗ {filename}: failed (duplicate or error)")
+                        print_progress_bar(global_idx, total_media)
             except AnkiConnectError as e:
-                # New line before error, then resume bar
-                print()
-                print(f"  ✗ {filename}: {e}")
-                print_progress_bar(i_media, total_media)
+                for i, (filename, _data) in enumerate(batch):
+                    global_idx = batch_start + i + 1
+                    print()
+                    print(f"  ✗ {filename}: {e}")
+                    print_progress_bar(global_idx, total_media)
         # Finalize media progress bar
         print()
         print(f"  Uploaded: {audio_count}/{total_media}")
