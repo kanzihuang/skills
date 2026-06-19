@@ -27,15 +27,20 @@ import tempfile
 import time
 
 from ankiconnect import AnkiConnect, AnkiConnectError
+from utils import (
+    API_DELAY,
+    REQUEST_TIMEOUT,
+    edge_tts_bytes,
+    fetch_word_data,
+    lemmatize_word,
+    safe_filename,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 MODEL_NAME = "Vocabulary Card (WeRead)"
-FREE_DICT_API = "https://api.dictionaryapi.dev/api/v2/entries/en"
-API_DELAY = 0.35
-REQUEST_TIMEOUT = 12
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -71,100 +76,11 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
-def safe_filename(word: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9]", "_", word)
-    return safe.strip("_").lower() or "word"
+# safe_filename(), fetch_word_data() imported from utils
+# (fetch_word_data returns (ipa, audio_url, audio_bytes) — we only use ipa and audio_bytes)
 
 
-# ---------------------------------------------------------------------------
-# Audio generation
-# ---------------------------------------------------------------------------
-
-
-def fetch_word_audio(word: str) -> tuple[str | None, bytes | None]:
-    """Fetch IPA + word audio from Free Dictionary API.
-
-    Returns (ipa, audio_bytes) — both can be None.
-    """
-    import requests
-
-    url = f"{FREE_DICT_API}/{word.lower()}"
-    try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-        if resp.status_code != 200:
-            return None, None
-        data = resp.json()
-        if not isinstance(data, list) or len(data) == 0:
-            return None, None
-
-        entry = data[0]
-
-        # Extract IPA: prefer US, then root, then any
-        ipa = None
-        phonetics = entry.get("phonetics", [])
-        for p in phonetics:
-            audio = p.get("audio", "")
-            text = p.get("text", "")
-            is_us = "us" in audio.lower() or "-us" in str(text).lower()
-            if not is_us:
-                is_us = any(c in text for c in ("ɚ", "ɑ", "ɝ"))
-            if is_us and text:
-                ipa = text
-                break
-        if not ipa:
-            ipa = entry.get("phonetic")
-        if not ipa:
-            for p in phonetics:
-                if p.get("text"):
-                    ipa = p["text"]
-                    break
-
-        # Extract audio (prefer US)
-        audio_url = None
-        phonetics = entry.get("phonetics", [])
-        for p in phonetics:
-            if p.get("audio") and (
-                "us" in p.get("audio", "").lower()
-                or "-us" in str(p.get("text", "")).lower()
-            ):
-                audio_url = p["audio"]
-                break
-        if not audio_url:
-            for p in phonetics:
-                if p.get("audio"):
-                    audio_url = p["audio"]
-                    break
-
-        audio_bytes = None
-        if audio_url:
-            try:
-                ar = requests.get(audio_url, timeout=REQUEST_TIMEOUT)
-                if ar.status_code == 200:
-                    audio_bytes = ar.content
-            except requests.RequestException:
-                pass
-
-        return ipa, audio_bytes
-
-    except requests.RequestException:
-        return None, None
-
-
-def generate_tts_bytes(text: str, lang: str = "en") -> bytes | None:
-    """Generate TTS audio for text using gTTS. Returns audio bytes."""
-    try:
-        from gtts import gTTS
-
-        tts = gTTS(text=text, lang=lang, tld="com", slow=False)
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            tmp_path = tmp.name
-        tts.save(tmp_path)
-        with open(tmp_path, "rb") as f:
-            data = f.read()
-        os.unlink(tmp_path)
-        return data
-    except Exception:
-        return None
+# generate_tts_bytes() imported from utils (edge_tts_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -176,24 +92,28 @@ def build_note_entry(
     word_data: dict,
     ipa: str | None,
     book_id: str,
+    lemma: str | None = None,
 ) -> dict:
     """Build a single AnkiConnect note dict from word data.
 
     Audio files are referenced as [sound:filename.mp3] — the actual
     media files must be uploaded separately via store_media_file().
+
+    If lemma is provided, it's used for the card Word field, audio filenames,
+    and WordId. The original form is only preserved in the sentence.
     """
-    word = word_data["word"]
-    safe = safe_filename(word)
+    display = (lemma or word_data["word"]).strip().lower()
+    safe = safe_filename(display)
     word_audio_ref = f"[sound:{safe}_word.mp3]"
     sent_audio_ref = f"[sound:{safe}_sent.mp3]"
-    word_id = f"{word.strip().lower()}_{book_id}"
+    word_id = f"{display}_{book_id}"
 
     return {
         "deckName": "",  # filled in later by caller
         "modelName": MODEL_NAME,
         "fields": {
             "WordId": word_id,
-            "Word": word,
+            "Word": display,
             "Sentence": word_data["sentence"],
             "IPA": ipa or word_data.get("ipa", ""),
             "DefinitionCN": word_data["definition_cn"],
@@ -230,13 +150,15 @@ def sync(
     existing = ac.get_word_id_map(deck_name)
     print(f"  Found {len(existing)} existing cards")
 
-    # 4. Identify new words (check WordId against existing)
+    # 4. Identify new words (check lemma-based WordId, fallback to original)
     book_id = data.get("book_id", "")
     new_words = []
     skipped_words = []
     for w in words:
-        word_id = f"{w['word'].strip().lower()}_{book_id}"
-        if word_id in existing:
+        lemma = lemmatize_word(w["word"])
+        original_id = f"{w['word'].strip().lower()}_{book_id}"
+        lemma_id = f"{lemma}_{book_id}"
+        if lemma_id in existing or original_id in existing:
             skipped_words.append(w)
             if verbose:
                 print(f"  SKIP {w['word']} (already in deck)")
@@ -275,52 +197,66 @@ def sync(
 
     for i, w in enumerate(new_words, 1):
         word = w["word"]
-        safe = safe_filename(word)
+        lemma = lemmatize_word(word)
+        safe = safe_filename(lemma)
         ipa = w.get("ipa", "")
 
         if verbose:
-            print(f"  [{i}/{len(new_words)}] {word}")
+            tag = f" ({lemma})" if lemma != word.lower() else ""
+            print(f"  [{i}/{len(new_words)}] {word}{tag}")
 
         word_audio_bytes = None
         sent_audio_bytes = None
 
         if not no_audio:
-            # Word audio: try Free Dictionary API first, then gTTS
-            fetched_ipa, api_audio = fetch_word_audio(word)
-            if api_audio:
-                word_audio_bytes = api_audio
-                if not ipa and fetched_ipa:
-                    ipa = fetched_ipa
-                if verbose:
-                    print(f"    word audio: API ({ipa or 'no IPA'})")
-            else:
-                tts = generate_tts_bytes(word)
+            # Word audio: if JSON provides IPA, use SSML directly (skip API
+            # audio — Claude's IPA may differ from API for heteronyms).
+            # Otherwise, try Free Dictionary API, fallback to Edge TTS.
+            if ipa:
+                # JSON IPA provided → SSML for precise pronunciation
+                tts = edge_tts_bytes(lemma, ipa=ipa)
                 if tts:
                     word_audio_bytes = tts
                     if verbose:
-                        print("    word audio: gTTS fallback")
+                        print(f"    word audio: SSML ({ipa})")
+            else:
+                fetched_ipa, _audio_url, api_audio = fetch_word_data(lemma)
+                if api_audio:
+                    word_audio_bytes = api_audio
+                    if fetched_ipa:
+                        ipa = fetched_ipa
+                    if verbose:
+                        print(f"    word audio: API ({ipa or 'no IPA'})")
+                else:
+                    fallback_ipa = fetched_ipa or None
+                    tts = edge_tts_bytes(lemma, ipa=fallback_ipa)
+                    if tts:
+                        word_audio_bytes = tts
+                        if verbose:
+                            tag2 = "Edge TTS+SSML" if fallback_ipa else "Edge TTS fallback"
+                            print(f"    word audio: {tag2}")
 
             if word_audio_bytes:
                 audio_uploads.append((f"{safe}_word.mp3", word_audio_bytes))
 
-            # Sentence audio: gTTS
+            # Sentence audio: Edge TTS on cleaned sentence (context disambiguates)
             clean = re.sub(r"<[^>]+>", "", w["sentence"])
-            sent_tts = generate_tts_bytes(clean)
+            sent_tts = edge_tts_bytes(clean)
             if sent_tts:
                 sent_audio_bytes = sent_tts
                 audio_uploads.append((f"{safe}_sent.mp3", sent_tts))
                 if verbose:
-                    print("    sentence audio: gTTS OK")
+                    print("    sentence audio: Edge TTS OK")
             else:
                 if verbose:
-                    print("    sentence audio: gTTS FAILED")
+                    print("    sentence audio: Edge TTS FAILED")
 
             time.sleep(API_DELAY)
         else:
             if verbose:
                 print(f"    audio: skipped (--no-audio)")
 
-        note = build_note_entry(w, ipa, book_id)
+        note = build_note_entry(w, ipa, book_id, lemma=lemma)
         note["deckName"] = deck_name
         notes_to_add.append(note)
 

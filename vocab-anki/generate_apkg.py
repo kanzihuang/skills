@@ -3,8 +3,8 @@
 
 Accepts a JSON file with word entries (word, sentence, IPAs, Chinese definitions
 and translations). Fetches word pronunciation audio from Free Dictionary API
-(fallback to gTTS), generates sentence TTS via gTTS, and packages everything
-into an .apkg file with embedded media.
+(fallback to Edge TTS), generates sentence TTS via Edge TTS, and packages
+everything into an .apkg file with embedded media.
 
 Usage:
     python generate_apkg.py input.json -o output.apkg
@@ -25,15 +25,22 @@ from pathlib import Path
 
 import requests
 
+from utils import (
+    API_DELAY,
+    FREE_DICT_API,
+    REQUEST_TIMEOUT,
+    download_audio,
+    edge_tts_file,
+    fetch_word_data,
+    lemmatize_word,
+    safe_filename,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 MODEL_ID = 1690724513  # Fixed for stable model identity across regenerations
-FREE_DICT_API = "https://api.dictionaryapi.dev/api/v2/entries/en"
-API_DELAY = 0.35  # seconds between Free Dictionary API requests
-REQUEST_TIMEOUT = 12
-MAX_RETRIES = 1
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -64,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-tts",
         action="store_true",
-        help="Skip all gTTS audio generation",
+        help="Skip all TTS audio generation",
     )
     return parser.parse_args()
 
@@ -113,113 +120,13 @@ def deduplicate_words(words: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def safe_filename(word: str) -> str:
-    """Sanitize a word to a safe filesystem name (alphanumeric + underscore)."""
-    safe = re.sub(r"[^a-zA-Z0-9]", "_", word)
-    return safe.strip("_").lower() or "word"
+# safe_filename(), fetch_word_data(), download_audio() imported from utils
 
 
 # ---------------------------------------------------------------------------
-# Free Dictionary API
+# Edge TTS
 # ---------------------------------------------------------------------------
-
-
-def fetch_word_data(word: str) -> dict | None:
-    """Fetch word data from Free Dictionary API.
-
-    Returns dict with 'ipa' and 'audio_url' keys, or None if not found.
-    """
-    url = f"{FREE_DICT_API}/{word.lower()}"
-    try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        if not isinstance(data, list) or len(data) == 0:
-            return None
-
-        entry = data[0]
-
-        # Extract IPA: prefer US, then root, then any
-        ipa = None
-        phonetics = entry.get("phonetics", [])
-        # Prefer US pronunciation (check audio URL and text markers)
-        for p in phonetics:
-            audio = p.get("audio", "")
-            text = p.get("text", "")
-            is_us = "us" in audio.lower() or "-us" in str(text).lower()
-            if not is_us:
-                # Heuristic: US IPA uses ɚ ɑ ɝ; UK uses ɒ ɪə eə
-                is_us = any(c in text for c in ("ɚ", "ɑ", "ɝ"))
-            if is_us and text:
-                ipa = text
-                break
-        # Fallback: root phonetic
-        if not ipa:
-            ipa = entry.get("phonetic")
-        # Fallback: first available
-        if not ipa:
-            for p in phonetics:
-                if p.get("text"):
-                    ipa = p["text"]
-                    break
-
-        # Extract audio: prefer US, fallback to any
-        audio_url = None
-        phonetics = entry.get("phonetics", [])
-        # Try US first
-        for p in phonetics:
-            if p.get("audio") and (
-                "us" in p.get("audio", "").lower()
-                or "-us" in str(p.get("text", "")).lower()
-            ):
-                audio_url = p["audio"]
-                break
-        # Fallback to any
-        if not audio_url:
-            for p in phonetics:
-                if p.get("audio"):
-                    audio_url = p["audio"]
-                    break
-
-        return {
-            "ipa": ipa,
-            "audio_url": audio_url,
-        }
-    except requests.RequestException:
-        return None
-
-
-def download_audio(url: str, dest_path: str, retries: int = MAX_RETRIES) -> bool:
-    """Download an audio file from URL to dest_path. Returns True on success."""
-    for attempt in range(retries + 1):
-        try:
-            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-            if resp.status_code == 200:
-                with open(dest_path, "wb") as f:
-                    f.write(resp.content)
-                return True
-        except requests.RequestException:
-            if attempt < retries:
-                time.sleep(1)
-    return False
-
-
-# ---------------------------------------------------------------------------
-# gTTS
-# ---------------------------------------------------------------------------
-
-
-def generate_tts(text: str, dest_path: str, lang: str = "en") -> bool:
-    """Generate TTS audio for text using gTTS. Returns True on success."""
-    try:
-        from gtts import gTTS
-
-        tts = gTTS(text=text, lang=lang, tld="com", slow=False)
-        tts.save(dest_path)
-        return True
-    except Exception:
-        return False
+# generate_tts() replaced by edge_tts_file from utils
 
 
 # ---------------------------------------------------------------------------
@@ -234,41 +141,58 @@ def process_word_audio(
     verbose: bool,
     no_fetch: bool,
     no_tts: bool,
+    lemma: str | None = None,
 ) -> tuple[str, str]:
     """Process audio for a single word.
 
+    If lemma is provided, it's used for API lookup and audio filenames.
+    The original form is used only for display/fallback.
+
     Returns (ipa, word_audio_path) where word_audio_path may be empty string.
     """
-    safe = safe_filename(word)
+    lookup = (lemma or word).lower()
+    safe = safe_filename(lookup)
     ipa = input_ipa or ""
     word_audio_path = ""
 
     if no_fetch and no_tts:
         return ipa, word_audio_path
 
-    # 1. Try Free Dictionary API
-    api_data = None
+    # If JSON provides IPA, use SSML directly — skip API (Claude's IPA
+    # may target a specific pronunciation for heteronyms).
+    if ipa and not no_tts:
+        dest = os.path.join(temp_dir, f"{safe}_word.mp3")
+        if edge_tts_file(lookup, dest, ipa=ipa):
+            word_audio_path = dest
+            if verbose:
+                print(f"    word audio: SSML ({ipa})")
+        return ipa, word_audio_path
+
+    # 1. Try Free Dictionary API (using lemma for better coverage)
+    fetched_ipa = None
     if not no_fetch:
-        api_data = fetch_word_data(word)
-        if api_data:
-            if not ipa and api_data.get("ipa"):
-                ipa = api_data["ipa"]
-            if api_data.get("audio_url"):
+        fetched_ipa, audio_url, _audio_bytes = fetch_word_data(lookup)
+        if fetched_ipa or audio_url:
+            if not ipa and fetched_ipa:
+                ipa = fetched_ipa
+            if audio_url:
                 dest = os.path.join(temp_dir, f"{safe}_word.mp3")
-                if download_audio(api_data["audio_url"], dest):
+                if download_audio(audio_url, dest):
                     word_audio_path = dest
                     if verbose:
                         print(f"    word audio: API ({ipa or 'no IPA'})")
         elif verbose:
             print(f"    word audio: API returned no data")
 
-    # 2. Fallback to gTTS
+    # 2. Fallback to Edge TTS (SSML with IPA when available, on lemma)
     if not word_audio_path and not no_tts:
         dest = os.path.join(temp_dir, f"{safe}_word.mp3")
-        if generate_tts(word, dest):
+        fallback_ipa = fetched_ipa or None
+        if edge_tts_file(lookup, dest, ipa=fallback_ipa):
             word_audio_path = dest
             if verbose:
-                print("    word audio: gTTS fallback")
+                tag = "Edge TTS+SSML" if fallback_ipa else "Edge TTS fallback"
+                print(f"    word audio: {tag}")
 
     return ipa, word_audio_path
 
@@ -289,13 +213,13 @@ def process_sentence_audio(
 
     # Strip HTML tags for clean TTS
     clean = re.sub(r"<[^>]+>", "", sentence)
-    if generate_tts(clean, dest):
+    if edge_tts_file(clean, dest):
         if verbose:
-            print("    sentence audio: gTTS OK")
+            print("    sentence audio: Edge TTS OK")
         return dest
     else:
         if verbose:
-            print("    sentence audio: gTTS FAILED")
+            print("    sentence audio: Edge TTS FAILED")
         return ""
 
 
@@ -1013,14 +937,14 @@ def main() -> None:
     print(f'Processing {total} vocabulary words for "{book_title}"...')
     print()
 
-    # Check gTTS availability early
+    # Check edge-tts availability early
     if not args.no_tts:
         try:
-            import gtts  # noqa: F401
+            import edge_tts  # noqa: F401
         except ImportError:
             print(
-                "Warning: gtts not installed. Use --no-tts to skip audio generation.\n"
-                "  pip install gtts",
+                "Warning: edge-tts not installed. Use --no-tts to skip audio generation.\n"
+                "  pip install edge-tts",
                 file=sys.stderr,
             )
 
@@ -1036,14 +960,15 @@ def main() -> None:
 
         for i, entry in enumerate(data["words"], 1):
             word = entry["word"]
+            lemma = lemmatize_word(word)
+            display = lemma if lemma != word.lower() else word
             input_ipa = entry.get("ipa", "")
 
             if args.verbose:
-                print(
-                    f"  [{i}/{total}] {word}"
-                )
+                tag = f" ({lemma})" if lemma != word.lower() else ""
+                print(f"  [{i}/{total}] {word}{tag}")
 
-            # Process word audio (IPA fetch + audio download)
+            # Process word audio (IPA fetch + audio download, using lemma)
             ipa, word_audio = process_word_audio(
                 word,
                 input_ipa,
@@ -1051,12 +976,13 @@ def main() -> None:
                 args.verbose,
                 args.no_fetch_audio,
                 args.no_tts,
+                lemma=lemma,
             )
 
             # Process sentence TTS
             sent_audio = process_sentence_audio(
                 entry["sentence"],
-                word,
+                display,
                 temp_dir,
                 args.verbose,
                 args.no_tts,
@@ -1073,11 +999,12 @@ def main() -> None:
                 elif not args.no_tts:
                     status_parts.append("sent audio MISS")
                 status = ", ".join(status_parts) if status_parts else "text only"
-                print(f"  [{i}/{total}] {word} -- {status}")
+                label = f"{word}→{display}" if display != word else word
+                print(f"  [{i}/{total}] {label} -- {status}")
 
             audio_results.append(
                 {
-                    "word": word,
+                    "word": display,
                     "sentence": entry["sentence"],
                     "ipa": ipa,
                     "definition_cn": entry["definition_cn"],

@@ -26,22 +26,38 @@ description: >
 ## 工作流
 
 > **核心原则：每次执行都必须重新从微信读书获取最新划线。禁止依赖缓存的 JSON 或之前的运行结果，因为用户可能在此期间添加了新的划线。**
+>
+> **确认策略：整个流程仅在 Step 4（同步/导出前）进行一次用户确认。其他步骤仅输出进度，不询问。**
 
-### Step 0: 前置检查
+### Step 0: 前置检查（含 Anki 牌组 bookId 桥接）
 
-在开始任何 API 调用之前，先检查环境：
+在开始任何 API 调用之前，先检查环境并建立 Anki ↔ 微信读书的 bookId 桥接。
+
+**0a. 检查环境变量：**
 
 ```bash
-# 检查 WEREAD_API_KEY 是否已设置
 [ -n "$WEREAD_API_KEY" ] || echo "MISSING"
 ```
 
-- 若未设置，提示用户：`export WEREAD_API_KEY=<你的 key>`，然后终止。
-- 若已设置，继续。
+若未设置 → 提示 `export WEREAD_API_KEY=<你的 key>`，终止。
 
-### Step 1: 获取划线
+**0b. 检查 AnkiConnect 可达性并建立 bookId 映射：**
 
-通过 weread API gateway 获取用户在某本书中的所有划线：
+```bash
+curl -s http://localhost:8765 -d '{"action":"deckNamesAndIds","version":6}'
+```
+
+若可达 → 对每个使用 "Vocabulary Card (WeRead)" 模型的牌组，取一张卡片的 `WordId` 字段（格式 `{word}_{bookId}`），解析出 `bookId`。形成映射表：
+
+```
+{牌组名: bookId}
+```
+
+**目的**：用 bookId 作为 Anki ↔ 微信读书的精确桥接。bookId 来自卡片字段，无需额外存储——每张卡片的 WordId 天然包含 bookId。
+
+### Step 1: 获取划线（智能路由）
+
+通过 weread API gateway 获取划线：
 
 ```
 POST https://i.weread.qq.com/api/agent/gateway
@@ -49,17 +65,17 @@ Authorization: Bearer $WEREAD_API_KEY
 Content-Type: application/json
 ```
 
-**1a. 搜索书籍获取 bookId：**
+**1a. 路由判断：**
 
-```json
-{"api_name": "/store/search", "keyword": "<书名>", "scope": 10, "count": 5, "skill_version": "1.0.3"}
-```
+- **若 Step 0 匹配到已有牌组**（用户说的书名对应某个牌组名）：
+  - 从牌组卡片 WordId 解析出 `bookId` → 直接用 bookId 调用 `/book/bookmarklist` 和 `/book/info`
+  - **跳过 `/store/search`**——不需要搜索
+  - `book_title` 和 `book_author` 从牌组名 `"{title} ({author})"` 解析，确保与 Anki 一致
 
-搜索结果处理：
-
-- 若只有一个结果 → 直接使用。
-- 若多个版本 → **并行检查所有英文版（标题含"英文"、"English"、"双语"）的划线数量**，只展示有划线内容的版本给用户选择。若所有版本均无划线，告知用户并终止。
-- 划线最多的版本排在前面，标注划线数。
+- **若未匹配到**（新书，尚无牌组）：
+  - 走完整搜索流程：`/store/search` → 选书 → `/book/info` → `/book/bookmarklist`
+  - 多版本时，并行检查英文版划线数量，标出划线最多的版本
+  - `book_title` 和 `book_author` 用微信读书 API 返回值
 
 **1b. 获取书籍信息：**
 
@@ -67,27 +83,48 @@ Content-Type: application/json
 {"api_name": "/book/info", "bookId": "<bookId>", "skill_version": "1.0.3"}
 ```
 
-从中提取 `title` 和 `author`，作为牌组名称的一部分。
-
 **1c. 获取划线内容：**
 
 ```json
 {"api_name": "/book/bookmarklist", "bookId": "<bookId>", "skill_version": "1.0.3"}
 ```
 
-回包中的 `updated[]` 数组包含所有划线，每条有 `markText`（划线文本）、`chapterUid`（章节 UID）、`createTime`。`chapters[]` 提供章节标题。
+`updated[]` 数组含 `markText`、`chapterUid`、`createTime`；`chapters[]` 含章节标题。
 
-**1d. 筛选和展示：**
+**1d. 筛选（自动，不询问用户）：**
 
-- 过滤掉非单词类划线（如整句、长段落、纯数字/符号）
+- 过滤非单词划线（整句、长段落、纯数字/符号）
 - 去重（大小写不敏感）
-- 按字母排序后展示给用户确认
-- 展示格式：编号列表，显示单词、所属章节、标记日期
-- 问用户是否全部使用，或需要筛选/增减
+- 按字母排序
+- 输出汇总行：`划线 X 条 → 去重后 Y 个单词`
 
-### Step 2: 生成内容（Claude 知识工作）
+### Step 2: COCA 筛选 + Anki 去重（生成内容之前，不询问用户）
 
-对每个确认的生词，提供以下内容：
+> 此步骤在 Claude 做任何知识工作**之前**完成，仅做机械过滤。
+
+**2a. COCA 20000 批量检查：**
+
+```bash
+python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
+```
+
+输出格式：`word\tTrue/False\tdetail`。不在 COCA 20000 中的单词直接排除，记录原因。
+
+**2b. Anki 已有卡片对比：**
+
+若 AnkiConnect 可达 → 查询目标牌组已有 WordId（`{word}_{bookId}`），已在牌组中的直接跳过。
+
+**2c. 输出汇总（仅数字，不确认）：**
+
+```
+划线 X 条 → 去重 Y 个 → COCA 排除 A 个 → Anki 已有 B 个 → 待生成内容 C 个
+```
+
+> COCA 查本地文本文件（毫秒级），Anki 查 localhost（毫秒级），每次实时查询即可，无需缓存。
+
+### Step 3: 生成内容（Claude 知识工作，范围收窄）
+
+仅对 Step 2 筛出的 C 个单词生成内容。对每个单词提供：
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
@@ -95,125 +132,105 @@ Content-Type: application/json
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I <b>pondered</b> deeply, then, over the adventures of the jungle.` |
 | `ipa` | IPA 音标（如已知；否则留空由脚本自动获取） | `/ˈpɒndər/` |
 | `definition_cn` | 在该书上下文中的中文释义 | `沉思，深思` |
-| `translation_cn` | 整句的中文翻译 | `我于是对丛林中的冒险深深思索起来。` |
+| `translation_cn` | 整句的中文翻译（遵循翻译原则） | `我于是对丛林中的冒险深深思索起来。` |
 
-**例句规则：**
+**例句规则（不变）：**
 - 必须是书中真实句子，不是词典通用例句
 - 如果 Claude 对某本书不够熟悉，无法回忆真实句子 → 如实告知用户，并提供词典例句作为替代
 - 句子中出现的生词形式可能不同于原形（如 `straying` vs `stray`），用 `<b>` 包裹书中实际出现的词形
 - 句子应完整、有语境，不是片段
 
+**翻译原则：**
+
+> 准确、自然、可追溯。每个关键词汇在中文里要有对应，让学习者能从句子的中文字面反推出英文结构。不要逐字死译，也不要重新创作。
+
+- **关键词映射可追溯**：`absence of reproaches` → "没有一句责备的话"（`absence`→"没有"、`reproaches`→"责备的话"），而不是"毫无责备之意"（丢失了 `absence` 的映射）
+- **句式按中文习惯调整**：英文的代词、从句、被动语态大胆打破，换成中文流水句。但词义不走样
+- **动词优先选用与英文义项直接对应的词**：`intimated` → "暗示"（而非"婉转地表示"），`linger` → "徘徊"（而非"流连"），确保学习者能根据中文反查英文原词
+- **不要重新创作**：翻译的目的是辅助理解英文原句，不是独立的中文美文
+
+**IPA 规则：**
+- 若知道该词在上下文中的正确 IPA → 填写。脚本会直接用 SSML 合成音频，跳过 Free Dictionary API
+- 若不确定或词无歧义 → 留空 `""`，脚本自动从 Free Dictionary API 获取
+- 特别对同形异音词（heteronym，如 `intimate` 形容词 /ˈɪntɪmət/ vs 动词 /ˈɪntɪmeɪt/），必须根据释义填入正确 IPA
+
 **释义审查：**
-- 先检查单词是否在 COCA 20000 高频词表中（使用 `coca_lookup.py`，自动处理词形变化如 `pondered` → `ponder`）
-- 在 COCA 表中的单词，再判断释义是否为**罕见用法**（如古英语义、专业术语、已淘汰的表达）
-- 若释义罕见 → 尝试换个书中例句，看不同上下文是否有常见释义。仍无常见释义 → **不收录**
-- 若书中没有合适的例句 → **不收录**
-- 判断依据：单词对学习者的实际阅读价值。不在 COCA 表中的低频词背了几乎遇不到
+- 在 COCA 表中的单词，判断释义是否为罕见用法（古英语义、专业术语、已淘汰的表达）。若罕见 → 不收录
+- 若书中没有合适的例句 → 不收录
 
-**内容生成完后：**
-1. 展示 2-3 个样卡预览给用户确认
-2. 列出未收录的单词，逐个说明原因（如"罕见古英语用法"、"书中无完整例句"）
+**完成后：**构建 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`：
+- `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）
+- `book_id` 为微信读书 bookId
+- `ipa` 可为空（脚本自动从 Free Dictionary API 获取），若填写则脚本用 SSML 合成音频
+- `excluded` 数组记录未收录的单词及原因
+- **此步骤不展示样卡，不询问用户**
 
-### Step 3: 选择交付模式
+### Step 4: 最终确认 + 同步/导出（唯一确认点）
 
-生成 JSON 后，根据用户语境和可用性选择模式：
+**4a. 展示最终汇总（仅展示本次新变化）：**
 
-**默认逻辑：**
-1. 如果用户明确说"同步到 Anki"或"添加到我的 Anki" → 用同步模式
-2. 如果用户说"生成牌组文件"或"导出" → 用导出模式
-3. 都不明确时，先检查 AnkiConnect 是否可用（运行 `curl -s http://localhost:8765` 看是否有回应），可用则用同步模式，不可用则导出 `.apkg` 并提示安装 AnkiConnect 可支持增量同步
+- **新增排除**：本轮 COCA 检查中新发现不在表中的词（单词 + 原因）
+- **本次新增**：将同步的单词列表（仅单词名，不展示样卡）
+- Anki 已有的词仅一句话带过数量，不列出
 
-**构建 JSON（两种模式共用）：**
-- `book_title` 和 `book_author` 来自 `/book/info` 的返回值
-- `book_id` 为微信读书 bookId，用于生成 `WordId = "{word}_{bookId}"` 实现同词跨书独立
-- `ipa` 可以为空字符串，脚本会自动从 Free Dictionary API 获取
-- `excluded` 数组记录已排除的单词及原因，下次 sync 时直接跳过，避免重复分析
-- 将 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`
+**4b. 空跑判定：**
 
-#### 模式 A: 导出 .apkg（generate_apkg.py）
+若本次新增为空 **且** 新增排除为空 → 直接回复「没有新的划线生词」，终止流程，**不询问用户**。
 
-适用于：首次创建牌组、分享给他人、Anki 未运行时
+**4c. 唯一确认：**
+
+展示汇总后，仅问一次：「确认同步？」（或导出模式下「确认导出？」）。
+
+**4d. 执行（带超时）：**
+
+先创建 venv 并安装依赖：
 
 ```bash
 python3 -m venv /tmp/vocab-anki-venv
 /tmp/vocab-anki-venv/bin/pip install -q -r <skill_dir>/requirements.txt
+```
+
+**同步模式——带 120 秒超时：**
+
+```bash
+timeout 120 /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
+  /tmp/vocab-anki-input-<bookId>.json \
+  -v
+```
+
+**导出模式：**
+
+```bash
 /tmp/vocab-anki-venv/bin/python <skill_dir>/generate_apkg.py \
   /tmp/vocab-anki-input-<bookId>.json \
   -o ./<book_title_sanitized>_vocab.apkg \
   -v
 ```
 
-脚本会：
-1. 对每个单词调用 Free Dictionary API 获取 IPA + 发音音频
-2. API 无结果时 fallback 到 gTTS
-3. 用 gTTS 生成例句朗读
-4. 打包为 `.apkg` 文件，音频嵌入其中
+**同步超时处理：**
+- 正常完成 → 展示同步结果
+- 超时退出（exit 124）→ 告知用户：「同步脚本超时（120s）。可能原因：网络慢（音频下载卡住）、单词过多、AnkiConnect 响应慢。可尝试加 `--no-audio` 跳过音频，或分批处理。」
+- 非零退出码 → 打印 stderr，告知具体错误
 
-#### 模式 B: 同步到 Anki（sync_anki.py）
+**模式判断逻辑：**
+- 用户说"同步/添加到 Anki" → 同步模式
+- 用户说"导出/生成文件" → 导出模式
+- 都不明确 → 检查 AnkiConnect：可达则同步，不可达则导出（并提示可安装 AnkiConnect）
 
-适用于：Anki 正在运行、已安装 AnkiConnect 插件、需增量更新
+#### 同步模式详情（sync_anki.py）
 
-**同步流程：**
 1. 连接 AnkiConnect（`localhost:8765`）
-2. 查找目标牌组中已有的卡片 → 提取已存在的 WordId 字段（`{word}_{bookId}`）
-3. 对比输入 JSON 中的 WordId → 找出真正的新词
-4. **仅对新词**生成音频并上传到 Anki 媒体库
-5. 添加新卡片到目标牌组，带上音频引用
-6. **已有卡片完全不动**，保留复习进度和调度数据
+2. 查找目标牌组已有卡片 → 提取 WordId → 仅对新词生成音频
+3. 上传音频到 Anki 媒体库 → 添加新卡片
+4. **已有卡片完全不动**，保留复习进度和调度数据
 
-```bash
-python3 -m venv /tmp/vocab-anki-venv
-/tmp/vocab-anki-venv/bin/pip install -q -r <skill_dir>/requirements.txt
-/tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
-  /tmp/vocab-anki-input-<bookId>.json \
-  -v
-```
+牌组名自动从 JSON 推导：`"{title} ({author})"`。额外参数：`--deck "自定义"`、`--dry-run`、`--no-audio`。
 
-牌组名自动从 JSON 的 `book_title` 和 `book_author` 推导（`"{title} ({author})"`），与 `generate_apkg.py` 保持一致。也可手动指定 `--deck "自定义牌组名"`。
+#### 导出模式详情（generate_apkg.py）
 
-额外参数：
-- `--dry-run`：只显示会添加哪些新词，不实际添加
-- `--no-audio`：跳过音频生成和上传（纯文本卡片）
-
-**同步输出示例：**
-```
-Connecting to AnkiConnect...
-  Deck: "The Little Prince (Antoine de Saint-Exupéry)"
-  Model: Vocabulary Card (WeRead)
-
-Querying existing cards in deck...
-  Found 28 existing cards
-
-  New words to add: 5
-  Already in deck: 28
-
-Generating audio for 5 new words...
-Uploading 10 media files...
-Adding 5 new cards to Anki...
-
-==================================================
-Sync complete for "The Little Prince"
-  New cards added:  5
-  Already in deck:  28
-  Media uploaded:   10
-==================================================
-```
-
-**学习记录保护机制：**
-- 同步只添加新卡片（`addNotes`），从未修改或删除已有卡片
-- Anki 根据 `modelName` + 字段内容进行重复检测（相同 Word 字段值不会重复添加）
-- 已有卡片的学习进度、复习间隔、到期时间全部不变
-- 同步后用户在 Anki 中直接可以开始背诵新词，之前背过的词不受影响
-
-#### 模式判断流程图
-
-```
-用户说"同步/添加到Anki" → 同步模式 (sync_anki.py)
-用户说"导出/生成文件" → 导出模式 (generate_apkg.py)
-都没说 → curl localhost:8765
-        有响应 → 同步模式
-        无响应 → 导出模式 + 提示可安装 AnkiConnect
-```
+1. 对每个单词：Free Dictionary API → Edge TTS + SSML fallback
+2. Edge TTS 生成例句朗读
+3. 打包 `.apkg` 文件（音频嵌入）
 
 ## 卡片格式
 
@@ -263,11 +280,13 @@ Sync complete for "The Little Prince"
 | 不认识的书 | 如实告知无法回忆真实例句，提供词典例句替代方案 |
 | 超过 50 个单词 | 建议分批生成（每批 ≤50），或让用户筛选 |
 | 脚本运行失败 | 检查依赖安装、网络连接，打印错误信息 |
-| 词典 API 不可用 | 脚本自动 fallback 到 gTTS，无音频时生成纯文本版本 |
+| 词典 API 不可用 | 脚本自动 fallback 到 Edge TTS + SSML，无音频时生成纯文本版本 |
 | `WEREAD_API_KEY` 未设置 | 提示用户设置：`export WEREAD_API_KEY=<your-key>` |
 | AnkiConnect 不可达 | 提示启动 Anki 并安装 AnkiConnect 插件后重试；fallback 到导出 .apkg |
 | 模型不在 Anki 中 | 提示先导入一次 .apkg 建立模型，再进行同步 |
 | 牌组中全是新词 | 全部添加，和首次导出效果一样 |
+| 同步脚本超时（120s） | 提示原因（网络慢/词多/Anki 响应慢），建议 `--no-audio` 或分批 |
+| 没有新划线生词 | 直接告知用户「没有新的划线生词」，流程自动结束 |
 
 ## 输出
 
@@ -284,7 +303,8 @@ Sync complete for "The Little Prince"
 
 | 脚本 | 用途 | 输入 | 输出 |
 |------|------|------|------|
-| `generate_apkg.py` | 生成 .apkg 文件 | JSON → Free Dict API + gTTS | `.apkg` 文件 |
+| `utils.py` | 共享工具模块 | — | safe_filename, fetch_word_data, lemmatize_word, edge_tts_bytes/file, 常量 |
+| `generate_apkg.py` | 生成 .apkg 文件 | JSON → Free Dict API + Edge TTS + SSML | `.apkg` 文件 |
 | `sync_anki.py` | 增量同步到 Anki | JSON + AnkiConnect | 直接添加卡片到 Anki |
 | `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
 | `coca_lookup.py` | COCA 20000 高频词查询 | 单词 → lemminflect + 后缀剥离 | 是否在 COCA 前 20000 词中 |
@@ -293,6 +313,9 @@ Sync complete for "The Little Prince"
 ## 设计原则
 
 - **职责分离**：Claude 做知识工作（理解语境、翻译），Python 做机械工作（HTTP、TTS、打包、同步）
-- **不重复造轮**：划线获取复用 weread-skills 的 API 规范
-- **故障降级**：音频获取失败不阻塞整体流程，尽可能生成可用牌组
+- **过滤前置**：COCA 频次检查和 Anki 去重在生成内容**之前**完成，避免浪费 Claude 精力
+- **bookId 桥接**：Anki 卡片 WordId `{word}_{bookId}` 天然包含 bookId，用于精确关联微信读书，替代不可靠的书名匹配
+- **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断
+- **不重复造轮**：划线获取复用 weread-skills 的 API 规范；Python 脚本间提取共享 `utils.py` 消除重复代码
+- **故障降级**：音频获取失败不阻塞整体流程；同步超时有明确提示和建议
 - **增量安全**：同步模式只添加不修改，保留学习记录不受影响

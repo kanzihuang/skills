@@ -98,3 +98,18 @@ def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
                 return True, f"{w} -> {stem_e}"
 
     return False, f"{w} not in COCA 20000"
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python coca_lookup.py word1 [word2 ...]")
+        print("  Checks each word against COCA 20000 lemma list.")
+        print("  Output: word\\tin_coca\\tdetail")
+        sys.exit(1)
+
+    coca = load_coca()
+    for word in sys.argv[1:]:
+        ok, detail = in_coca(word, coca)
+        print(f"{word}\t{ok}\t{detail}")
