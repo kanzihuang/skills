@@ -49,13 +49,17 @@ wait
 
 若 AnkiConnect 可达：
 - **全库 0 张 "Vocabulary Card (WeRead)" 笔记** → Step 1e 直接得 A=0，**不查 Anki**。
-- 若有卡片 → 对每个使用 "Vocabulary Card (WeRead)" 模型的牌组，取一张卡片的 `WordId` 字段（格式 `{lemma}_{bookId}`），解析出 `bookId`。形成映射表：
+- 若有卡片 → 对每个使用 "Vocabulary Card (WeRead)" 模型的牌组，通过以下优先级获取 `bookId`：
+  1. **优先查 meta manifest 卡片**：`WordId` 以 `__META__` 开头，格式固定 `__META__{bookId}`，专为存储书籍元数据设计，解析最可靠
+  2. **fallback 查普通单词卡片**：`WordId` 格式 `{lemma}_{bookId}`
+  
+  从 `WordId` 末尾 `_{bookId}` 解析出 `bookId`，形成映射表：
 
 ```
 {牌组名: bookId}
 ```
 
-**目的**：用 bookId 作为 Anki ↔ 微信读书的精确桥接。bookId 来自卡片字段，无需额外存储——每张卡片的 WordId 天然包含 bookId。
+**目的**：用 bookId 作为 Anki ↔ 微信读书的精确桥接。meta manifest 卡片是书籍元数据的权威来源；普通单词卡片为 fallback。无需额外存储——每张卡片的 WordId 天然包含 bookId。
 
 ### Step 1: 获取划线（智能路由）
 
@@ -122,7 +126,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 - `--book-id <bookId>`：传递给脚本用于 meta manifest 的 bookId
 - `--json-out <path>`：将过滤结果写入结构化 JSON 文件，供 Step 3 Claude 直接读取填充 `excluded` 数组，避免手动转录
 
-输出分为四段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表、`---ANKI_SKIPPED---` 表（仅当有 Anki 跳过的词时出现）。同时写入对应的结构化 JSON 到 `--json-out` 路径。
+输出分为五段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表、`---ANKI_SKIPPED---` 表（Anki 已有卡片，仅当存在时出现）、`---META_EXCLUDED---` 表（meta manifest 历史排除词，仅当存在时出现）。同时写入对应的结构化 JSON 到 `--json-out` 路径。
 
 > **Claude 注意**：若输出 `SUMMARY: 0 highlights → 0 lemmas`，在判定"没有划线"之前先用 `head -c 500` 查看原始 API 响应，确认 `updated` 字段确实存在且为空数组，排除 API 调用失败。
 
@@ -131,10 +135,10 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 > 一步完成，中间不暂停、不询问用户。
 
 ```
-划线 X 条 → 原形去重 Y 个 → Anki 已有 A 个 → COCA 排除 B 个 → 待生成内容 C 个
+划线 X 条 → 原形去重 Y 个 → Anki 已有 A 个, 历史排除 M 个 → 新增 COCA 排除 B 个 → 待生成内容 C 个
 ```
 
-> Anki 去重先于 COCA：已在牌组中的词直接保留，不受 COCA 频次影响。COCA 仅对真正的新词做筛。所有检查均为本地/本地网络查询（~0.5s），无需缓存。
+> Anki 去重先于 COCA：已在牌组中的词直接保留，不受 COCA 频次影响。历史排除词（存储在 meta manifest 中）也跳过，不再重复 COCA 检查。COCA 仅对真正的新词做筛。所有检查均为本地/本地网络查询（~0.5s），无需缓存。
 
 ### Step 3: 生成内容（Claude 知识工作，范围收窄）
 
@@ -297,7 +301,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 4. **单词音频**：Claude IPA → SSML `<phoneme>` 合成；IPA 缺失时跳过单词音频
 5. **例句音频**：Edge TTS 朗读
 6. **已有卡片完全不动**，保留复习进度和调度数据
-7. **更新 meta manifest 卡片**：将本次 `excluded` 单词写入 `"Excluded"` 字段；同步更新 Sentence 字段的完整 JSON manifest（`WordId = __META__{bookId}`），卡片暂停（不参与复习），下次同步优先读取
+7. **更新 meta manifest 卡片**：将本次 `excluded` 单词写入 Sentence 字段的 JSON manifest（`WordId = __META__{bookId}`），卡片暂停（不参与复习），下次同步优先读取
 
 牌组名自动从 JSON 推导：`"{title} ({author})"`。额外参数：`--deck "自定义"`、`--dry-run`、`--no-audio`。
 
@@ -381,7 +385,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
 - **原形归一（两层分工）**：Step 1d `lemmatize_word()` 仅处理**屈折变化**（-ing/-ed/-s），不碰派生词（peaceful 不动），用于去重——确保 `pondered`+`ponder` 在管道入口合并为同一原形。Step 1f COCA 的 `in_coca()` fallback（lemminflect + 后缀剥离）处理**派生归一**（`indulgently`→`indulgent`、`resentfulness`→`resentful`），用于频次匹配——因为 COCA 20000 只收录基础词，不收录所有派生形式。两层互补，各司其职
-- **bookId 桥接**：Anki 卡片 WordId `{lemma}_{bookId}` 天然包含 bookId，用于精确关联微信读书，替代不可靠的书名匹配
+- **bookId 桥接**：Anki 卡片 WordId 天然包含 bookId（`{lemma}_{bookId}`），meta manifest 卡片格式固定（`__META__{bookId}`），用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断
 - **不重复造轮**：划线获取复用 weread-skills 的 API 规范；Python 脚本间提取共享 `utils.py` 消除重复代码
 - **故障降级**：音频获取失败不阻塞整体流程；同步超时有明确提示和建议
