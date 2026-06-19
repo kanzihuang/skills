@@ -175,24 +175,53 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 - 在 COCA 表中的单词，判断释义是否为罕见用法（古英语义、专业术语、已淘汰的表达）。若罕见 → 不收录
 - 若书中没有合适的例句 → 不收录
 
-**执行策略：**
+**执行策略：分批写入，禁止一次性思考全部单词**
 
-- 所有单词由 Claude 在单次响应中直接生成全部内容（IPA、例句、释义、翻译），按字母序写入 JSON 文件
+> **核心问题**：若试图在 thinking block 中为 50+ 单词逐一回想并验证例句+IPA+释义+翻译，thinking 会持续 2-3 分钟无任何输出。**禁止预先思考全部单词——按批次边写边想，每批写完再想下一批。**
+
+**批次规则：**
+- ≤20 词：单批写入
+- 21-40 词：分 2 批，每批 ~20 词
+- 41-60 词：分 3 批，每批 ~20 词
+- 60+ 词：分 4+ 批，每批 ~15 词
+- 每批按字母序排列该批单词
+
+**写入流程（每批）：**
+1. 第一批：`Write` 完整 JSON（含 `book_title`/`book_author`/`book_id`/`excluded` + 第一批 `words`）
+2. 后续批次：`Read limit=5` 当前文件 → `Edit` 在 `words` 数组末尾追加新单词（在 `]` 前插入）
+   - 若 Edit 匹配不精确，改用 `Write` 全量覆盖（Read 完整文件后重写）
+
+**注意**：第一批之前仍需 `rm -f + touch + Read limit=3` 初始化文件。后续批次只需 Read + Edit/Write。
+
 - **不再使用 SubAgent**：SubAgent 启动慢（权限确认、模型初始化），常误触发 WebSearch 浪费额度，多个 agent 的协调开销远超串行生成的实际耗时
 - **知名书禁止 WebFetch/WebSearch**：对于 Claude 训练数据中充分覆盖的知名英文书（The Little Prince、Harry Potter、Animal Farm、1984、Pride and Prejudice、Charlotte's Web 等），**严禁使用 WebFetch 或 WebSearch**——直接从训练数据回忆书中真实例句。查外部资源只会浪费时间，且 WebFetch 可能被网络策略拦截导致流程卡死
 - 对于不熟悉的书籍：如 Claude 确实无法从训练数据回忆该书的句子，**仅此时**才用 `WebFetch` 一次性获取书中段落辅助定位
 
 **性能说明：**
-- 内容生成本身是流程瓶颈（Claude 需要为每个词回忆句子+IPA+释义+翻译），对 50+ 单词通常需要 1-3 分钟，这是知识工作的固有开销，不可免
+- **分批写入是关键性能优化**：每批 ~15-20 词，单批 thinking ~10-15s + 写入 ~2s，总耗时 30-60s（vs 单次思考 2-3 分钟无输出）
 - JSON 写入**必须使用 `Write` 工具**而非 Bash heredoc——Write 直接写文件系统，跳过 shell 缓冲和序列化开销，省 ~10-15s
-- **Write 工具要求文件已被 Read 过**（当前会话上下文中有该文件），否则写入报错。因此写入流程为四步：
+- **Write 工具要求文件已被 Read 过**（当前会话上下文中有该文件），否则写入报错。因此第一批写入前需四步：
   1. `Bash rm -f /tmp/vocab-anki-input-<bookId>.json` — 清理上次运行残留的旧文件，避免 Read 时加载无用的旧 JSON 到上下文
   2. `Bash touch /tmp/vocab-anki-input-<bookId>.json` — 创建空文件
   3. `Read /tmp/vocab-anki-input-<bookId>.json limit=3` — 将会话上下文注册该文件（满足 Write 的前提条件）；空文件仅 3 行，几乎不占上下文
-  4. `Write /tmp/vocab-anki-input-<bookId>.json` — 写入完整内容
+  4. `Write /tmp/vocab-anki-input-<bookId>.json` — 写入第一批（含完整 JSON 结构）
 - `rm` + `touch` 确保每次运行都从干净空文件开始，不会加载上次的完整旧 JSON
+- 后续批次：`Read limit=5` 定位 `words` 数组末尾 → `Edit` 追加新词 → 下一批
 
-**完成后：**构建 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`：
+**完成后 JSON 格式：**
+```json
+{
+  "book_title": "小王子（英文版）",
+  "book_author": "圣埃克絮佩里",
+  "book_id": "22720170",
+  "words": [
+    {"word": "...", "ipa": "/.../", "sentence": "...", "definition_cn": "...", "translation_cn": "..."}
+  ],
+  "excluded": [
+    {"word": "abashed", "reason": "不在 COCA 20000 中"}
+  ]
+}
+```
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）
 - `book_id` 为微信读书 bookId
 - `ipa` 为必填（Claude 直接提供）；脚本用 SSML `<phoneme>` 合成音频，跳过 Free Dictionary API
