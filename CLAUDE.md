@@ -43,6 +43,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 | `generate_apkg.py` | Generate standalone `.apkg` file with embedded audio |
 | `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress, per-word timeout with `--word-timeout`, auto-creates suspended meta manifest card for excluded words) |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client library |
+| `filter_pipeline.py` | Combined filter pipeline (Step 1d+1e+1f merged): lemmatize → Anki dedup → COCA check in a single Python invocation — eliminates Claude round-trip data transfer, ~0.5s vs previous ~33s |
 | `coca_lookup.py` | COCA 20000 frequency check — direct set lookup + lemminflect/suffix-stripping fallback for derivational normalization (`indulgently`→`indulgent`) |
 | `coca_20000.txt` | COCA 20000 lemma list (17,640 entries) |
 
@@ -66,7 +67,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **Text progress output**: plain text progress `i/N label` (in-place `\r` on real TTY, line-by-line when piped/captured; no `-v` needed); no graphical bar characters since Claude Code can't render `\r`; verbose mode adds audio source details and byte counts; media upload progress shown in same format
 - **Background execution for large syncs**: when word count ≥30, run sync in background (`run_in_background: true`) with `python -u` (unbuffered) to avoid blocking the conversation for several minutes; read the output file after completion to show results
 - **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`
-- **Three-stage filter pipeline**: Step 1d lemmatize → Step 1e Anki dedup → Step 1f COCA check. Anki result feeds COCA; COCA only runs on words not already in deck
+- **Single-pass filter pipeline**: Step 1 runs `filter_pipeline.py` — one Python invocation that pipelines lemmatize → Anki dedup → COCA check. All data flows through stdin/stdout between processes; Claude never carries tab-separated word lists in echo commands. Eliminates the prior ~33s Claude round-trip overhead (capture output → regenerate as echo → re-parse) down to ~0.5s
 - **Write tool for JSON**: Step 3 JSON output uses `Write` tool (not Bash heredoc) — skips shell buffering overhead. Three-step flow: (1) `Bash touch` to ensure file exists, (2) `Read` to register file in session context (Write rejects files never Read), (3) `Write` to write content
 
 ## Integration

@@ -100,9 +100,11 @@ Content-Type: application/json
 
 > **Claude 注意**：若 Step 1d 输出 `SUMMARY: 0 highlights → 0 lemmas`，在判定"没有划线"之前先用 `head -c 500` 查看原始 API 响应，确认 `updated` 字段确实存在且为空数组，排除 API 调用失败（如 `$WEREAD_API_KEY` 拼写错误导致认证失败）。
 
-**1d. 筛选 + 原形去重（单次 Python 流水线，不含 COCA，不询问用户）：**
+**1d. 筛选 + 原形去重 + Anki 去重 + COCA 批量检查（单次 Python 流水线，不询问用户）：**
 
-> 此步骤仅做机械提取和去重。COCA 检查延后到 Step 1f（Anki 去重之后）。
+> 合并原 Steps 1d/1e/1f 为一次 `filter_pipeline.py` 调用。脚本内部按序执行：
+> 原形提取 → Anki 去重（含 meta manifest）→ COCA 检查。
+> **禁止 Claude 在 echo 中传递数据**——所有数据通过 stdin/stdout 在进程间流通。
 
 ```bash
 # 确保 venv 存在（仅首次）
@@ -111,107 +113,30 @@ if [ ! -d <skill_dir>/.venv ]; then
     <skill_dir>/.venv/bin/pip install -q -r <skill_dir>/requirements.txt
 fi
 
-# 提取划线 → 过滤 → 原形去重（不含 COCA）
+# 提取划线 → 原形去重 → Anki 去重 → COCA 检查（单次调用）
 curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
   -H "Authorization: Bearer $WEREAD_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"api_name":"/book/bookmarklist","bookId":"<bookId>","skill_version":"1.0.3"}' | \
-<skill_dir>/.venv/bin/python3 -c "
-import sys, json
-sys.path.insert(0, '<skill_dir>')
-from utils import lemmatize_word
-
-data = json.load(sys.stdin)
-# 校验 API 响应结构：缺少 updated 字段 = API 调用失败（认证错误/bad bookId/网络问题）
-if 'updated' not in data:
-    err_info = data.get('errmsg', '') or data.get('error', '') or f'keys: {list(data.keys())}'
-    print(f'ERROR: API response missing "updated" field — possible auth failure or bad bookId. Response hint: {err_info}', file=sys.stderr)
-    sys.exit(1)
-# 提取所有划线文本
-marks = [h.get('markText','').strip() for h in data.get('updated',[])]
-# 过滤非单词（含空格、纯数字/符号、空、长度=1）
-words_raw = [m for m in marks if m and ' ' not in m and not m.isdigit() and len(m) > 1]
-# 原形去重
-lemma_map = {}
-for w in words_raw:
-    lemma = lemmatize_word(w)
-    if lemma not in lemma_map:
-        lemma_map[lemma] = []
-    lemma_map[lemma].append(w)
-# 输出
-print(f'SUMMARY: {len(marks)} highlights → {len(lemma_map)} lemmas')
-print('---ALL_LEMMAS---')
-for lemma in sorted(lemma_map.keys()):
-    forms = lemma_map[lemma]
-    rep = min(forms, key=lambda x: (x[0].isupper(), len(x)))
-    print(f'{lemma}\t{rep}\t{\",\".join(forms)}')
-"
+<skill_dir>/.venv/bin/python3 <skill_dir>/filter_pipeline.py --anki <bookId> --book-id <bookId>
 ```
 
-输出：`SUMMARY:` 行 + `---ALL_LEMMAS---` 表（lemma \t rep \t forms）。Claude 解析后用于下一步。
+- `--anki <bookId>`：启用 Anki 去重（查已有卡片 + meta manifest）；若 Step 0b 确认全库 0 张 Vocabulary Card 笔记，可省略此 flag 跳过 Anki 查询
+- `--book-id <bookId>`：传递给脚本用于 meta manifest 的 bookId
 
-**1e. Anki 去重（先于 COCA，基于原形，不询问用户）：**
+输出分为四段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表、`---ANKI_SKIPPED---` 表（仅当有 Anki 跳过的词时出现）。
 
-> 输入为 Step 1d 输出的**全部**原形列表。Anki 去重先于 COCA 执行——已在牌组中的词直接跳过，不再受 COCA 影响。
-
-- **若 Step 0b 已确认全库 0 张 Vocabulary Card (WeRead) 笔记 → 直接 A=0，跳过本步骤。**
-- 否则：
-  1. **先读 meta manifest**：查 `WordId = __META__{bookId}` → 解析 `excluded` 获取历史排除词
-  2. 查目标牌组已有卡片 WordId（格式 `{lemma}_{bookId}`），匹配则跳过
-- 输出 Anki 去重后的剩余原形列表，供 Step 1f 做 COCA 检查
-
-**1f. COCA 批量检查（Anki 去重之后，不询问用户）：**
-
-> 仅对 Step 1e Anki 去重后**剩余**的原形做 COCA 检查。已在牌组中的词不参与 COCA。
-> 
-> `in_coca()` 的 lemminflect/后缀剥离兜底**不是冗余**——Step 1d 的 `lemmatize_word()` 仅做屈折归一（pondered→ponder），故意不碰派生词（indulgently 保持原样）。但 COCA 20000 不直接收录所有派生形式（有 `indulgent` 无 `indulgently`），需要兜底做派生归一。见设计原则"原形归一（两层分工）"。
-
-```bash
-# COCA 检查：从 stdin 读取原形列表（每行 lemma\trep\tforms），输出 IN_COCA / EXCLUDED
-echo '<TAB_SEPARATED_LEMMA_LIST>' | \
-<skill_dir>/.venv/bin/python3 -c "
-import sys, json
-sys.path.insert(0, '<skill_dir>')
-from coca_lookup import load_coca, in_coca
-
-coca_set = load_coca()
-passed = []
-rejected = []
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    parts = line.split('\t')
-    lemma = parts[0]
-    rep = parts[1]
-    forms_str = parts[2] if len(parts) > 2 else rep
-    ok, _ = in_coca(lemma, coca_set)
-    if ok:
-        passed.append((lemma, rep, forms_str.split(',')))
-    else:
-        rejected.append((lemma, rep, '不在 COCA 20000 中'))
-
-print(f'SUMMARY: {len(passed)} in COCA → {len(rejected)} excluded')
-print('---IN_COCA---')
-for lemma, rep, forms in passed:
-    print(f'{lemma}\t{rep}\t{\",\".join(forms)}')
-print('---EXCLUDED---')
-for lemma, rep, reason in rejected:
-    print(f'{lemma}\t{rep}\t{reason}')
-"
-```
-
-输出分为三段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表。
+> **Claude 注意**：若输出 `SUMMARY: 0 highlights → 0 lemmas`，在判定"没有划线"之前先用 `head -c 500` 查看原始 API 响应，确认 `updated` 字段确实存在且为空数组，排除 API 调用失败。
 
 **Step 1 汇总（仅数字，不确认）：**
 
-> Step 1d → 1e → 1f 连续执行，中间不暂停、不询问用户。
+> 一步完成，中间不暂停、不询问用户。
 
 ```
 划线 X 条 → 原形去重 Y 个 → Anki 已有 A 个 → COCA 排除 B 个 → 待生成内容 C 个
 ```
 
-> Anki 去重先于 COCA：已在牌组中的词直接保留，不受 COCA 频次影响。COCA 仅对真正的新词做筛。所有检查均为本地/本地网络查询（毫秒级），无需缓存。
+> Anki 去重先于 COCA：已在牌组中的词直接保留，不受 COCA 频次影响。COCA 仅对真正的新词做筛。所有检查均为本地/本地网络查询（~0.5s），无需缓存。
 
 ### Step 3: 生成内容（Claude 知识工作，范围收窄）
 
