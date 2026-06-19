@@ -163,7 +163,11 @@ for lemma, rep, reason in rejected:
 
 **若 Step 0b 已确认全库 0 张 Vocabulary Card (WeRead) 笔记 → 直接 A=0，跳过本步骤。**
 
-否则（已有牌组），查目标牌组已有卡片：WordId 格式为 `{lemma}_{bookId}`，用原形列表精确匹配已在牌组中的词，直接跳过。
+否则（已有牌组）：
+1. **先读 meta manifest**：查牌组中 `WordId = __META__{bookId}` 的元数据卡片，解析 `excluded` 字段获取历史排除词，直接跳过
+2. 查目标牌组已有卡片：WordId 格式为 `{lemma}_{bookId}`，用原形列表精确匹配已在牌组中的词，直接跳过
+
+> meta manifest 卡片（一张/书）存储所有历史排除词，暂停不显示。每次同步自动更新，下次同步优先读它，避免重复处理已知排除词。
 
 **输出汇总（仅数字，不确认）：**
 
@@ -314,6 +318,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 4. **单词音频优先级**：JSON IPA（Claude 提供）→ SSML 合成 / Free Dict API 真人录音 → API IPA + Edge TTS + SSML → Edge TTS 裸词
 5. **例句音频**：Edge TTS 朗读
 6. **已有卡片完全不动**，保留复习进度和调度数据
+7. **更新 meta manifest 卡片**：将本次 `excluded` 单词合并入元数据卡片（`WordId = __META__{bookId}`），卡片暂停（不参与复习），下次同步优先读取
 
 牌组名自动从 JSON 推导：`"{title} ({author})"`。额外参数：`--deck "自定义"`、`--dry-run`、`--no-audio`。
 

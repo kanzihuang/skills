@@ -260,6 +260,22 @@ class AnkiConnect:
                 word_id_map[val] = n["noteId"]
         return word_id_map
 
+    def suspend_cards(self, card_ids: list[int]) -> bool:
+        """Suspend cards by their IDs. Returns True on success."""
+        return self._call("suspend", cards=card_ids)
+
+    def get_cards_of_notes(self, note_ids: list[int]) -> list[int]:
+        """Get card IDs for given note IDs."""
+        return self._call("findCards", query=" or ".join(f"nid:{nid}" for nid in note_ids))
+
+    def find_notes_by_field(self, deck_name: str, field_name: str, value: str) -> list[int]:
+        """Find notes matching a specific field value in a deck."""
+        return self.find_notes(f'deck:"{deck_name}" "{field_name}:{value}"')
+
+    def update_note_tags(self, note_id: int, tags: list[str]) -> None:
+        """Update tags of an existing note."""
+        return self._call("updateNoteTags", note=note_id, tags=tags)
+
     def ensure_deck_and_model(self, deck_name: str, model_name: str) -> bool:
         """Verify that the deck exists and the model is available.
 
