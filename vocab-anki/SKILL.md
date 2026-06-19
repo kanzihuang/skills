@@ -91,18 +91,24 @@ Content-Type: application/json
 
 `updated[]` 数组含 `markText`、`chapterUid`、`createTime`；`chapters[]` 含章节标题。
 
-**1d. 筛选（自动，不询问用户）：**
+**1d. 筛选与原形去重（自动，不询问用户）：**
 
 - 过滤非单词划线（整句、长段落、纯数字/符号）
-- 去重（大小写不敏感）
-- 按字母排序
-- 输出汇总行：`划线 X 条 → 去重后 Y 个单词`
+- 调用 `lemmatize_word()` 将所有词还原为原形
+- 按原形去重：同一原形的不同词形（如 `pondered` + `ponder`、`Abruptly` + `abruptly`）合并为一个词条，保留书中出现的代表词形
+- 按原形字母排序
+- 输出汇总行：`划线 X 条 → 原形去重 Y 个`
 
-### Step 2: COCA 筛选 + Anki 去重（生成内容之前，不询问用户）
+### Step 2: Anki 去重 + COCA 筛选（基于原形，生成内容之前，不询问用户）
 
-> 此步骤在 Claude 做任何知识工作**之前**完成，仅做机械过滤。
+> 此步骤在 Claude 做任何知识工作**之前**完成，仅做机械过滤。输入为 Step 1d 去重后的原形列表。
+> 先查 Anki（确定信号），再查 COCA（概率信号）——已学过的词直接跳过，无需频次判断。
 
-**2a. COCA 20000 批量检查：**
+**2a. Anki 已有卡片对比：**
+
+若 AnkiConnect 可达 → 查询目标牌组已有卡片。WordId 格式为 `{lemma}_{bookId}`，用原形列表精确匹配已在牌组中的词，直接跳过。
+
+**2b. COCA 20000 批量检查（以原形查询）：**
 
 ```bash
 python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
@@ -110,14 +116,10 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 
 输出格式：`word\tTrue/False\tdetail`。不在 COCA 20000 中的单词直接排除，记录原因。
 
-**2b. Anki 已有卡片对比：**
-
-若 AnkiConnect 可达 → 查询目标牌组已有卡片。WordId 格式为 `{lemma}_{bookId}`（脚本自动将变形词还原为原形，如 `bewildered` → `bewilder`），已在牌组中的直接跳过。
-
 **2c. 输出汇总（仅数字，不确认）：**
 
 ```
-划线 X 条 → 去重 Y 个 → COCA 排除 A 个 → Anki 已有 B 个 → 待生成内容 C 个
+划线 X 条 → 原形去重 Y 个 → Anki 已有 A 个 → COCA 排除 B 个 → 待生成内容 C 个
 ```
 
 > COCA 查本地文本文件（毫秒级），Anki 查 localhost（毫秒级），每次实时查询即可，无需缓存。
@@ -128,7 +130,7 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
-| `word` | 生词（保留原文词形，脚本自动还原为原形建卡） | `pondered` |
+| `word` | 生词（书中出现的表面词形，脚本建卡用原形，已在 Step 1d 做过原形归一） | `pondered` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I <b>pondered</b> deeply, then, over the adventures of the jungle.` |
 | `ipa` | IPA 音标（如已知；否则留空由脚本自动获取） | `/ˈpɒndər/` |
 | `definition_cn` | 在该书上下文中的中文释义 | `沉思，深思` |
@@ -318,7 +320,7 @@ timeout 120 /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
 
 - **职责分离**：Claude 做知识工作（理解语境、翻译），Python 做机械工作（HTTP、TTS、打包、同步）
 - **过滤前置**：COCA 频次检查和 Anki 去重在生成内容**之前**完成，避免浪费 Claude 精力
-- **原形归一**：脚本自动将变形词还原为原形（`bewildered`→`bewilder`），卡片词、WordId、API 查询均用原形，例句保留原文词形。仅处理屈折变化（-ing/-ed/-s），派生词（peaceful）不动
+- **原形归一**：去重和筛选阶段即提前还原原形（`bewildered`→`bewilder`），确保同一原形的不同词形（如 `pondered` + `ponder`）在管道入口就合并，不会生成重复卡片。卡片词、WordId、API 查询均用原形，例句保留原文词形。仅处理屈折变化（-ing/-ed/-s），派生词（peaceful）不动
 - **bookId 桥接**：Anki 卡片 WordId `{lemma}_{bookId}` 天然包含 bookId，用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断
 - **不重复造轮**：划线获取复用 weread-skills 的 API 规范；Python 脚本间提取共享 `utils.py` 消除重复代码

@@ -51,7 +51,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 **Design principles:**
 - **Separation of concerns**: knowledge work (Claude) vs mechanical work (Python)
 - **Filter-first**: COCA frequency check and Anki dedup happen BEFORE Claude generates content, avoiding wasted effort
-- **Lemma normalization**: script lemmatizes inflected forms (`bewildered`→`bewilder`) for card word, WordId, and API lookup. Only inflectional (-ing/-ed/-s), not derivational (peaceful untouched)
+- **Lemma-first dedup**: lemmatizes all highlighted words BEFORE dedup and filtering, so inflected forms (`pondered`, `bewildered`) collapse to their lemma at the pipeline entry point. Card word, WordId, and API lookup all use lemma. Only inflectional (-ing/-ed/-s), not derivational (peaceful untouched)
 - **bookId bridging**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English)
 - **Single confirmation**: only one user prompt at the end (before sync/export); intermediate steps report progress without asking
 - **Cross-book independence**: same word from different books coexists as independent cards via WordId
