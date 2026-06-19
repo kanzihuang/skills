@@ -43,7 +43,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 | `generate_apkg.py` | Generate standalone `.apkg` file with embedded audio |
 | `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress, per-word timeout with `--word-timeout`, auto-creates suspended meta manifest card for excluded words) |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client library |
-| `coca_lookup.py` | COCA 20000 frequency check with CLI batch mode |
+| `coca_lookup.py` | COCA 20000 frequency check — direct set lookup + lemminflect/suffix-stripping fallback for derivational normalization (`indulgently`→`indulgent`) |
 | `coca_20000.txt` | COCA 20000 lemma list (17,640 entries) |
 
 **Dependencies:** `weread-skills` (for highlight data via WeRead API), Python packages: `genanki`, `edge-tts`, `requests`, `lemminflect`
@@ -53,6 +53,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **Filter-first**: all mechanical filtering (Anki dedup, COCA frequency check) happens BEFORE Claude generates content, avoiding wasted effort
 - **Anki-before-COCA**: Anki dedup runs before COCA frequency check. Words already in Anki are preserved regardless of COCA frequency changes; COCA only filters truly new words
 - **Lemma-first dedup**: lemmatizes all highlighted words BEFORE dedup and filtering, so inflected forms (`pondered`, `bewildered`) collapse to their lemma at the pipeline entry point. Card word, WordId, and API lookup all use lemma. Only inflectional (-ing/-ed/-s), not derivational (peaceful untouched)
+- **Two-layer lemmatization**: Step 1d `lemmatize_word()` handles inflectional only (for dedup — same word, different forms). Step 1f `in_coca()` fallback (lemminflect + suffix stripping) handles derivational normalization (for frequency lookup — `indulgently`→`indulgent`, `resentfulness`→`resentful`). The two layers serve different purposes and are complementary, not redundant. Without the COCA derivational layer, words like `indulgently` (COCA has `indulgent` but not the -ly form) would be incorrectly excluded
 - **bookId bridging**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English)
 - **Single confirmation**: only one user prompt at the end (before sync/export); intermediate steps report progress without asking
 - **Cross-book independence**: same word from different books coexists as independent cards via WordId

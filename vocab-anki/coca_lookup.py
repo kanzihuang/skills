@@ -4,6 +4,18 @@ Loads the COCA 20000 lemma list and provides a lookup function that checks
 whether a given word (or its lemma form) is among the top 20,000 most
 frequent English words according to the Corpus of Contemporary American English.
 
+The lookup uses a three-tier strategy:
+1. Direct set lookup (O(1)) — covers most words
+2. lemminflect lemmatization — handles inflected forms (runs→run)
+3. Suffix-stripping fallback — handles derivational forms that COCA lists
+   only by their base (indulgently→indulgent, resentfulness→resentful)
+
+Tiers 2-3 serve as a **derivational normalization layer**. The pipeline's
+Step 1d `lemmatize_word()` intentionally only handles inflectional forms
+(pondered→ponder), leaving derivational forms untouched. This function
+bridges the gap: COCA 20000 contains base lemmas (indulgent, resentful)
+but not all derivational variants (indulgently, resentfulness).
+
 Usage:
     from coca_lookup import load_coca, in_coca
     coca = load_coca()
@@ -70,8 +82,10 @@ def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
     except ImportError:
         pass
 
-    # Suffix-stripping fallback for forms lemminflect misses
-    # (e.g. "indulgently" -> "indulgent", "resentfulness" -> "resentful")
+    # Suffix-stripping fallback for derivational forms that COCA only lists
+    # by their base lemma (e.g. "indulgently" -> "indulgent").
+    # This complements Step 1d's lemmatize_word() which only handles inflectional
+    # (-ing/-ed/-s), not derivational (-ly, -ness, -ful) changes.
     suffix_map = [
         ("fulness", "ful"),  # resentfulness -> resentful
         ("fully", "ful"),    # beautifully -> beautiful

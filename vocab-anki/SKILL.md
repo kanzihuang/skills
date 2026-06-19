@@ -156,6 +156,8 @@ for lemma in sorted(lemma_map.keys()):
 **1f. COCA 批量检查（Anki 去重之后，不询问用户）：**
 
 > 仅对 Step 1e Anki 去重后**剩余**的原形做 COCA 检查。已在牌组中的词不参与 COCA。
+> 
+> `in_coca()` 的 lemminflect/后缀剥离兜底**不是冗余**——Step 1d 的 `lemmatize_word()` 仅做屈折归一（pondered→ponder），故意不碰派生词（indulgently 保持原样）。但 COCA 20000 不直接收录所有派生形式（有 `indulgent` 无 `indulgently`），需要兜底做派生归一。见设计原则"原形归一（两层分工）"。
 
 ```bash
 # COCA 检查：从 stdin 读取原形列表（每行 lemma\trep\tforms），输出 IN_COCA / EXCLUDED
@@ -431,7 +433,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 | `generate_apkg.py` | 生成 .apkg 文件 | JSON → Free Dict API + Edge TTS + SSML | `.apkg` 文件 |
 | `sync_anki.py` | 增量同步到 Anki | JSON + AnkiConnect | 直接添加卡片到 Anki |
 | `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
-| `coca_lookup.py` | COCA 20000 高频词查询 | 单词 → lemminflect + 后缀剥离 | 是否在 COCA 前 20000 词中 |
+| `coca_lookup.py` | COCA 20000 高频词查询 — 直接 set 查找 + lemminflect/后缀剥离兜底做派生归一（`indulgently`→`indulgent`） | 单词 → set 查找 + lemminflect + 后缀剥离 | 是否在 COCA 前 20000 词中 |
 | `coca_20000.txt` | COCA 20000 词表数据 | — | 17,640 个唯一 lemma |
 
 ## 设计原则
@@ -440,7 +442,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **过滤前置**：Anki 去重和 COCA 频次检查在生成内容**之前**完成，避免浪费 Claude 精力。Anki 去重先于 COCA：已在牌组中的词不受 COCA 频次变化影响
 - **音频并发**：多线程（8 workers）并发下载音频（Step 3.5），将音频生成压缩到秒级
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
-- **原形归一**：去重和筛选阶段即提前还原原形（`bewildered`→`bewilder`），确保同一原形的不同词形（如 `pondered` + `ponder`）在管道入口就合并，不会生成重复卡片。卡片词、WordId、API 查询均用原形，例句保留原文词形。仅处理屈折变化（-ing/-ed/-s），派生词（peaceful）不动
+- **原形归一（两层分工）**：Step 1d `lemmatize_word()` 仅处理**屈折变化**（-ing/-ed/-s），不碰派生词（peaceful 不动），用于去重——确保 `pondered`+`ponder` 在管道入口合并为同一原形。Step 1f COCA 的 `in_coca()` fallback（lemminflect + 后缀剥离）处理**派生归一**（`indulgently`→`indulgent`、`resentfulness`→`resentful`），用于频次匹配——因为 COCA 20000 只收录基础词，不收录所有派生形式。两层互补，各司其职
 - **bookId 桥接**：Anki 卡片 WordId `{lemma}_{bookId}` 天然包含 bookId，用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断
 - **不重复造轮**：划线获取复用 weread-skills 的 API 规范；Python 脚本间提取共享 `utils.py` 消除重复代码
