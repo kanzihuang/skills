@@ -34,6 +34,7 @@ from utils import (
     edge_tts_bytes,
     fetch_word_data,
     lemmatize_word,
+    print_progress_bar,
     safe_filename,
 )
 
@@ -256,9 +257,8 @@ def sync(
         word = w["word"]
         lemma = lemmatize_word(word)
         total = len(new_words)
-        pct = i * 100 // total
         tag = f" ({lemma})" if lemma != word.lower() else ""
-        progress = f"[{i}/{total}] {pct:>3}% {word}{tag}"
+        label = f"{word}{tag}"
 
         # Run audio generation in a thread with per-word timeout
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
@@ -273,33 +273,38 @@ def sync(
                     if not no_audio:
                         has_word = any(fn.endswith("_word.mp3") for fn, _ in word_audio)
                         has_sent = any(fn.endswith("_sent.mp3") for fn, _ in word_audio)
-                        parts = []
+                        audio_status = []
                         if has_word:
-                            parts.append("word✓")
+                            audio_status.append("word✓")
                         else:
-                            parts.append("word✗")
+                            audio_status.append("word✗")
                         if has_sent:
-                            parts.append("sent✓")
+                            audio_status.append("sent✓")
                         else:
-                            parts.append("sent✗")
-                        print(f"  {progress}  audio: {', '.join(parts)}")
+                            audio_status.append("sent✗")
+                        label_v = f"{label}  audio: {', '.join(audio_status)}"
                     else:
-                        print(f"  {progress}  audio: skipped")
+                        label_v = f"{label}  audio: skipped"
+                    print_progress_bar(i, total, label_v)
                 else:
-                    # Always show progress line even without -v
-                    print(f"  {progress}")
+                    print_progress_bar(i, total, label)
             except concurrent.futures.TimeoutError:
                 consecutive_timeouts += 1
                 timed_out_words.append(word)
-                print(f"  {progress}  ⏱ TIMEOUT ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS} consecutive)")
+                # Start new line before timeout message, then resume bar
+                print()
+                print(f"  ⏱ TIMEOUT {word} ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS} consecutive)")
+                print_progress_bar(i, total, label)
                 if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
                     print(f"\n  {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts — aborting sync.")
-                    # Mark remaining words as unsynced
                     for remaining in new_words[i:]:
                         timed_out_words.append(remaining["word"])
                     break
 
         time.sleep(API_DELAY)
+
+    # Finalize progress bar
+    print()
 
     # 6. Upload media files
     audio_count = 0
@@ -311,12 +316,16 @@ def sync(
                 ac.store_media_file(filename, data)
                 audio_count += 1
                 if verbose:
-                    print(f"  [{i_media}/{total_media}] ✓ {filename} ({len(data)} bytes)")
-                elif i_media % 10 == 0 or i_media == total_media:
-                    pct = i_media * 100 // total_media
-                    print(f"  [{i_media}/{total_media}] {pct:>3}%")
+                    print_progress_bar(i_media, total_media, f"{filename} ({len(data)} bytes)")
+                else:
+                    print_progress_bar(i_media, total_media)
             except AnkiConnectError as e:
-                print(f"  [{i_media}/{total_media}] ✗ {filename}: {e}")
+                # New line before error, then resume bar
+                print()
+                print(f"  ✗ {filename}: {e}")
+                print_progress_bar(i_media, total_media)
+        # Finalize media progress bar
+        print()
         print(f"  Uploaded: {audio_count}/{total_media}")
 
     # 7. Add notes

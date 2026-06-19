@@ -59,7 +59,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **Graceful degradation**: audio failures don't block card generation
 - **Incremental safety**: sync mode only adds, never modifies existing cards
 - **Per-word timeout**: each word has a 30s timeout (`--word-timeout` flag); on timeout the word is skipped and sync continues; 3 consecutive timeouts abort the sync with a summary of failed words
-- **Default progress display**: always shows `[i/N] P% word` per word (no `-v` needed); verbose mode adds audio source details and byte counts; media upload progress reported every 10 files
+- **Default progress bar**: in-place visual progress bar `[████░░░░] P% i/N word` (no `-v` needed); verbose mode adds audio source details and byte counts; media upload progress also shown as progress bar
 - **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`
 
 ## Integration

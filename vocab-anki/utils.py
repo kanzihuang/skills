@@ -258,3 +258,29 @@ def edge_tts_file(
         return asyncio.run(_gen())
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Progress bar
+# ---------------------------------------------------------------------------
+
+BAR_WIDTH = 30
+
+
+def print_progress_bar(i: int, total: int, label: str = "", width: int = BAR_WIDTH):
+    """Print an in-place progress bar using \\r.
+
+    Overwrites the current line with a visual bar showing completion
+    percentage.  Call without a label or with a newline afterward to
+    finalise the display.
+
+    Example output:
+      [████████████░░░░░░░░░░░░░░░░░░]  42% 27/64  word_name
+    """
+    pct = i * 100 // total
+    filled = max(1, i * width // total) if i > 0 else 0
+    bar = "█" * filled + "░" * (width - filled)
+    line = f"\r  [{bar}] {pct:>3}% {i}/{total}"
+    if label:
+        line += f"  {label}"
+    print(line, end="", flush=True)

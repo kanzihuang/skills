@@ -34,6 +34,7 @@ from utils import (
     edge_tts_file,
     fetch_word_data,
     lemmatize_word,
+    print_progress_bar,
     safe_filename,
 )
 
@@ -1007,10 +1008,8 @@ def main() -> None:
             word = entry["word"]
             lemma = lemmatize_word(word)
             display = lemma if lemma != word.lower() else word
-            pct = i * 100 // total
             tag = f" ({lemma})" if lemma != word.lower() else ""
-            label = f"{word}→{display}" if display != word else word
-            progress = f"[{i}/{total}] {pct:>3}% {label}"
+            label = f"{word}{tag}"
 
             # Run per-word audio generation in a thread with timeout
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
@@ -1026,34 +1025,37 @@ def main() -> None:
                     if args.verbose:
                         w_audio = result["word_audio"]
                         s_audio = result["sent_audio"]
-                        parts = []
+                        audio_status = []
                         if w_audio:
-                            parts.append("word✓")
+                            audio_status.append("word✓")
                         elif not args.no_tts and not args.no_fetch_audio:
-                            parts.append("word✗")
+                            audio_status.append("word✗")
                         if s_audio:
-                            parts.append("sent✓")
+                            audio_status.append("sent✓")
                         elif not args.no_tts:
-                            parts.append("sent✗")
-                        detail = f"audio: {', '.join(parts)}" if parts else ""
-                        print(f"  {progress}  {detail}")
+                            audio_status.append("sent✗")
+                        detail = f"audio: {', '.join(audio_status)}" if audio_status else ""
+                        label_v = f"{label}  {detail}"
+                        print_progress_bar(i, total, label_v)
                     else:
-                        # Non-verbose: brief status
+                        # Non-verbose: brief status icons
                         w_audio = result["word_audio"]
                         s_audio = result["sent_audio"]
-                        parts = []
+                        icons = []
                         if w_audio:
-                            parts.append("🎤")
+                            icons.append("🎤")
                         if s_audio:
-                            parts.append("📖")
-                        if not parts and not args.no_tts and not args.no_fetch_audio:
-                            parts.append("📝")
-                        suffix = " ".join(parts)
-                        print(f"  {progress}  {suffix}")
+                            icons.append("📖")
+                        if not icons and not args.no_tts and not args.no_fetch_audio:
+                            icons.append("📝")
+                        label_nv = f"{label}  {' '.join(icons)}" if icons else label
+                        print_progress_bar(i, total, label_nv)
                 except concurrent.futures.TimeoutError:
                     consecutive_timeouts += 1
                     timed_out_words.append(word)
-                    print(f"  {progress}  ⏱ TIMEOUT ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS} consecutive)")
+                    print()
+                    print(f"  ⏱ TIMEOUT {word} ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS} consecutive)")
+                    print_progress_bar(i, total, label)
                     if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
                         print(f"\n  {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts — aborting.")
                         for remaining in data["words"][i:]:
@@ -1064,7 +1066,7 @@ def main() -> None:
             if not args.no_fetch_audio:
                 time.sleep(API_DELAY)
 
-        # Generate package
+        # Finalize progress bar, then generate package
         print()
         print(f"Writing {args.output} ...")
         generate_package(data, audio_results, args.output)
