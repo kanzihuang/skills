@@ -185,11 +185,12 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 **性能说明：**
 - 内容生成本身是流程瓶颈（Claude 需要为每个词回忆句子+IPA+释义+翻译），对 50+ 单词通常需要 1-3 分钟，这是知识工作的固有开销，不可免
 - JSON 写入**必须使用 `Write` 工具**而非 Bash heredoc——Write 直接写文件系统，跳过 shell 缓冲和序列化开销，省 ~10-15s
-- **Write 工具要求文件已被 Read 过**（当前会话上下文中有该文件），否则写入报错。因此写入流程为三步：
-  1. `Bash touch /tmp/vocab-anki-input-<bookId>.json` — 确保文件存在
-  2. `Read /tmp/vocab-anki-input-<bookId>.json` — 将会话上下文注册该文件（满足 Write 的前提条件）
-  3. `Write /tmp/vocab-anki-input-<bookId>.json` — 写入完整内容
-- 若文件已存在（上次运行残留），第三步 `Write` 会覆盖旧内容；`Read` 步骤同时也能检查是否有旧内容需要清理
+- **Write 工具要求文件已被 Read 过**（当前会话上下文中有该文件），否则写入报错。因此写入流程为四步：
+  1. `Bash rm -f /tmp/vocab-anki-input-<bookId>.json` — 清理上次运行残留的旧文件，避免 Read 时加载无用的旧 JSON 到上下文
+  2. `Bash touch /tmp/vocab-anki-input-<bookId>.json` — 创建空文件
+  3. `Read /tmp/vocab-anki-input-<bookId>.json limit=3` — 将会话上下文注册该文件（满足 Write 的前提条件）；空文件仅 3 行，几乎不占上下文
+  4. `Write /tmp/vocab-anki-input-<bookId>.json` — 写入完整内容
+- `rm` + `touch` 确保每次运行都从干净空文件开始，不会加载上次的完整旧 JSON
 
 **完成后：**构建 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`：
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）

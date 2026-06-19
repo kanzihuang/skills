@@ -68,7 +68,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **Background execution for large syncs**: when word count ≥30, run sync in background (`run_in_background: true`) with `python -u` (unbuffered) to avoid blocking the conversation for several minutes; read the output file after completion to show results
 - **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`
 - **Single-pass filter pipeline**: Step 1 runs `filter_pipeline.py` — one Python invocation that pipelines lemmatize → Anki dedup → COCA check. All data flows through stdin/stdout between processes; Claude never carries tab-separated word lists in echo commands. Eliminates the prior ~33s Claude round-trip overhead (capture output → regenerate as echo → re-parse) down to ~0.5s
-- **Write tool for JSON**: Step 3 JSON output uses `Write` tool (not Bash heredoc) — skips shell buffering overhead. Three-step flow: (1) `Bash touch` to ensure file exists, (2) `Read` to register file in session context (Write rejects files never Read), (3) `Write` to write content
+- **Write tool for JSON**: Step 3 JSON output uses `Write` tool (not Bash heredoc) — skips shell buffering overhead. Four-step flow: (1) `Bash rm -f` to clean stale file from previous run, (2) `Bash touch` to create empty file, (3) `Read limit=3` to register file in session context (Write rejects files never Read; empty file loads near-instantly), (4) `Write` to write content. `rm` prevents loading stale full JSON into context
 
 ## Integration
 
