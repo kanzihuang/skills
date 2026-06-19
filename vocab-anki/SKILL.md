@@ -260,7 +260,11 @@ for lemma, rep, reason in rejected:
 **性能说明：**
 - 内容生成本身是流程瓶颈（Claude 需要为每个词回忆句子+IPA+释义+翻译），对 50+ 单词通常需要 1-3 分钟，这是知识工作的固有开销，不可免
 - JSON 写入**必须使用 `Write` 工具**而非 Bash heredoc——Write 直接写文件系统，跳过 shell 缓冲和序列化开销，省 ~10-15s
-- 文件尚不存在时先 `Bash touch /tmp/vocab-anki-input-<bookId>.json` 创建空文件，再用 `Write` 工具写入
+- **Write 工具要求文件已被 Read 过**（当前会话上下文中有该文件），否则写入报错。因此写入流程为三步：
+  1. `Bash touch /tmp/vocab-anki-input-<bookId>.json` — 确保文件存在
+  2. `Read /tmp/vocab-anki-input-<bookId>.json` — 将会话上下文注册该文件（满足 Write 的前提条件）
+  3. `Write /tmp/vocab-anki-input-<bookId>.json` — 写入完整内容
+- 若文件已存在（上次运行残留），第三步 `Write` 会覆盖旧内容；`Read` 步骤同时也能检查是否有旧内容需要清理
 
 **完成后：**构建 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`：
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）

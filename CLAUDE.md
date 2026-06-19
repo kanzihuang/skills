@@ -67,7 +67,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **Background execution for large syncs**: when word count ≥30, run sync in background (`run_in_background: true`) with `python -u` (unbuffered) to avoid blocking the conversation for several minutes; read the output file after completion to show results
 - **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`
 - **Three-stage filter pipeline**: Step 1d lemmatize → Step 1e Anki dedup → Step 1f COCA check. Anki result feeds COCA; COCA only runs on words not already in deck
-- **Write tool for JSON**: Step 3 JSON output uses `Write` tool (not Bash heredoc) — skips shell buffering overhead; precede with `Bash touch` to create the file when it doesn't exist
+- **Write tool for JSON**: Step 3 JSON output uses `Write` tool (not Bash heredoc) — skips shell buffering overhead. Three-step flow: (1) `Bash touch` to ensure file exists, (2) `Read` to register file in session context (Write rejects files never Read), (3) `Write` to write content
 
 ## Integration
 
