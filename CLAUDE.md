@@ -34,12 +34,12 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 
 **Architecture:** Claude ↔ Python two-phase design:
 - **Claude**: knowledge work — recalls real book sentences for each highlighted word, provides Chinese definitions and translations
-- **Python**: mechanical work — fetches IPA/audio from Free Dictionary API (gTTS fallback), generates sentence TTS, packages into `.apkg` or syncs to Anki via AnkiConnect
+- **Python**: mechanical work — lemmatizes words, fetches IPA/audio from Free Dictionary API (Edge TTS + SSML fallback), generates sentence TTS via Edge TTS, packages into `.apkg` or syncs to Anki via AnkiConnect
 
 **Scripts:**
 | Script | Purpose |
 |--------|---------|
-| `utils.py` | Shared utilities: safe_filename, fetch_word_data, constants |
+| `utils.py` | Shared utilities: safe_filename, fetch_word_data, lemmatize_word, edge_tts_bytes/file, constants |
 | `generate_apkg.py` | Generate standalone `.apkg` file with embedded audio |
 | `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress) |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client library |
@@ -51,10 +51,12 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 **Design principles:**
 - **Separation of concerns**: knowledge work (Claude) vs mechanical work (Python)
 - **Filter-first**: COCA frequency check and Anki dedup happen BEFORE Claude generates content, avoiding wasted effort
-- **bookId bridging**: `WordId = {word}_{bookId}` enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English)
+- **Lemma normalization**: script lemmatizes inflected forms (`bewildered`→`bewilder`) for card word, WordId, and API lookup. Only inflectional (-ing/-ed/-s), not derivational (peaceful untouched)
+- **bookId bridging**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English)
 - **Single confirmation**: only one user prompt at the end (before sync/export); intermediate steps report progress without asking
 - **Cross-book independence**: same word from different books coexists as independent cards via WordId
-- **Graceful degradation**: audio failures don't block card generation（Free Dictionary API → Edge TTS + SSML fallback）
+- **IPA-priority audio**: JSON-provided IPA → SSML synthesis; otherwise Free Dictionary API → Edge TTS + SSML fallback. Sentence audio always Edge TTS (context-aware)
+- **Graceful degradation**: audio failures don't block card generation
 - **Incremental safety**: sync mode only adds, never modifies existing cards
 - **Sync timeout**: 120s timeout prevents hangs; clear error messages with recovery suggestions
 - **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`

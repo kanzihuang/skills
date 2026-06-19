@@ -10,6 +10,8 @@ Claude Code 技能合集，扩展 Claude Code 的能力边界。
 
 - **导出模式**：生成 `.apkg` 文件，手动导入
 - **同步模式**：通过 AnkiConnect 直接同步到 Anki，增量添加新词
+- **原形归一**：自动将变形词还原为原形（`bewildered` → `bewilder`）建卡
+- **Edge TTS + SSML**：微软免费 TTS，国内直连；支持 IPA 指定发音
 - 集成 [weread-skills](https://github.com/Tencent/WeChatReading) 获取划线数据
 
 ## 安装
