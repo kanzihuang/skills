@@ -29,7 +29,7 @@
 ```
 
 - **Claude**：知识工作 — 回忆书中真实例句，提供中文释义和翻译
-- **Python**：机械工作 — 从 Free Dictionary API 获取 IPA/音频（gTTS 兜底），生成例句朗读，打包或同步
+- **Python**：机械工作 — 从 Free Dictionary API 获取 IPA/音频（Edge TTS + SSML 兜底），生成例句朗读，打包或同步
 
 ## 卡片样式
 
@@ -40,17 +40,22 @@
 - **职责分离**：Claude 做知识工作，Python 做机械工作
 - **原形优先去重**：先还原原形再统一去重/筛选，同原形的不同词形不会生成重复卡片
 - **跨书独立**：`WordId = {lemma}_{bookId}` 作为首字段，不同书中的同一单词互不冲突，卡片正面仍显示 `{{Word}}`
-- **故障降级**：音频获取失败不阻塞卡片生成（Free Dictionary API → gTTS 降级）
+- **故障降级**：音频获取失败不阻塞卡片生成（Free Dictionary API → Edge TTS + SSML 降级）
 - **增量安全**：同步只添加不修改，已有卡片的学习进度完全保留
+- **逐词超时**：每词 30s 超时（`--word-timeout`），超时跳过继续；连续 3 词超时中断同步，汇总列出失败单词
+- **默认进度**：逐词显示 `[i/N] P%` 进度和音频状态，无需 `-v`；verbose 模式额外显示字节数和音频来源
 - **牌组名自动匹配**：`{书名} ({作者})`，与 `generate_apkg.py` 一致
 
 ## 脚本
 
 | 脚本 | 用途 |
 |------|------|
-| `generate_apkg.py` | 生成 `.apkg` 文件，音频嵌入其中 |
-| `sync_anki.py` | 增量同步到 Anki，仅添加新词 |
+| `generate_apkg.py` | 生成 `.apkg` 文件，音频嵌入其中。支持 `--word-timeout` 逐词超时 |
+| `sync_anki.py` | 增量同步到 Anki，仅添加新词。支持 `--word-timeout` 逐词超时，`--dry-run` |
 | `ankiconnect.py` | AnkiConnect JSON-RPC 客户端 |
+| `utils.py` | 共享工具：safe_filename, fetch_word_data, lemmatize_word, edge_tts_bytes/file |
+| `coca_lookup.py` | COCA 20000 高频词批量查询（CLI） |
+| `coca_20000.txt` | COCA 20000 词表数据（17,640 个唯一 lemma） |
 
 ## 许可证
 

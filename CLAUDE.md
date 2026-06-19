@@ -41,7 +41,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 |--------|---------|
 | `utils.py` | Shared utilities: safe_filename, fetch_word_data, lemmatize_word, edge_tts_bytes/file, constants |
 | `generate_apkg.py` | Generate standalone `.apkg` file with embedded audio |
-| `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress) |
+| `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress, per-word timeout with `--word-timeout`) |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client library |
 | `coca_lookup.py` | COCA 20000 frequency check with CLI batch mode |
 | `coca_20000.txt` | COCA 20000 lemma list (17,640 entries) |
@@ -58,7 +58,8 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **IPA-priority audio**: JSON-provided IPA → SSML synthesis; otherwise Free Dictionary API → Edge TTS + SSML fallback. Sentence audio always Edge TTS (context-aware)
 - **Graceful degradation**: audio failures don't block card generation
 - **Incremental safety**: sync mode only adds, never modifies existing cards
-- **Sync timeout**: 120s timeout prevents hangs; clear error messages with recovery suggestions
+- **Per-word timeout**: each word has a 30s timeout (`--word-timeout` flag); on timeout the word is skipped and sync continues; 3 consecutive timeouts abort the sync with a summary of failed words
+- **Default progress display**: always shows `[i/N] P% word` per word (no `-v` needed); verbose mode adds audio source details and byte counts; media upload progress reported every 10 files
 - **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`
 
 ## Integration

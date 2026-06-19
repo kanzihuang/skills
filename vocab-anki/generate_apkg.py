@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import concurrent.futures
 import hashlib
 import html
 import json
@@ -41,6 +42,8 @@ from utils import (
 # ---------------------------------------------------------------------------
 
 MODEL_ID = 1690724513  # Fixed for stable model identity across regenerations
+WORD_TIMEOUT = 30  # default seconds per word (audio generation)
+MAX_CONSECUTIVE_TIMEOUTS = 3
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -72,6 +75,12 @@ def parse_args() -> argparse.Namespace:
         "--no-tts",
         action="store_true",
         help="Skip all TTS audio generation",
+    )
+    parser.add_argument(
+        "--word-timeout",
+        type=int,
+        default=WORD_TIMEOUT,
+        help=f"Max seconds per word for audio generation (default: {WORD_TIMEOUT})",
     )
     return parser.parse_args()
 
@@ -132,6 +141,40 @@ def deduplicate_words(words: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Audio pipeline
 # ---------------------------------------------------------------------------
+
+
+def _process_one_word_apkg(
+    entry: dict,
+    temp_dir: str,
+    no_fetch: bool,
+    no_tts: bool,
+) -> dict:
+    """Generate audio for a single word (runs in thread for timeout support).
+
+    Returns a result dict with word, sentence, ipa, definition_cn, translation_cn,
+    word_audio, sent_audio.
+    """
+    word = entry["word"]
+    lemma = lemmatize_word(word)
+    display = lemma if lemma != word.lower() else word
+    input_ipa = entry.get("ipa", "")
+
+    ipa, word_audio = process_word_audio(
+        word, input_ipa, temp_dir, False, no_fetch, no_tts, lemma=lemma
+    )
+    sent_audio = process_sentence_audio(
+        entry["sentence"], display, temp_dir, False, no_tts
+    )
+
+    return {
+        "word": display,
+        "sentence": entry["sentence"],
+        "ipa": ipa,
+        "definition_cn": entry["definition_cn"],
+        "translation_cn": entry["translation_cn"],
+        "word_audio": word_audio,
+        "sent_audio": sent_audio,
+    }
 
 
 def process_word_audio(
@@ -957,62 +1000,65 @@ def main() -> None:
 
     try:
         audio_results = []
+        timed_out_words: list[str] = []
+        consecutive_timeouts = 0
 
         for i, entry in enumerate(data["words"], 1):
             word = entry["word"]
             lemma = lemmatize_word(word)
             display = lemma if lemma != word.lower() else word
-            input_ipa = entry.get("ipa", "")
+            pct = i * 100 // total
+            tag = f" ({lemma})" if lemma != word.lower() else ""
+            label = f"{word}→{display}" if display != word else word
+            progress = f"[{i}/{total}] {pct:>3}% {label}"
 
-            if args.verbose:
-                tag = f" ({lemma})" if lemma != word.lower() else ""
-                print(f"  [{i}/{total}] {word}{tag}")
-
-            # Process word audio (IPA fetch + audio download, using lemma)
-            ipa, word_audio = process_word_audio(
-                word,
-                input_ipa,
-                temp_dir,
-                args.verbose,
-                args.no_fetch_audio,
-                args.no_tts,
-                lemma=lemma,
-            )
-
-            # Process sentence TTS
-            sent_audio = process_sentence_audio(
-                entry["sentence"],
-                display,
-                temp_dir,
-                args.verbose,
-                args.no_tts,
-            )
-
-            if not args.verbose:
-                status_parts = []
-                if word_audio:
-                    status_parts.append("word audio OK")
-                elif not args.no_tts:
-                    status_parts.append("word audio MISS")
-                if sent_audio:
-                    status_parts.append("sent audio OK")
-                elif not args.no_tts:
-                    status_parts.append("sent audio MISS")
-                status = ", ".join(status_parts) if status_parts else "text only"
-                label = f"{word}→{display}" if display != word else word
-                print(f"  [{i}/{total}] {label} -- {status}")
-
-            audio_results.append(
-                {
-                    "word": display,
-                    "sentence": entry["sentence"],
-                    "ipa": ipa,
-                    "definition_cn": entry["definition_cn"],
-                    "translation_cn": entry["translation_cn"],
-                    "word_audio": word_audio,
-                    "sent_audio": sent_audio,
-                }
-            )
+            # Run per-word audio generation in a thread with timeout
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    _process_one_word_apkg,
+                    entry, temp_dir,
+                    args.no_fetch_audio, args.no_tts,
+                )
+                try:
+                    result = future.result(timeout=args.word_timeout)
+                    consecutive_timeouts = 0
+                    audio_results.append(result)
+                    if args.verbose:
+                        w_audio = result["word_audio"]
+                        s_audio = result["sent_audio"]
+                        parts = []
+                        if w_audio:
+                            parts.append("word✓")
+                        elif not args.no_tts and not args.no_fetch_audio:
+                            parts.append("word✗")
+                        if s_audio:
+                            parts.append("sent✓")
+                        elif not args.no_tts:
+                            parts.append("sent✗")
+                        detail = f"audio: {', '.join(parts)}" if parts else ""
+                        print(f"  {progress}  {detail}")
+                    else:
+                        # Non-verbose: brief status
+                        w_audio = result["word_audio"]
+                        s_audio = result["sent_audio"]
+                        parts = []
+                        if w_audio:
+                            parts.append("🎤")
+                        if s_audio:
+                            parts.append("📖")
+                        if not parts and not args.no_tts and not args.no_fetch_audio:
+                            parts.append("📝")
+                        suffix = " ".join(parts)
+                        print(f"  {progress}  {suffix}")
+                except concurrent.futures.TimeoutError:
+                    consecutive_timeouts += 1
+                    timed_out_words.append(word)
+                    print(f"  {progress}  ⏱ TIMEOUT ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS} consecutive)")
+                    if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                        print(f"\n  {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts — aborting.")
+                        for remaining in data["words"][i:]:
+                            timed_out_words.append(remaining["word"])
+                        break
 
             # Rate limit for API
             if not args.no_fetch_audio:
@@ -1031,10 +1077,13 @@ def main() -> None:
             1 for a in audio_results if a["sent_audio"]
         )
         print(
-            f"Done! {total} cards, "
+            f"Done! {len(audio_results)} cards, "
             f"{word_audio_count} word audio, "
             f"{sent_audio_count} sentence audio"
         )
+        if timed_out_words:
+            print(f"  ⏱ Timed out: {len(timed_out_words)} word(s)")
+            print(f"     ({', '.join(timed_out_words)})")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

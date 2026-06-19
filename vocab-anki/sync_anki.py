@@ -19,6 +19,7 @@ Usage:
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
 import re
@@ -41,6 +42,8 @@ from utils import (
 # ---------------------------------------------------------------------------
 
 MODEL_NAME = "Vocabulary Card (WeRead)"
+WORD_TIMEOUT = 30  # default seconds per word (audio generation)
+MAX_CONSECUTIVE_TIMEOUTS = 3
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -66,6 +69,12 @@ def parse_args() -> argparse.Namespace:
         help="Skip audio generation and upload",
     )
     parser.add_argument(
+        "--word-timeout",
+        type=int,
+        default=WORD_TIMEOUT,
+        help=f"Max seconds per word for audio generation (default: {WORD_TIMEOUT})",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Show detailed progress"
     )
     return parser.parse_args()
@@ -86,6 +95,51 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 # Sync logic
 # ---------------------------------------------------------------------------
+
+
+def _process_one_word(
+    w: dict,
+    book_id: str,
+    no_audio: bool,
+) -> tuple[dict, list[tuple[str, bytes]], str]:
+    """Generate audio and build a note for a single word.
+
+    Runs in a thread so it can be subject to a per-word timeout.
+
+    Returns (note, audio_uploads, ipa).
+    """
+    word = w["word"]
+    lemma = lemmatize_word(word)
+    safe = safe_filename(lemma)
+    ipa = w.get("ipa", "")
+    audio_uploads: list[tuple[str, bytes]] = []
+
+    if not no_audio:
+        # Word audio: JSON IPA → SSML (skip API) → Free Dictionary API → Edge TTS fallback
+        if ipa:
+            tts = edge_tts_bytes(lemma, ipa=ipa)
+            if tts:
+                audio_uploads.append((f"{safe}_word.mp3", tts))
+        else:
+            fetched_ipa, _audio_url, api_audio = fetch_word_data(lemma)
+            if api_audio:
+                audio_uploads.append((f"{safe}_word.mp3", api_audio))
+                if fetched_ipa:
+                    ipa = fetched_ipa
+            else:
+                fallback_ipa = fetched_ipa or None
+                tts = edge_tts_bytes(lemma, ipa=fallback_ipa)
+                if tts:
+                    audio_uploads.append((f"{safe}_word.mp3", tts))
+
+        # Sentence audio: Edge TTS on cleaned sentence
+        clean = re.sub(r"<[^>]+>", "", w["sentence"])
+        sent_tts = edge_tts_bytes(clean)
+        if sent_tts:
+            audio_uploads.append((f"{safe}_sent.mp3", sent_tts))
+
+    note = build_note_entry(w, ipa, book_id, lemma=lemma)
+    return note, audio_uploads, ipa
 
 
 def build_note_entry(
@@ -131,6 +185,7 @@ def sync(
     dry_run: bool = False,
     no_audio: bool = False,
     verbose: bool = False,
+    word_timeout: int = WORD_TIMEOUT,
 ) -> dict:
     """Run the full sync workflow. Returns a summary dict."""
     words = data["words"]
@@ -190,89 +245,79 @@ def sync(
             "words_skipped": [w["word"] for w in skipped_words],
         }
 
-    # 5. Generate audio and build notes for new words
+    # 5. Generate audio and build notes for new words (per-word timeout)
     print(f"\nGenerating audio for {len(new_words)} new words...")
     notes_to_add = []
     audio_uploads: list[tuple[str, bytes]] = []
+    timed_out_words: list[str] = []
+    consecutive_timeouts = 0
 
     for i, w in enumerate(new_words, 1):
         word = w["word"]
         lemma = lemmatize_word(word)
-        safe = safe_filename(lemma)
-        ipa = w.get("ipa", "")
+        total = len(new_words)
+        pct = i * 100 // total
+        tag = f" ({lemma})" if lemma != word.lower() else ""
+        progress = f"[{i}/{total}] {pct:>3}% {word}{tag}"
 
-        if verbose:
-            tag = f" ({lemma})" if lemma != word.lower() else ""
-            print(f"  [{i}/{len(new_words)}] {word}{tag}")
-
-        word_audio_bytes = None
-        sent_audio_bytes = None
-
-        if not no_audio:
-            # Word audio: if JSON provides IPA, use SSML directly (skip API
-            # audio — Claude's IPA may differ from API for heteronyms).
-            # Otherwise, try Free Dictionary API, fallback to Edge TTS.
-            if ipa:
-                # JSON IPA provided → SSML for precise pronunciation
-                tts = edge_tts_bytes(lemma, ipa=ipa)
-                if tts:
-                    word_audio_bytes = tts
-                    if verbose:
-                        print(f"    word audio: SSML ({ipa})")
-            else:
-                fetched_ipa, _audio_url, api_audio = fetch_word_data(lemma)
-                if api_audio:
-                    word_audio_bytes = api_audio
-                    if fetched_ipa:
-                        ipa = fetched_ipa
-                    if verbose:
-                        print(f"    word audio: API ({ipa or 'no IPA'})")
+        # Run audio generation in a thread with per-word timeout
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_process_one_word, w, book_id, no_audio)
+            try:
+                note, word_audio, final_ipa = future.result(timeout=word_timeout)
+                consecutive_timeouts = 0
+                note["deckName"] = deck_name
+                notes_to_add.append(note)
+                audio_uploads.extend(word_audio)
+                if verbose:
+                    if not no_audio:
+                        has_word = any(fn.endswith("_word.mp3") for fn, _ in word_audio)
+                        has_sent = any(fn.endswith("_sent.mp3") for fn, _ in word_audio)
+                        parts = []
+                        if has_word:
+                            parts.append("word✓")
+                        else:
+                            parts.append("word✗")
+                        if has_sent:
+                            parts.append("sent✓")
+                        else:
+                            parts.append("sent✗")
+                        print(f"  {progress}  audio: {', '.join(parts)}")
+                    else:
+                        print(f"  {progress}  audio: skipped")
                 else:
-                    fallback_ipa = fetched_ipa or None
-                    tts = edge_tts_bytes(lemma, ipa=fallback_ipa)
-                    if tts:
-                        word_audio_bytes = tts
-                        if verbose:
-                            tag2 = "Edge TTS+SSML" if fallback_ipa else "Edge TTS fallback"
-                            print(f"    word audio: {tag2}")
+                    # Always show progress line even without -v
+                    print(f"  {progress}")
+            except concurrent.futures.TimeoutError:
+                consecutive_timeouts += 1
+                timed_out_words.append(word)
+                print(f"  {progress}  ⏱ TIMEOUT ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS} consecutive)")
+                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                    print(f"\n  {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts — aborting sync.")
+                    # Mark remaining words as unsynced
+                    for remaining in new_words[i:]:
+                        timed_out_words.append(remaining["word"])
+                    break
 
-            if word_audio_bytes:
-                audio_uploads.append((f"{safe}_word.mp3", word_audio_bytes))
-
-            # Sentence audio: Edge TTS on cleaned sentence (context disambiguates)
-            clean = re.sub(r"<[^>]+>", "", w["sentence"])
-            sent_tts = edge_tts_bytes(clean)
-            if sent_tts:
-                sent_audio_bytes = sent_tts
-                audio_uploads.append((f"{safe}_sent.mp3", sent_tts))
-                if verbose:
-                    print("    sentence audio: Edge TTS OK")
-            else:
-                if verbose:
-                    print("    sentence audio: Edge TTS FAILED")
-
-            time.sleep(API_DELAY)
-        else:
-            if verbose:
-                print(f"    audio: skipped (--no-audio)")
-
-        note = build_note_entry(w, ipa, book_id, lemma=lemma)
-        note["deckName"] = deck_name
-        notes_to_add.append(note)
+        time.sleep(API_DELAY)
 
     # 6. Upload media files
     audio_count = 0
     if audio_uploads and not dry_run:
-        print(f"\nUploading {len(audio_uploads)} media files...")
-        for filename, data in audio_uploads:
+        total_media = len(audio_uploads)
+        print(f"\nUploading {total_media} media files...")
+        for i_media, (filename, data) in enumerate(audio_uploads, 1):
             try:
                 ac.store_media_file(filename, data)
                 audio_count += 1
                 if verbose:
-                    print(f"  ✓ {filename} ({len(data)} bytes)")
+                    print(f"  [{i_media}/{total_media}] ✓ {filename} ({len(data)} bytes)")
+                elif i_media % 10 == 0 or i_media == total_media:
+                    pct = i_media * 100 // total_media
+                    print(f"  [{i_media}/{total_media}] {pct:>3}%")
             except AnkiConnectError as e:
-                print(f"  ✗ {filename}: {e}")
-        print(f"  Uploaded: {audio_count}/{len(audio_uploads)}")
+                print(f"  [{i_media}/{total_media}] ✗ {filename}: {e}")
+        print(f"  Uploaded: {audio_count}/{total_media}")
 
     # 7. Add notes
     added_count = 0
@@ -299,6 +344,7 @@ def sync(
                     "audio_uploaded": audio_count,
                     "words_added": [],
                     "words_skipped": [w["word"] for w in skipped_words + new_words],
+                    "words_timed_out": timed_out_words,
                     "error": errmsg,
                 }
 
@@ -308,6 +354,9 @@ def sync(
     print(f"  New cards added:  {added_count}")
     print(f"  Already in deck:  {len(skipped_words)}")
     print(f"  Media uploaded:   {audio_count}")
+    if timed_out_words:
+        print(f"  ⏱ Timed out:      {len(timed_out_words)} word(s)")
+        print(f"     ({', '.join(timed_out_words)})")
     print(f"{'='*50}")
 
     return {
@@ -316,6 +365,7 @@ def sync(
         "audio_uploaded": audio_count,
         "words_added": [w["word"] for w in new_words[:added_count]],
         "words_skipped": [w["word"] for w in skipped_words],
+        "words_timed_out": timed_out_words,
     }
 
 
@@ -369,6 +419,7 @@ def main() -> None:
             dry_run=args.dry_run,
             no_audio=args.no_audio,
             verbose=args.verbose,
+            word_timeout=args.word_timeout,
         )
         if result.get("error"):
             sys.exit(1)
