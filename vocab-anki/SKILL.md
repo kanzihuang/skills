@@ -169,7 +169,8 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 
 **IPA 规则：**
 - **必须为每个单词提供 IPA**——Claude 可从训练数据直接输出音标，无需外部 API
-- 提供 IPA 后脚本用 SSML `<phoneme>` 合成单词音频
+- IPA 用于卡片正面显示，帮助学习者正确发音
+- 单词音频由 Edge TTS 默认发音生成（不使用 SSML `<phoneme>`——`edge_tts.Communicate` 内部对输入做 `escape()` 后再用 `mkssml()` 包一层 `<speak>`，外部 SSML 会被二次转义导致 TTS 朗读 XML 源码）
 - IPA 缺失时跳过单词音频生成，卡片仍正常创建（例句音频正常生成）
 - 对同形异音词（heteronym，如 `intimate` 形容词 /ˈɪntɪmət/ vs 动词 /ˈɪntɪmeɪt/），必须根据释义填入正确 IPA
 
@@ -226,7 +227,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 ```
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）
 - `book_id` 为微信读书 bookId
-- `ipa` 由 Claude 直接提供（训练数据）；脚本用 SSML `<phoneme>` 合成音频；IPA 缺失时跳过单词音频
+- `ipa` 由 Claude 直接提供（训练数据），用于卡片显示；单词音频由 Edge TTS 默认发音生成；IPA 缺失时跳过单词音频
 - `excluded` 数组可直接从 Step 1 `--json-out` 输出的 JSON 文件中读取，避免手动转录排除词
 - **此步骤不展示样卡，不询问用户**
 
@@ -298,7 +299,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 1. Step 3.5 (`--prefetch`): 并发生成全部音频 → 保存到临时目录 + manifest.json → 打印 `AUDIO_DIR=<path>`
 2. Step 4 (`--audio-dir <dir>`): 从目录加载预生成音频 → 连 AnkiConnect → 查已有卡片 → 上传媒体 → 添加新卡片
 3. 对每个词调用 `lemmatize_word()` 还原为原形 → 用原形构建 WordId、卡片词、音频文件名
-4. **单词音频**：Claude IPA → SSML `<phoneme>` 合成；IPA 缺失时跳过单词音频
+4. **单词音频**：Edge TTS 默认发音（IPA 仅用于卡片显示）；IPA 缺失时跳过单词音频
 5. **例句音频**：Edge TTS 朗读
 6. **已有卡片完全不动**，保留复习进度和调度数据
 7. **更新 meta manifest 卡片**：将本次 `excluded` 单词写入 Sentence 字段的 JSON manifest（`WordId = __META__{bookId}`），卡片暂停（不参与复习），下次同步优先读取
@@ -390,4 +391,4 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **不重复造轮**：划线获取复用 weread-skills 的 API 规范；Python 脚本间提取共享 `utils.py` 消除重复代码
 - **故障降级**：音频获取失败不阻塞整体流程；同步超时有明确提示和建议
 - **增量安全**：同步模式只添加不修改，保留学习记录不受影响
-- **IPA 零网络依赖**：Claude 从训练数据直接生成 IPA，SSML `<phoneme>` 合成音频，无外部 IPA API 依赖
+- **IPA 零网络依赖**：Claude 从训练数据直接生成 IPA 用于卡片显示，无外部 IPA API 依赖。单词音频由 Edge TTS 默认发音生成（SSML `<phoneme>` 不可用——`edge_tts` 库内部二次转义导致 TTS 朗读 XML 源码）

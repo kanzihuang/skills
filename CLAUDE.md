@@ -34,7 +34,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 
 **Architecture:** Claude ↔ Python two-phase design:
 - **Claude**: knowledge work — recalls real book sentences for each highlighted word, provides Chinese definitions, translations, and IPA
-- **Python**: mechanical work — lemmatizes words, generates word/sentence TTS via Edge TTS + SSML, syncs to Anki via AnkiConnect
+- **Python**: mechanical work — lemmatizes words, generates word/sentence TTS via Edge TTS, syncs to Anki via AnkiConnect
 
 **Scripts:**
 | Script | Purpose |
@@ -54,10 +54,10 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **Anki-before-COCA**: Anki dedup runs before COCA frequency check. Words already in Anki are preserved regardless of COCA frequency changes; COCA only filters truly new words
 - **Lemma-first dedup**: lemmatizes all highlighted words BEFORE dedup and filtering, so inflected forms (`pondered`, `bewildered`) collapse to their lemma at the pipeline entry point. Card word, WordId, and API lookup all use lemma. Only inflectional (-ing/-ed/-s), not derivational (peaceful untouched)
 - **Two-layer lemmatization**: Step 1d `lemmatize_word()` handles inflectional only (for dedup — same word, different forms). Step 1f `in_coca()` fallback (lemminflect + suffix stripping) handles derivational normalization (for frequency lookup — `indulgently`→`indulgent`, `resentfulness`→`resentful`). The two layers serve different purposes and are complementary, not redundant. Without the COCA derivational layer, words like `indulgently` (COCA has `indulgent` but not the -ly form) would be incorrectly excluded
-- **bookId bridging**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English)
+- **bookId bridging**: `WordId = {lemma}_{bookId}` (or `__META__{bookId}` for meta manifest) enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English). Meta manifest cards serve as authoritative bookId source in Step 0b
 - **Single confirmation**: only one user prompt at the end (before sync); intermediate steps report progress without asking
 - **Cross-book independence**: same word from different books coexists as independent cards via WordId
-- **IPA-priority audio**: Claude provides IPA → SSML `<phoneme>` synthesis (instant, no network); IPA missing → skip word audio gracefully
+- **IPA display-only audio**: Claude provides IPA for card display; word audio uses Edge TTS default pronunciation (SSML `<phoneme>` not supported — `edge_tts.Communicate` internally `escape()`s input then wraps in its own `<speak>` via `mkssml()`, causing external SSML to be double-escaped and read as literal text including the `xmlns` URL). IPA missing → skip word audio gracefully
 - **Graceful degradation**: audio failures don't block card generation
 - **Incremental safety**: sync mode only adds, never modifies existing cards
 - **Meta manifest card**: one suspended card per book (`WordId = __META__{bookId}`) stores cumulative COCA-excluded words; read on subsequent syncs to skip known excluded words instantly

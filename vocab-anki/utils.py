@@ -73,19 +73,18 @@ def lemmatize_word(word: str) -> str:
 
 
 def _build_ssml(text: str, ipa: str | None = None, voice: str = "en-US-JennyNeural") -> str:
-    """Build SSML string. If IPA is provided, use <phoneme> for precise pronunciation."""
+    """Build text for TTS.
+
+    NOTE: edge_tts.Communicate internally applies escape() then wraps in its own
+    <speak> SSML via mkssml(). Passing our own SSML here would be double-escaped
+    and read as literal text (including the xmlns URL). Therefore we simply return
+    plain text and let edge_tts handle SSML/prosody. The IPA parameter is kept for
+    API compatibility but no longer used for audio synthesis.
+    """
     escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     if ipa:
-        # Clean IPA for SSML: strip leading/trailing slashes, normalize
-        ipa_clean = ipa.strip("/")
-        return (
-            '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis"'
-            ' xml:lang="en-US">'
-            f'<voice name="{voice}">'
-            f'<phoneme alphabet="ipa" ph="{ipa_clean}">{escaped}</phoneme>'
-            f'</voice>'
-            f'</speak>'
-        )
+        # IPA is still displayed on the Anki card; audio uses default TTS voice
+        return escaped
     return escaped
 
 
@@ -108,7 +107,9 @@ def edge_tts_bytes(
 ) -> bytes | None:
     """Generate TTS audio bytes using Edge TTS.
 
-    If IPA is provided, uses SSML <phoneme> tag for accurate pronunciation.
+    IPA parameter is kept for API compatibility; displayed on card but NOT used
+    for audio synthesis (SSML <phoneme> not supported by edge_tts library —
+    see _build_ssml docstring for details).
     Retries on transient failure (up to EDGE_TTS_MAX_RETRIES extra attempts).
     Returns None on persistent failure.
     """
@@ -135,7 +136,9 @@ def edge_tts_file(
 ) -> bool:
     """Generate TTS audio to a file using Edge TTS.
 
-    If IPA is provided, uses SSML <phoneme> tag for accurate pronunciation.
+    IPA parameter is kept for API compatibility; displayed on card but NOT used
+    for audio synthesis (SSML <phoneme> not supported by edge_tts library —
+    see _build_ssml docstring for details).
     Retries on transient failure (up to EDGE_TTS_MAX_RETRIES extra attempts).
     Returns True on success.
     """

@@ -255,7 +255,7 @@ def _build_meta_word_id(book_id: str) -> str:
     return f"{META_WORD_PREFIX}{book_id}"
 
 
-def _build_meta_note(deck_name: str, book_id: str, manifest_json: str, excluded_str: str = "") -> dict:
+def _build_meta_note(deck_name: str, book_id: str, manifest_json: str) -> dict:
     """Build an Anki note for the meta manifest card."""
     return {
         "deckName": deck_name,
@@ -264,7 +264,6 @@ def _build_meta_note(deck_name: str, book_id: str, manifest_json: str, excluded_
             "WordId": _build_meta_word_id(book_id),
             "Word": META_WORD_PREFIX,
             "Sentence": manifest_json,
-            "Excluded": excluded_str,
             "IPA": "",
             "DefinitionCN": "系统元数据 — 已排除单词记录",
             "TranslationCN": "此卡片已暂停，不参与每日复习",
@@ -326,24 +325,22 @@ def _write_meta_manifest(
     manifest = {
         "type": "vocab-anki-meta",
         "version": META_MANIFEST_VERSION,
-        "book_id": book_id,
         "book_title": book_title,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "excluded": merged,
     }
 
     manifest_json = json.dumps(manifest, ensure_ascii=False)
-    excluded_str = ",".join(sorted(merged.keys()))
 
     if existing_ids:
-        # Update existing meta note
+        # Update existing meta note (Sentence field is the canonical storage)
         ac.update_note_fields(
             existing_ids[0],
-            {"Sentence": manifest_json, "Excluded": excluded_str, "IPA": "", "WordAudio": "", "SentenceAudio": ""},
+            {"Sentence": manifest_json, "IPA": "", "WordAudio": "", "SentenceAudio": ""},
         )
     else:
         # Create new meta note
-        note = _build_meta_note(deck_name, book_id, manifest_json, excluded_str)
+        note = _build_meta_note(deck_name, book_id, manifest_json)
         result = ac.add_notes([note])
         if result and result[0]:
             existing_ids = [result[0]]
