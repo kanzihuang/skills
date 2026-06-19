@@ -93,38 +93,72 @@ Content-Type: application/json
 
 `updated[]` 数组含 `markText`、`chapterUid`、`createTime`；`chapters[]` 含章节标题。
 
-**1d. 筛选与原形去重（自动，不询问用户）：**
+**1d. 筛选、原形去重 + COCA 批量检查（合并为单次 Python 流水线，不询问用户）：**
 
-- 过滤非单词划线（整句、长段落、纯数字/符号）
-- 调用 `lemmatize_word()` 将所有词还原为原形
-- 按原形去重：同一原形的不同词形（如 `pondered` + `ponder`、`Abruptly` + `abruptly`）合并为一个词条，保留书中出现的代表词形
-- 按原形字母排序
-- 输出汇总行：`划线 X 条 → 原形去重 Y 个`
-
-### Step 2: Anki 去重 + COCA 筛选（基于原形，生成内容之前，不询问用户）
-
-> 此步骤在 Claude 做任何知识工作**之前**完成，仅做机械过滤。输入为 Step 1d 去重后的原形列表。
-> 先查 Anki（确定信号），再查 COCA（概率信号）——已学过的词直接跳过，无需频次判断。
-
-**2a. Anki 已有卡片对比：**
-
-若 AnkiConnect 可达 → 查询目标牌组已有卡片。WordId 格式为 `{lemma}_{bookId}`，用原形列表精确匹配已在牌组中的词，直接跳过。
-
-**2b. COCA 20000 批量检查（以原形查询）：**
+> 此步骤在 Claude 做任何知识工作**之前**完成，仅做机械过滤。单次 Bash 调用完成：提取划线 → 过滤非单词 → 还原原形 → 去重 → COCA 检查，一次返回所有结果。
 
 ```bash
-# 若 .venv 不存在则创建（仅首次）
+# 确保 venv 存在（仅首次）
 if [ ! -d <skill_dir>/.venv ]; then
     python3 -m venv <skill_dir>/.venv
     <skill_dir>/.venv/bin/pip install -q -r <skill_dir>/requirements.txt
 fi
 
-<skill_dir>/.venv/bin/python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
+# 合并流水线：原形去重 + COCA 检查，一次性完成
+curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
+  -H "Authorization: Bearer $WEREAD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"api_name":"/book/bookmarklist","bookId":"<bookId>","skill_version":"1.0.3"}' | \
+<skill_dir>/.venv/bin/python3 -c "
+import sys, json
+sys.path.insert(0, '<skill_dir>')
+from utils import lemmatize_word
+from coca_lookup import load_coca, in_coca
+
+data = json.load(sys.stdin)
+# 提取所有划线文本
+marks = [h.get('markText','').strip() for h in data.get('updated',[])]
+# 过滤非单词（含空格、纯数字/符号、空、长度=1）
+words_raw = [m for m in marks if m and ' ' not in m and not m.isdigit() and len(m) > 1]
+# 原形去重
+lemma_map = {}
+for w in words_raw:
+    lemma = lemmatize_word(w)
+    if lemma not in lemma_map:
+        lemma_map[lemma] = []
+    lemma_map[lemma].append(w)
+# COCA 检查 + 汇总（coca 词表只加载一次；以原形查询，与原形归一原则一致）
+coca_set = load_coca()
+passed = []   # COCA 通过
+rejected = [] # COCA 排除
+for lemma in sorted(lemma_map.keys()):
+    ok, _ = in_coca(lemma, coca_set)
+    forms = lemma_map[lemma]
+    rep = min(forms, key=lambda x: (x[0].isupper(), len(x)))
+    if ok:
+        passed.append((lemma, rep, forms))
+    else:
+        rejected.append((lemma, rep, '不在 COCA 20000 中'))
+# 输出
+print(f'SUMMARY: {len(marks)} highlights → {len(lemma_map)} lemmas → {len(passed)} in COCA → {len(rejected)} excluded')
+print('---IN_COCA---')
+for lemma, rep, forms in passed:
+    print(f'{lemma}\t{rep}\t{\",\".join(forms)}')
+print('---EXCLUDED---')
+for lemma, rep, reason in rejected:
+    print(f'{lemma}\t{rep}\t{reason}')
+"
 ```
 
-输出格式：`word\tTrue/False\tdetail`。不在 COCA 20000 中的单词直接排除，记录原因。
+输出分为三段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表。Claude 解析后直接使用。
 
-**2c. 输出汇总（仅数字，不确认）：**
+### Step 2: Anki 去重（基于原形，生成内容之前，不询问用户）
+
+> 输入为 Step 1d 输出的 COCA 通过的原形列表。
+
+若 AnkiConnect 可达 → 查询目标牌组已有卡片。WordId 格式为 `{lemma}_{bookId}`，用原形列表精确匹配已在牌组中的词，直接跳过。
+
+**输出汇总（仅数字，不确认）：**
 
 ```
 划线 X 条 → 原形去重 Y 个 → Anki 已有 A 个 → COCA 排除 B 个 → 待生成内容 C 个
@@ -175,6 +209,11 @@ fi
 - **不再使用 SubAgent**：SubAgent 启动慢（权限确认、模型初始化），常误触发 WebSearch 浪费额度，多个 agent 的协调开销远超串行生成的实际耗时
 - 对于知名英文书（The Little Prince、Harry Potter 等），Claude 直接从训练数据回忆书中真实例句
 - 对于不熟悉的书籍：用 `WebFetch` 一次性获取书中段落辅助定位句子，仍由 Claude 直接生成全部内容
+
+**性能说明：**
+- 内容生成本身是流程瓶颈（Claude 需要为每个词回忆句子+IPA+释义+翻译），对 50+ 单词通常需要 1-3 分钟，这是知识工作的固有开销，不可免
+- JSON 写入**必须使用 `Write` 工具**而非 Bash heredoc——Write 直接写文件系统，跳过 shell 缓冲和序列化开销，省 ~10-15s
+- 文件尚不存在时先 `Bash touch /tmp/vocab-anki-input-<bookId>.json` 创建空文件，再用 `Write` 工具写入
 
 **完成后：**构建 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`：
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）

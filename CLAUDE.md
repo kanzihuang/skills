@@ -62,6 +62,8 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **Text progress output**: plain text progress `i/N label` (in-place `\r` on real TTY, line-by-line when piped/captured; no `-v` needed); no graphical bar characters since Claude Code can't render `\r`; verbose mode adds audio source details and byte counts; media upload progress shown in same format
 - **Background execution for large syncs**: when word count ≥30, run sync in background (`run_in_background: true`) with `python -u` (unbuffered) to avoid blocking the conversation for several minutes; read the output file after completion to show results
 - **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`
+- **Merged filter pipeline**: word extraction, lemmatization, dedup, and COCA lookup run in a single Python pipeline call — one Bash invocation instead of three
+- **Write tool for JSON**: Step 3 JSON output uses `Write` tool (not Bash heredoc) — skips shell buffering overhead; precede with `Bash touch` to create the file when it doesn't exist
 
 ## Integration
 
