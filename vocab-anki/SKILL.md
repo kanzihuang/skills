@@ -27,7 +27,7 @@ description: >
 
 > **核心原则：每次执行都必须重新从微信读书获取最新划线。禁止依赖缓存的 JSON 或之前的运行结果，因为用户可能在此期间添加了新的划线。**
 >
-> **确认策略：整个流程仅在 Step 4（同步/导出前）进行一次用户确认。其他步骤仅输出进度，不询问。**
+> **确认策略：整个流程仅在 Step 4（音频已预下载、同步/导出前）进行一次用户确认。其他步骤（含 Step 3.5 音频预下载）仅输出进度，不询问。**
 
 ### Step 0: 前置检查（含 Anki 牌组 bookId 桥接）
 
@@ -138,7 +138,7 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 
 **例句规则（不变）：**
 - 必须是书中真实句子，不是词典通用例句
-- 如果 Claude 对某本书不够熟悉，无法回忆真实句子 → 如实告知用户，并提供词典例句作为替代
+- 如果对该书不够熟悉，无法回忆真实句子 → 如实告知用户，并提供词典例句作为替代
 - 句子中出现的生词形式可能不同于原形（如 `straying` vs `stray`），用 `<b>` 包裹书中实际出现的词形
 - 句子应完整、有语境，不是片段
 
@@ -160,6 +160,18 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 - 在 COCA 表中的单词，判断释义是否为罕见用法（古英语义、专业术语、已淘汰的表达）。若罕见 → 不收录
 - 若书中没有合适的例句 → 不收录
 
+**执行策略——按单词数量选择：**
+
+- **C < 20 词**：主流程直接逐词生成内容，写入 JSON
+- **C ≥ 20 词**：使用多代理并行生成。按 20 词/代理 拆分为 N 批，用 `Agent` 工具同时启动 N 个子代理。每个子代理的 prompt 包含：
+  - 书籍信息（book_title, book_author, bookId）
+  - 该批次的单词列表（word + lemma/original form 对照，JSON 数组）
+  - 完整的生成规则（例句规则、翻译原则、IPA 规则、释义审查）
+  - 输出要求：返回严格 JSON 数组，每项含 `word`, `sentence`, `ipa`, `definition_cn`, `translation_cn`
+  - 提示：这是 The Little Prince 等名著的英文版，必须给出书中真实句子
+
+  收集所有代理结果后，合并 `words` 数组（按字母排序），写入 `/tmp/vocab-anki-input-<bookId>.json`。
+
 **完成后：**构建 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`：
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）
 - `book_id` 为微信读书 bookId
@@ -167,11 +179,34 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 - `excluded` 数组记录未收录的单词及原因
 - **此步骤不展示样卡，不询问用户**
 
+### Step 3.5: 预下载音频（并发，不依赖 Anki）
+
+> 在确认之前提前下载所有音频。此步骤不连 Anki，纯并发 HTTP 下载。
+
+```bash
+python3 -m venv /tmp/vocab-anki-venv
+/tmp/vocab-anki-venv/bin/pip install -q -r <skill_dir>/requirements.txt
+
+# 并发生成全部音频 → 保存到临时目录 → 输出 AUDIO_DIR 路径
+/tmp/vocab-anki-venv/bin/python -u <skill_dir>/sync_anki.py \
+  /tmp/vocab-anki-input-<bookId>.json \
+  --prefetch -v
+```
+
+输出末尾包含 `AUDIO_DIR=<path>` 行，提取路径供 Step 4 使用。
+
+展示预下载结果：
+```
+音频预下载完成：word✓ 64/64, sent✓ 63/64（1 句失败）
+```
+失败项标出但不阻塞——音频失败降级为纯文本。
+
 ### Step 4: 最终确认 + 同步/导出（唯一确认点）
 
-**4a. 展示最终汇总（仅展示本次新变化）：**
+**4a. 展示最终汇总（含音频预下载状态）：**
 
 - **新增排除**：本轮 COCA 检查中新发现不在表中的词（单词 + 原因）
+- **音频状态**：Step 3.5 结果（如 `word✓ 64/64, sent✓ 62/64`）
 - **本次新增**：将同步的单词列表（仅单词名，不展示样卡）
 - Anki 已有的词仅一句话带过数量，不列出
 
@@ -183,41 +218,26 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 
 展示汇总后，仅问一次：「确认同步？」（或导出模式下「确认导出？」）。
 
-**4d. 执行（带超时）：**
+**4d. 执行（音频已预下载，秒级完成）：**
 
-先创建 venv 并安装依赖：
-
-```bash
-python3 -m venv /tmp/vocab-anki-venv
-/tmp/vocab-anki-venv/bin/pip install -q -r <skill_dir>/requirements.txt
-```
-
-**同步模式——按词数动态超时：**
-
-每词预留 10s（音频生成 ~4s + 上传 ~1s + 余量），下限 120s。
-
-> **执行策略**：同步可能持续数分钟，CLI 前台运行会阻塞对话。词数 ≥30 时 **必须使用 `run_in_background`** 后台运行，避免长时间无响应。完成后读取输出文件展示结果。
->
-> **进度输出**：使用纯文本 `i/N label` 格式——Claude Code 无法渲染 `\r` 原地进度条，图形 bar 字符无意义。
+> 音频已在 Step 3.5 预下载到临时目录。同步阶段仅上传媒体 + 创建卡片，无需等待音频生成。
+> 超时按每词 3s（上传 ~1s + 余量），下限 60s。由于很快，通常前台直接运行即可。
 
 ```bash
 WORD_COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/vocab-anki-input-<bookId>.json'))['words']))")
-SYNC_TIMEOUT=$(( WORD_COUNT * 10 + 30 ))
-[ "$SYNC_TIMEOUT" -lt 120 ] && SYNC_TIMEOUT=120
+SYNC_TIMEOUT=$(( WORD_COUNT * 3 + 30 ))
+[ "$SYNC_TIMEOUT" -lt 60 ] && SYNC_TIMEOUT=60
 
-# 后台运行（Claude Code Bash tool: run_in_background=true）
-# python -u 确保非 TTY 下进度逐行输出不被缓冲
-PYTHONUNBUFFERED=1 timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <skill_dir>/sync_anki.py \
+timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <skill_dir>/sync_anki.py \
   /tmp/vocab-anki-input-<bookId>.json \
+  --audio-dir <AUDIO_DIR_FROM_STEP_3.5> \
   -v
 ```
 
-后台任务完成后，读取输出文件展示结果。词数 <30 时可前台运行。
-
-**导出模式：**
+> **导出模式**：音频并发已足够快（~30s），直接前台运行即可。
 
 ```bash
-/tmp/vocab-anki-venv/bin/python <skill_dir>/generate_apkg.py \
+/tmp/vocab-anki-venv/bin/python -u <skill_dir>/generate_apkg.py \
   /tmp/vocab-anki-input-<bookId>.json \
   -o ./<book_title_sanitized>_vocab.apkg \
   -v
@@ -225,7 +245,7 @@ PYTHONUNBUFFERED=1 timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <ski
 
 **同步超时处理：**
 - 正常完成 → 展示同步结果
-- 超时退出（exit 124）→ 告知用户：「同步脚本超时。可能原因：网络慢（音频下载卡住）、单词过多、AnkiConnect 响应慢。可尝试加 `--no-audio` 跳过音频，或分批处理。」
+- 超时退出（exit 124）→ 告知用户：「同步脚本超时。可能原因：AnkiConnect 响应慢或网络不畅。重试即可。」
 - 非零退出码 → 打印 stderr，告知具体错误
 
 **模式判断逻辑：**
@@ -235,13 +255,12 @@ PYTHONUNBUFFERED=1 timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <ski
 
 #### 同步模式详情（sync_anki.py）
 
-1. 连接 AnkiConnect（`localhost:8765`）
-2. 对每个词调用 `lemmatize_word()` 还原为原形 → 用原形构建 WordId、卡片词、音频文件名
-3. 查找目标牌组已有卡片（同时匹配原形 WordId 和原文 WordId，兼容旧卡片）→ 仅对新词处理
+1. Step 3.5 (`--prefetch`): 并发生成全部音频 → 保存到临时目录 + manifest.json → 打印 `AUDIO_DIR=<path>`
+2. Step 4 (`--audio-dir <dir>`): 从目录加载预生成音频 → 连 AnkiConnect → 查已有卡片 → 上传媒体 → 添加新卡片
+3. 对每个词调用 `lemmatize_word()` 还原为原形 → 用原形构建 WordId、卡片词、音频文件名
 4. **单词音频优先级**：JSON IPA（Claude 提供）→ SSML 合成 / Free Dict API 真人录音 → API IPA + Edge TTS + SSML → Edge TTS 裸词
-5. **例句音频**：Edge TTS 朗读（上下文自然消歧）
-6. 上传音频到 Anki 媒体库 → 添加新卡片
-7. **已有卡片完全不动**，保留复习进度和调度数据
+5. **例句音频**：Edge TTS 朗读
+6. **已有卡片完全不动**，保留复习进度和调度数据
 
 牌组名自动从 JSON 推导：`"{title} ({author})"`。额外参数：`--deck "自定义"`、`--dry-run`、`--no-audio`。
 
@@ -298,7 +317,7 @@ PYTHONUNBUFFERED=1 timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <ski
 | 没有划线 | 提示："这本书暂无划线笔记。先在微信读书中标记生词后再试。" |
 | 划线全是整句 | 提示："划线看起来是完整句子而非生词。仍然可以生成牌组，是否继续？" |
 | 不认识的书 | 如实告知无法回忆真实例句，提供词典例句替代方案 |
-| 超过 50 个单词 | 建议分批生成（每批 ≤50），或让用户筛选 |
+| 超过 50 个单词 | 多代理并行（每批 ~20 词）+ 并发音频（8 线程），大批量也能高效完成 |
 | 脚本运行失败 | 检查依赖安装、网络连接，打印错误信息 |
 | 词典 API 不可用 | 脚本自动 fallback 到 Edge TTS + SSML，无音频时生成纯文本版本 |
 | `WEREAD_API_KEY` 未设置 | 提示用户设置：`export WEREAD_API_KEY=<your-key>` |
@@ -334,6 +353,8 @@ PYTHONUNBUFFERED=1 timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <ski
 
 - **职责分离**：Claude 做知识工作（理解语境、翻译），Python 做机械工作（HTTP、TTS、打包、同步）
 - **过滤前置**：COCA 频次检查和 Anki 去重在生成内容**之前**完成，避免浪费 Claude 精力
+- **并行加速**：大量单词时多代理并行生成内容（Step 3）+ 多线程并发下载音频（Step 3.5），将 10 分钟流程压缩到 ~1 分钟
+- **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
 - **原形归一**：去重和筛选阶段即提前还原原形（`bewildered`→`bewilder`），确保同一原形的不同词形（如 `pondered` + `ponder`）在管道入口就合并，不会生成重复卡片。卡片词、WordId、API 查询均用原形，例句保留原文词形。仅处理屈折变化（-ing/-ed/-s），派生词（peaceful）不动
 - **bookId 桥接**：Anki 卡片 WordId `{lemma}_{bookId}` 天然包含 bookId，用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断

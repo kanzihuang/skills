@@ -44,8 +44,6 @@ from utils import (
 
 MODEL_NAME = "Vocabulary Card (WeRead)"
 WORD_TIMEOUT = 30  # default seconds per word (audio generation)
-MAX_CONSECUTIVE_TIMEOUTS = 3
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -73,7 +71,17 @@ def parse_args() -> argparse.Namespace:
         "--word-timeout",
         type=int,
         default=WORD_TIMEOUT,
-        help=f"Max seconds per word for audio generation (default: {WORD_TIMEOUT})",
+        help=f"Deprecated. API calls have built-in timeouts. (default: {WORD_TIMEOUT})",
+    )
+    parser.add_argument(
+        "--prefetch",
+        action="store_true",
+        help="Generate audio concurrently and save to temp dir with manifest (no Anki interaction)",
+    )
+    parser.add_argument(
+        "--audio-dir",
+        required=False,
+        help="Use pre-generated audio from directory (skips audio generation)",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Show detailed progress"
@@ -187,27 +195,34 @@ def sync(
     no_audio: bool = False,
     verbose: bool = False,
     word_timeout: int = WORD_TIMEOUT,
+    prefetch: bool = False,
+    audio_dir: str | None = None,
 ) -> dict:
     """Run the full sync workflow. Returns a summary dict."""
     words = data["words"]
     book_title = data["book_title"]
 
-    # 1. Connect
-    print(f'Connecting to AnkiConnect...')
-    ac = AnkiConnect()
+    book_id = data.get("book_id", "")
 
-    # 2. Ensure deck and model exist
-    ac.ensure_deck_and_model(deck_name, MODEL_NAME)
-    print(f'  Deck: "{deck_name}"')
-    print(f"  Model: {MODEL_NAME}")
+    # 1. Connect to Anki (skip for prefetch — audio-only mode)
+    ac = None
+    if not prefetch:
+        print(f'Connecting to AnkiConnect...')
+        ac = AnkiConnect()
 
-    # 3. Get existing WordId map from target deck
-    print(f"\nQuerying existing cards in deck...")
-    existing = ac.get_word_id_map(deck_name)
-    print(f"  Found {len(existing)} existing cards")
+        # 2. Ensure deck and model exist
+        ac.ensure_deck_and_model(deck_name, MODEL_NAME)
+        print(f'  Deck: "{deck_name}"')
+        print(f"  Model: {MODEL_NAME}")
+
+        # 3. Get existing WordId map from target deck
+        print(f"\nQuerying existing cards in deck...")
+        existing = ac.get_word_id_map(deck_name)
+        print(f"  Found {len(existing)} existing cards")
+    else:
+        existing = {}
 
     # 4. Identify new words (check lemma-based WordId, fallback to original)
-    book_id = data.get("book_id", "")
     new_words = []
     skipped_words = []
     for w in words:
@@ -246,65 +261,135 @@ def sync(
             "words_skipped": [w["word"] for w in skipped_words],
         }
 
-    # 5. Generate audio and build notes for new words (per-word timeout)
-    print(f"\nGenerating audio for {len(new_words)} new words...")
+    # 5. Generate audio and build notes for new words (parallel)
+    if prefetch:
+        print(f"\nPrefetching audio for {len(new_words)} new words (parallel)...")
+    else:
+        print(f"\nGenerating audio for {len(new_words)} new words (parallel)...")
     notes_to_add = []
     audio_uploads: list[tuple[str, bytes]] = []
-    timed_out_words: list[str] = []
-    consecutive_timeouts = 0
+    failed_words: list[str] = []
+    word_ok = 0
+    sent_ok = 0
+    total = len(new_words)
 
-    for i, w in enumerate(new_words, 1):
-        word = w["word"]
-        lemma = lemmatize_word(word)
-        total = len(new_words)
-        tag = f" ({lemma})" if lemma != word.lower() else ""
-        label = f"{word}{tag}"
+    if audio_dir:
+        # Load pre-generated audio from disk and build notes
+        manifest_path = os.path.join(audio_dir, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            print(f"Error: manifest not found at {manifest_path}", file=sys.stderr)
+            sys.exit(1)
+        with open(manifest_path, "r", encoding="utf-8") as mf:
+            manifest = json.load(mf)
+        # Restore notes (without deckName — fill in below)
+        for note in manifest["notes"]:
+            note["deckName"] = deck_name
+            notes_to_add.append(note)
+        # Load audio files from disk
+        for filename, filepath in manifest["audio_files"].items():
+            if os.path.isfile(filepath):
+                with open(filepath, "rb") as af:
+                    audio_uploads.append((filename, af.read()))
+        word_ok = manifest["stats"]["word_ok"]
+        sent_ok = manifest["stats"]["sent_ok"]
+        print(f"  Loaded {len(notes_to_add)} notes + {len(audio_uploads)} audio files from cache")
+    else:
+        # Generate audio concurrently
+        max_workers = min(8, len(new_words))
+        if verbose:
+            print(f"  ({max_workers} workers)")
 
-        # Run audio generation in a thread with per-word timeout
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_process_one_word, w, book_id, no_audio)
-            try:
-                note, word_audio, final_ipa = future.result(timeout=word_timeout)
-                consecutive_timeouts = 0
-                note["deckName"] = deck_name
-                notes_to_add.append(note)
-                audio_uploads.extend(word_audio)
-                if verbose:
-                    if not no_audio:
-                        has_word = any(fn.endswith("_word.mp3") for fn, _ in word_audio)
-                        has_sent = any(fn.endswith("_sent.mp3") for fn, _ in word_audio)
-                        audio_status = []
-                        if has_word:
-                            audio_status.append("word✓")
-                        else:
-                            audio_status.append("word✗")
-                        if has_sent:
-                            audio_status.append("sent✓")
-                        else:
-                            audio_status.append("sent✗")
-                        label_v = f"{label}  audio: {', '.join(audio_status)}"
-                    else:
-                        label_v = f"{label}  audio: skipped"
-                    print_progress_bar(i, total, label_v)
-                else:
-                    print_progress_bar(i, total, label)
-            except concurrent.futures.TimeoutError:
-                consecutive_timeouts += 1
-                timed_out_words.append(word)
-                # Start new line before timeout message, then resume bar
-                print()
-                print(f"  ⏱ TIMEOUT {word} ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS} consecutive)")
-                print_progress_bar(i, total, label)
-                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
-                    print(f"\n  {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts — aborting sync.")
-                    for remaining in new_words[i:]:
-                        timed_out_words.append(remaining["word"])
-                    break
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(_process_one_word, w, book_id, no_audio): (i, w)
+                for i, w in enumerate(new_words, 1)
+            }
 
-        time.sleep(API_DELAY)
+            completed = 0
+            for future in concurrent.futures.as_completed(future_map):
+                i, w = future_map[future]
+                word = w["word"]
+                lemma = lemmatize_word(word)
+                completed += 1
 
-    # Finalize progress bar
-    print()
+                try:
+                    note, word_audio, final_ipa = future.result()
+                    note["deckName"] = deck_name
+                    notes_to_add.append(note)
+                    audio_uploads.extend(word_audio)
+
+                    has_word = any(fn.endswith("_word.mp3") for fn, _ in word_audio)
+                    has_sent = any(fn.endswith("_sent.mp3") for fn, _ in word_audio)
+                    if has_word:
+                        word_ok += 1
+                    if has_sent:
+                        sent_ok += 1
+
+                    tag = f" ({lemma})" if lemma != word.lower() else ""
+                    label = f"{word}{tag}"
+                    if verbose and not no_audio:
+                        parts = []
+                        parts.append("word✓" if has_word else "word✗")
+                        parts.append("sent✓" if has_sent else "sent✗")
+                        label = f"{label}  audio: {', '.join(parts)}"
+                    print_progress_bar(completed, total, label)
+                except Exception as e:
+                    failed_words.append(word)
+                    print()
+                    print(f"  ✗ {word}: {e}")
+                    print_progress_bar(completed, total, word)
+
+        print()
+
+        # If prefetch mode: save to temp dir with manifest, then exit
+        if prefetch:
+            prefetch_dir = tempfile.mkdtemp(prefix="vocab_audio_")
+            audio_files: dict[str, str] = {}
+
+            for filename, data in audio_uploads:
+                filepath = os.path.join(prefetch_dir, filename)
+                with open(filepath, "wb") as af:
+                    af.write(data)
+                audio_files[filename] = filepath
+
+            # Strip deckName from notes (will be filled in at sync time)
+            saved_notes = []
+            for note in notes_to_add:
+                saved = dict(note)
+                saved.pop("deckName", None)
+                saved_notes.append(saved)
+
+            manifest = {
+                "notes": saved_notes,
+                "audio_files": audio_files,
+                "stats": {
+                    "total": total,
+                    "word_ok": word_ok,
+                    "sent_ok": sent_ok,
+                    "failed": len(failed_words),
+                },
+                "failed_words": failed_words,
+            }
+            manifest_path = os.path.join(prefetch_dir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as mf:
+                json.dump(manifest, mf, indent=2, ensure_ascii=False)
+
+            print(f"\nAudio prefetch complete:")
+            print(f"  Word audio:  {word_ok}/{total}")
+            print(f"  Sentence:    {sent_ok}/{total}")
+            if failed_words:
+                print(f"  Failed:      {len(failed_words)} ({', '.join(failed_words)})")
+            print(f"\nAUDIO_DIR={prefetch_dir}")
+            return {
+                "added": 0,
+                "skipped": len(skipped_words),
+                "audio_uploaded": len(audio_uploads),
+                "words_added": [],
+                "words_skipped": [w["word"] for w in skipped_words],
+                "failed_words": failed_words,
+                "prefetch_dir": prefetch_dir,
+                "prefetch_stats": manifest["stats"],
+            }
 
     # 6. Upload media files
     audio_count = 0
@@ -353,7 +438,7 @@ def sync(
                     "audio_uploaded": audio_count,
                     "words_added": [],
                     "words_skipped": [w["word"] for w in skipped_words + new_words],
-                    "words_timed_out": timed_out_words,
+                    "failed_words": failed_words,
                     "error": errmsg,
                 }
 
@@ -363,9 +448,9 @@ def sync(
     print(f"  New cards added:  {added_count}")
     print(f"  Already in deck:  {len(skipped_words)}")
     print(f"  Media uploaded:   {audio_count}")
-    if timed_out_words:
-        print(f"  ⏱ Timed out:      {len(timed_out_words)} word(s)")
-        print(f"     ({', '.join(timed_out_words)})")
+    if failed_words:
+        print(f"  Failed:           {len(failed_words)} word(s)")
+        print(f"     ({', '.join(failed_words)})")
     print(f"{'='*50}")
 
     return {
@@ -374,7 +459,7 @@ def sync(
         "audio_uploaded": audio_count,
         "words_added": [w["word"] for w in new_words[:added_count]],
         "words_skipped": [w["word"] for w in skipped_words],
-        "words_timed_out": timed_out_words,
+        "failed_words": failed_words,
     }
 
 
@@ -429,6 +514,8 @@ def main() -> None:
             no_audio=args.no_audio,
             verbose=args.verbose,
             word_timeout=args.word_timeout,
+            prefetch=args.prefetch,
+            audio_dir=args.audio_dir,
         )
         if result.get("error"):
             sys.exit(1)

@@ -1001,30 +1001,40 @@ def main() -> None:
 
     try:
         audio_results = []
-        timed_out_words: list[str] = []
-        consecutive_timeouts = 0
+        failed_words: list[str] = []
+        total = len(data["words"])
 
-        for i, entry in enumerate(data["words"], 1):
-            word = entry["word"]
-            lemma = lemmatize_word(word)
-            display = lemma if lemma != word.lower() else word
-            tag = f" ({lemma})" if lemma != word.lower() else ""
-            label = f"{word}{tag}"
+        # Generate audio concurrently
+        max_workers = min(8, total)
+        print(f"Generating audio for {total} words (parallel, {max_workers} workers)...")
+        print()
 
-            # Run per-word audio generation in a thread with timeout
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(
                     _process_one_word_apkg,
                     entry, temp_dir,
                     args.no_fetch_audio, args.no_tts,
-                )
+                ): (i, entry)
+                for i, entry in enumerate(data["words"], 1)
+            }
+
+            completed = 0
+            for future in concurrent.futures.as_completed(future_map):
+                i, entry = future_map[future]
+                word = entry["word"]
+                lemma = lemmatize_word(word)
+                completed += 1
+                tag = f" ({lemma})" if lemma != word.lower() else ""
+                label = f"{word}{tag}"
+
                 try:
-                    result = future.result(timeout=args.word_timeout)
-                    consecutive_timeouts = 0
+                    result = future.result()
                     audio_results.append(result)
+
+                    w_audio = result["word_audio"]
+                    s_audio = result["sent_audio"]
                     if args.verbose:
-                        w_audio = result["word_audio"]
-                        s_audio = result["sent_audio"]
                         audio_status = []
                         if w_audio:
                             audio_status.append("word✓")
@@ -1036,11 +1046,8 @@ def main() -> None:
                             audio_status.append("sent✗")
                         detail = f"audio: {', '.join(audio_status)}" if audio_status else ""
                         label_v = f"{label}  {detail}"
-                        print_progress_bar(i, total, label_v)
+                        print_progress_bar(completed, total, label_v)
                     else:
-                        # Non-verbose: brief status icons
-                        w_audio = result["word_audio"]
-                        s_audio = result["sent_audio"]
                         icons = []
                         if w_audio:
                             icons.append("🎤")
@@ -1049,22 +1056,12 @@ def main() -> None:
                         if not icons and not args.no_tts and not args.no_fetch_audio:
                             icons.append("📝")
                         label_nv = f"{label}  {' '.join(icons)}" if icons else label
-                        print_progress_bar(i, total, label_nv)
-                except concurrent.futures.TimeoutError:
-                    consecutive_timeouts += 1
-                    timed_out_words.append(word)
+                        print_progress_bar(completed, total, label_nv)
+                except Exception as e:
+                    failed_words.append(word)
                     print()
-                    print(f"  ⏱ TIMEOUT {word} ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS} consecutive)")
-                    print_progress_bar(i, total, label)
-                    if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
-                        print(f"\n  {MAX_CONSECUTIVE_TIMEOUTS} consecutive timeouts — aborting.")
-                        for remaining in data["words"][i:]:
-                            timed_out_words.append(remaining["word"])
-                        break
-
-            # Rate limit for API
-            if not args.no_fetch_audio:
-                time.sleep(API_DELAY)
+                    print(f"  ✗ {word}: {e}")
+                    print_progress_bar(completed, total, word)
 
         # Finalize progress bar, then generate package
         print()
@@ -1083,9 +1080,9 @@ def main() -> None:
             f"{word_audio_count} word audio, "
             f"{sent_audio_count} sentence audio"
         )
-        if timed_out_words:
-            print(f"  ⏱ Timed out: {len(timed_out_words)} word(s)")
-            print(f"     ({', '.join(timed_out_words)})")
+        if failed_words:
+            print(f"  Failed: {len(failed_words)} word(s)")
+            print(f"     ({', '.join(failed_words)})")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
