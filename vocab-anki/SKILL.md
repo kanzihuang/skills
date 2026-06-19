@@ -47,7 +47,7 @@ description: >
 curl -s http://localhost:8765 -d '{"action":"deckNamesAndIds","version":6}'
 ```
 
-若可达 → 对每个使用 "Vocabulary Card (WeRead)" 模型的牌组，取一张卡片的 `WordId` 字段（格式 `{word}_{bookId}`），解析出 `bookId`。形成映射表：
+若可达 → 对每个使用 "Vocabulary Card (WeRead)" 模型的牌组，取一张卡片的 `WordId` 字段（格式 `{lemma}_{bookId}`），解析出 `bookId`。形成映射表：
 
 ```
 {牌组名: bookId}
@@ -112,7 +112,7 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 
 **2b. Anki 已有卡片对比：**
 
-若 AnkiConnect 可达 → 查询目标牌组已有 WordId（`{word}_{bookId}`），已在牌组中的直接跳过。
+若 AnkiConnect 可达 → 查询目标牌组已有卡片。WordId 格式为 `{lemma}_{bookId}`（脚本自动将变形词还原为原形，如 `bewildered` → `bewilder`），已在牌组中的直接跳过。
 
 **2c. 输出汇总（仅数字，不确认）：**
 
@@ -128,7 +128,7 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
-| `word` | 生词（保持原形） | `pondered` |
+| `word` | 生词（保留原文词形，脚本自动还原为原形建卡） | `pondered` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I <b>pondered</b> deeply, then, over the adventures of the jungle.` |
 | `ipa` | IPA 音标（如已知；否则留空由脚本自动获取） | `/ˈpɒndər/` |
 | `definition_cn` | 在该书上下文中的中文释义 | `沉思，深思` |
@@ -220,17 +220,21 @@ timeout 120 /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
 #### 同步模式详情（sync_anki.py）
 
 1. 连接 AnkiConnect（`localhost:8765`）
-2. 查找目标牌组已有卡片 → 提取 WordId → 仅对新词生成音频
-3. 上传音频到 Anki 媒体库 → 添加新卡片
-4. **已有卡片完全不动**，保留复习进度和调度数据
+2. 对每个词调用 `lemmatize_word()` 还原为原形 → 用原形构建 WordId、卡片词、音频文件名
+3. 查找目标牌组已有卡片（同时匹配原形 WordId 和原文 WordId，兼容旧卡片）→ 仅对新词处理
+4. **单词音频优先级**：JSON IPA（Claude 提供）→ SSML 合成 / Free Dict API 真人录音 → API IPA + Edge TTS + SSML → Edge TTS 裸词
+5. **例句音频**：Edge TTS 朗读（上下文自然消歧）
+6. 上传音频到 Anki 媒体库 → 添加新卡片
+7. **已有卡片完全不动**，保留复习进度和调度数据
 
 牌组名自动从 JSON 推导：`"{title} ({author})"`。额外参数：`--deck "自定义"`、`--dry-run`、`--no-audio`。
 
 #### 导出模式详情（generate_apkg.py）
 
-1. 对每个单词：Free Dictionary API → Edge TTS + SSML fallback
-2. Edge TTS 生成例句朗读
-3. 打包 `.apkg` 文件（音频嵌入）
+1. 对每个词同样 `lemmatize_word()` 还原为原形
+2. 单词音频：JSON IPA → SSML / Free Dict API → Edge TTS + SSML fallback
+3. 例句音频：Edge TTS 朗读
+4. 打包 `.apkg` 文件（音频嵌入）
 
 ## 卡片格式
 
@@ -314,7 +318,8 @@ timeout 120 /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
 
 - **职责分离**：Claude 做知识工作（理解语境、翻译），Python 做机械工作（HTTP、TTS、打包、同步）
 - **过滤前置**：COCA 频次检查和 Anki 去重在生成内容**之前**完成，避免浪费 Claude 精力
-- **bookId 桥接**：Anki 卡片 WordId `{word}_{bookId}` 天然包含 bookId，用于精确关联微信读书，替代不可靠的书名匹配
+- **原形归一**：脚本自动将变形词还原为原形（`bewildered`→`bewilder`），卡片词、WordId、API 查询均用原形，例句保留原文词形。仅处理屈折变化（-ing/-ed/-s），派生词（peaceful）不动
+- **bookId 桥接**：Anki 卡片 WordId `{lemma}_{bookId}` 天然包含 bookId，用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断
 - **不重复造轮**：划线获取复用 weread-skills 的 API 规范；Python 脚本间提取共享 `utils.py` 消除重复代码
 - **故障降级**：音频获取失败不阻塞整体流程；同步超时有明确提示和建议
