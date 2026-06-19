@@ -61,6 +61,15 @@ wait
 
 **目的**：用 bookId 作为 Anki ↔ 微信读书的精确桥接。meta manifest 卡片是书籍元数据的权威来源；普通单词卡片为 fallback。无需额外存储——每张卡片的 WordId 天然包含 bookId。
 
+> **⚠️ Anki 搜索引号规则**：牌组名含 `()`、空格等特殊字符时，Anki 会误解析为分组/分隔符，必须用双引号包裹：`deck:"牌组名"`。
+> **优先用 `tag:meta` 搜索 meta manifest**，彻底绕过牌组名字符问题——meta manifest 卡片始终带 `meta` 和 `weread` 标签：
+> ```bash
+> # 推荐：用 tag 搜索所有 meta manifest 卡片，无需指定牌组名
+> curl ... -d '{"action":"findNotes","version":6,"params":{"query":"tag:meta"}}'
+> # 然后通过 cardsInfo 查每张卡所属牌组，解析 WordId 提取 bookId
+> ```
+> 若直接搜索牌组内的普通卡片，必须给牌组名加双引号：`deck:"小王子（英文版） (圣埃克絮佩里)"`。
+
 ### Step 1: 获取划线（智能路由）
 
 通过 weread API gateway 获取划线：
