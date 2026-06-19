@@ -33,21 +33,20 @@ Generate weekly work reports from daily reports. Categorizes similar tasks acros
 Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book highlights.
 
 **Architecture:** Claude ↔ Python two-phase design:
-- **Claude**: knowledge work — recalls real book sentences for each highlighted word, provides Chinese definitions and translations
-- **Python**: mechanical work — lemmatizes words, fetches IPA/audio from Free Dictionary API (Edge TTS + SSML fallback), generates sentence TTS via Edge TTS, packages into `.apkg` or syncs to Anki via AnkiConnect
+- **Claude**: knowledge work — recalls real book sentences for each highlighted word, provides Chinese definitions, translations, and IPA
+- **Python**: mechanical work — lemmatizes words, generates word/sentence TTS via Edge TTS + SSML, syncs to Anki via AnkiConnect
 
 **Scripts:**
 | Script | Purpose |
 |--------|---------|
-| `utils.py` | Shared utilities: safe_filename, fetch_word_data, lemmatize_word, edge_tts_bytes/file, constants |
-| `generate_apkg.py` | Generate standalone `.apkg` file with embedded audio |
+| `utils.py` | Shared utilities: lemmatize_word, edge_tts_bytes/file, safe_filename, constants |
 | `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress, per-word timeout with `--word-timeout`, auto-creates suspended meta manifest card for excluded words) |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client library |
 | `filter_pipeline.py` | Combined filter pipeline (Step 1d+1e+1f merged): lemmatize → Anki dedup → COCA check in a single Python invocation — eliminates Claude round-trip data transfer, ~0.5s vs previous ~33s |
 | `coca_lookup.py` | COCA 20000 frequency check — direct set lookup + lemminflect/suffix-stripping fallback for derivational normalization (`indulgently`→`indulgent`) |
 | `coca_20000.txt` | COCA 20000 lemma list (17,640 entries) |
 
-**Dependencies:** `weread-skills` (for highlight data via WeRead API), Python packages: `genanki`, `edge-tts`, `requests`, `lemminflect`
+**Dependencies:** `weread-skills` (for highlight data via WeRead API), Python packages: `edge-tts`, `lemminflect`
 
 **Design principles:**
 - **Separation of concerns**: knowledge work (Claude) vs mechanical work (Python)
@@ -56,9 +55,9 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **Lemma-first dedup**: lemmatizes all highlighted words BEFORE dedup and filtering, so inflected forms (`pondered`, `bewildered`) collapse to their lemma at the pipeline entry point. Card word, WordId, and API lookup all use lemma. Only inflectional (-ing/-ed/-s), not derivational (peaceful untouched)
 - **Two-layer lemmatization**: Step 1d `lemmatize_word()` handles inflectional only (for dedup — same word, different forms). Step 1f `in_coca()` fallback (lemminflect + suffix stripping) handles derivational normalization (for frequency lookup — `indulgently`→`indulgent`, `resentfulness`→`resentful`). The two layers serve different purposes and are complementary, not redundant. Without the COCA derivational layer, words like `indulgently` (COCA has `indulgent` but not the -ly form) would be incorrectly excluded
 - **bookId bridging**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English)
-- **Single confirmation**: only one user prompt at the end (before sync/export); intermediate steps report progress without asking
+- **Single confirmation**: only one user prompt at the end (before sync); intermediate steps report progress without asking
 - **Cross-book independence**: same word from different books coexists as independent cards via WordId
-- **IPA-priority audio**: Claude always provides IPA → SSML `<phoneme>` synthesis (instant, no network); Free Dictionary API is script-side fallback only
+- **IPA-priority audio**: Claude provides IPA → SSML `<phoneme>` synthesis (instant, no network); IPA missing → skip word audio gracefully
 - **Graceful degradation**: audio failures don't block card generation
 - **Incremental safety**: sync mode only adds, never modifies existing cards
 - **Meta manifest card**: one suspended card per book (`WordId = __META__{bookId}`) stores cumulative COCA-excluded words; read on subsequent syncs to skip known excluded words instantly

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Shared utilities for vocab-anki scripts.
 
-Provides constants, filename helpers, and Free Dictionary API access
-used by both generate_apkg.py and sync_anki.py.
+Provides constants, filename helpers, lemmatization, and Edge TTS audio synthesis.
 """
 
 import os
@@ -11,16 +10,10 @@ import sys
 import tempfile
 import time
 
-import requests
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-FREE_DICT_API = "https://api.dictionaryapi.dev/api/v2/entries/en"
-API_DELAY = 0.35  # seconds between Free Dictionary API requests
-REQUEST_TIMEOUT = 12
-MAX_RETRIES = 1
 EDGE_TTS_MAX_RETRIES = 2  # Retry Edge TTS up to 2 extra times (3 total) on transient failure
 EDGE_TTS_RETRY_DELAY = 0.75  # seconds between Edge TTS retries
 
@@ -72,111 +65,6 @@ def lemmatize_word(word: str) -> str:
             if suffix in _VALID_INFLECTIONS:
                 return lemma
     return w
-
-
-# ---------------------------------------------------------------------------
-# Free Dictionary API
-# ---------------------------------------------------------------------------
-
-
-def fetch_word_data(word: str) -> tuple[str | None, str | None, bytes | None]:
-    """Fetch word data from Free Dictionary API.
-
-    Returns (ipa, audio_url, audio_bytes) — each can be None.
-    Prefers US pronunciation (K.K. phonetics) over UK.
-    """
-    url = f"{FREE_DICT_API}/{word.lower()}"
-    try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-        if resp.status_code != 200:
-            return None, None, None
-        data = resp.json()
-        if not isinstance(data, list) or len(data) == 0:
-            return None, None, None
-
-        entry = data[0]
-
-        # Extract IPA: prefer US, then root, then any
-        ipa = _extract_ipa(entry)
-
-        # Extract audio: prefer US, fallback to any
-        audio_url = _extract_audio_url(entry)
-
-        # Download audio bytes if URL is available
-        audio_bytes = None
-        if audio_url:
-            audio_bytes = _download_audio_bytes(audio_url)
-
-        return ipa, audio_url, audio_bytes
-
-    except requests.RequestException:
-        return None, None, None
-
-
-def _extract_ipa(entry: dict) -> str | None:
-    """Extract IPA from a Free Dictionary API entry, preferring US."""
-    ipa = None
-    phonetics = entry.get("phonetics", [])
-    for p in phonetics:
-        audio = p.get("audio", "")
-        text = p.get("text", "")
-        is_us = "us" in audio.lower() or "-us" in str(text).lower()
-        if not is_us:
-            # Heuristic: US IPA uses ɚ ɑ ɝ; UK uses ɒ ɪə eə
-            is_us = any(c in text for c in ("ɚ", "ɑ", "ɝ"))
-        if is_us and text:
-            ipa = text
-            break
-    # Fallback: root-level phonetic
-    if not ipa:
-        ipa = entry.get("phonetic")
-    # Fallback: first available phonetic text
-    if not ipa:
-        for p in phonetics:
-            if p.get("text"):
-                ipa = p["text"]
-                break
-    return ipa
-
-
-def _extract_audio_url(entry: dict) -> str | None:
-    """Extract audio URL from a Free Dictionary API entry, preferring US."""
-    phonetics = entry.get("phonetics", [])
-    # Try US first
-    for p in phonetics:
-        if p.get("audio") and (
-            "us" in p.get("audio", "").lower()
-            or "-us" in str(p.get("text", "")).lower()
-        ):
-            return p["audio"]
-    # Fallback to any
-    for p in phonetics:
-        if p.get("audio"):
-            return p["audio"]
-    return None
-
-
-def _download_audio_bytes(url: str) -> bytes | None:
-    """Download audio from URL, return raw bytes or None on failure."""
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-            if resp.status_code == 200:
-                return resp.content
-        except requests.RequestException:
-            if attempt < MAX_RETRIES:
-                time.sleep(1)
-    return None
-
-
-def download_audio(url: str, dest_path: str) -> bool:
-    """Download audio from URL to a file path. Returns True on success."""
-    audio_bytes = _download_audio_bytes(url)
-    if audio_bytes:
-        with open(dest_path, "wb") as f:
-            f.write(audio_bytes)
-        return True
-    return False
 
 
 # ---------------------------------------------------------------------------

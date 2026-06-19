@@ -31,10 +31,7 @@ import time
 
 from ankiconnect import AnkiConnect, AnkiConnectError
 from utils import (
-    API_DELAY,
-    REQUEST_TIMEOUT,
     edge_tts_bytes,
-    fetch_word_data,
     lemmatize_word,
     print_progress_bar,
     safe_filename,
@@ -102,11 +99,7 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
-# safe_filename(), fetch_word_data() imported from utils
-# (fetch_word_data returns (ipa, audio_url, audio_bytes) — we only use ipa and audio_bytes)
-
-
-# generate_tts_bytes() imported from utils (edge_tts_bytes)
+# safe_filename(), edge_tts_bytes() imported from utils
 
 
 # ---------------------------------------------------------------------------
@@ -132,22 +125,11 @@ def _process_one_word(
     audio_uploads: list[tuple[str, bytes]] = []
 
     if not no_audio:
-        # Word audio: JSON IPA → SSML (skip API) → Free Dictionary API → Edge TTS fallback
+        # Word audio: Claude IPA → SSML synthesis; no IPA → skip word audio
         if ipa:
             tts = edge_tts_bytes(lemma, ipa=ipa)
             if tts:
                 audio_uploads.append((f"{safe}_word.mp3", tts))
-        else:
-            fetched_ipa, _audio_url, api_audio = fetch_word_data(lemma)
-            if api_audio:
-                audio_uploads.append((f"{safe}_word.mp3", api_audio))
-                if fetched_ipa:
-                    ipa = fetched_ipa
-            else:
-                fallback_ipa = fetched_ipa or None
-                tts = edge_tts_bytes(lemma, ipa=fallback_ipa)
-                if tts:
-                    audio_uploads.append((f"{safe}_word.mp3", tts))
 
         # Sentence audio: Edge TTS on cleaned sentence
         clean = re.sub(r"<[^>]+>", "", w["sentence"])
@@ -273,7 +255,7 @@ def _build_meta_word_id(book_id: str) -> str:
     return f"{META_WORD_PREFIX}{book_id}"
 
 
-def _build_meta_note(deck_name: str, book_id: str, manifest_json: str) -> dict:
+def _build_meta_note(deck_name: str, book_id: str, manifest_json: str, excluded_str: str = "") -> dict:
     """Build an Anki note for the meta manifest card."""
     return {
         "deckName": deck_name,
@@ -282,6 +264,7 @@ def _build_meta_note(deck_name: str, book_id: str, manifest_json: str) -> dict:
             "WordId": _build_meta_word_id(book_id),
             "Word": META_WORD_PREFIX,
             "Sentence": manifest_json,
+            "Excluded": excluded_str,
             "IPA": "",
             "DefinitionCN": "系统元数据 — 已排除单词记录",
             "TranslationCN": "此卡片已暂停，不参与每日复习",
@@ -350,16 +333,17 @@ def _write_meta_manifest(
     }
 
     manifest_json = json.dumps(manifest, ensure_ascii=False)
+    excluded_str = ",".join(sorted(merged.keys()))
 
     if existing_ids:
         # Update existing meta note
         ac.update_note_fields(
             existing_ids[0],
-            {"Sentence": manifest_json, "IPA": "", "WordAudio": "", "SentenceAudio": ""},
+            {"Sentence": manifest_json, "Excluded": excluded_str, "IPA": "", "WordAudio": "", "SentenceAudio": ""},
         )
     else:
         # Create new meta note
-        note = _build_meta_note(deck_name, book_id, manifest_json)
+        note = _build_meta_note(deck_name, book_id, manifest_json, excluded_str)
         result = ac.add_notes([note])
         if result and result[0]:
             existing_ids = [result[0]]

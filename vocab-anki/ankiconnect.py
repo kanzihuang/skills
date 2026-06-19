@@ -269,8 +269,10 @@ class AnkiConnect:
         return self._call("findCards", query=" or ".join(f"nid:{nid}" for nid in note_ids))
 
     def find_notes_by_field(self, deck_name: str, field_name: str, value: str) -> list[int]:
-        """Find notes matching a specific field value in a deck."""
-        return self.find_notes(f'deck:"{deck_name}" "{field_name}:{value}"')
+        """Find notes matching a specific field value, optionally scoped to a deck."""
+        if deck_name:
+            return self.find_notes(f'deck:"{deck_name}" "{field_name}:{value}"')
+        return self.find_notes(f'"{field_name}:{value}"')
 
     def update_note_tags(self, note_id: int, tags: list[str]) -> None:
         """Update tags of an existing note."""

@@ -1,27 +1,24 @@
 ---
 name: vocab-anki
 description: >
-  Generate Anki vocabulary flashcard decks (.apkg) from WeRead (微信读书)
-  English book highlights. Supports two modes: (1) export .apkg file for manual
-  import, (2) sync directly to Anki via AnkiConnect plugin. Use when user wants
-  to create Anki cards from WeRead highlights, e.g. "/vocab-anki The Little Prince"
-  or "为这本书的划线生词生成 Anki 牌组". Integrates with weread-skills for data;
-  Claude does knowledge work (sentences, translations), Python scripts handle
-  audio + packaging + sync.
+  Generate Anki vocabulary flashcard decks from WeRead (微信读书)
+  English book highlights. Syncs directly to Anki via AnkiConnect plugin.
+  Use when user wants to create Anki cards from WeRead highlights, e.g.
+  "/vocab-anki The Little Prince" or "为这本书的划线生词生成 Anki 牌组".
+  Integrates with weread-skills for data; Claude does knowledge work
+  (sentences, translations), Python scripts handle audio + sync.
 ---
 
 # vocab-anki — 英文书词汇 Anki 牌组生成
 
-将微信读书英文原版书的划线生词转换为 Anki 牌组（`.apkg`），嵌入发音音频。
-支持两种交付模式：
-- **导出一**：生成 `.apkg` 文件，手动导入 Anki
-- **同步二**：通过 AnkiConnect 直接同步到正在运行的 Anki，自动对比已有卡片，仅添加新词
+将微信读书英文原版书的划线生词通过 AnkiConnect 直接同步到 Anki，嵌入发音音频。
+自动对比已有卡片，仅添加新词，保留学习进度不受影响。
 
 ## 前置条件
 
 - `weread-skills` 已安装，`WEREAD_API_KEY` 环境变量已设置
 - Python 3 + venv（脚本会自动创建 venv 并安装依赖）
-- **同步模式额外需要**：Anki 正在运行 + [AnkiConnect 插件](https://ankiweb.net/shared/info/2055492159) 已安装
+- Anki 正在运行 + [AnkiConnect 插件](https://ankiweb.net/shared/info/2055492159) 已安装
 
 ## 工作流
 
@@ -118,13 +115,14 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
   -H "Authorization: Bearer $WEREAD_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"api_name":"/book/bookmarklist","bookId":"<bookId>","skill_version":"1.0.3"}' | \
-<skill_dir>/.venv/bin/python3 <skill_dir>/filter_pipeline.py --anki <bookId> --book-id <bookId>
+<skill_dir>/.venv/bin/python3 <skill_dir>/filter_pipeline.py --anki <bookId> --book-id <bookId> --json-out /tmp/vocab-anki-filtered-<bookId>.json
 ```
 
 - `--anki <bookId>`：启用 Anki 去重（查已有卡片 + meta manifest）；若 Step 0b 确认全库 0 张 Vocabulary Card 笔记，可省略此 flag 跳过 Anki 查询
 - `--book-id <bookId>`：传递给脚本用于 meta manifest 的 bookId
+- `--json-out <path>`：将过滤结果写入结构化 JSON 文件，供 Step 3 Claude 直接读取填充 `excluded` 数组，避免手动转录
 
-输出分为四段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表、`---ANKI_SKIPPED---` 表（仅当有 Anki 跳过的词时出现）。
+输出分为四段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表、`---ANKI_SKIPPED---` 表（仅当有 Anki 跳过的词时出现）。同时写入对应的结构化 JSON 到 `--json-out` 路径。
 
 > **Claude 注意**：若输出 `SUMMARY: 0 highlights → 0 lemmas`，在判定"没有划线"之前先用 `head -c 500` 查看原始 API 响应，确认 `updated` 字段确实存在且为空数组，排除 API 调用失败。
 
@@ -167,8 +165,8 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 
 **IPA 规则：**
 - **必须为每个单词提供 IPA**——Claude 可从训练数据直接输出音标，无需外部 API
-- 提供 IPA 后脚本用 SSML `<phoneme>` 合成单词音频，完全跳过 Free Dictionary API（省去每词 ~0.5-2s 的网络请求 + `API_DELAY`）
-- Free Dictionary API 仅作为脚本端兜底（IPA 缺失时），正常情况下不触发
+- 提供 IPA 后脚本用 SSML `<phoneme>` 合成单词音频
+- IPA 缺失时跳过单词音频生成，卡片仍正常创建（例句音频正常生成）
 - 对同形异音词（heteronym，如 `intimate` 形容词 /ˈɪntɪmət/ vs 动词 /ˈɪntɪmeɪt/），必须根据释义填入正确 IPA
 
 **释义审查：**
@@ -224,8 +222,8 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 ```
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）
 - `book_id` 为微信读书 bookId
-- `ipa` 为必填（Claude 直接提供）；脚本用 SSML `<phoneme>` 合成音频，跳过 Free Dictionary API
-- `excluded` 数组记录未收录的单词及原因
+- `ipa` 由 Claude 直接提供（训练数据）；脚本用 SSML `<phoneme>` 合成音频；IPA 缺失时跳过单词音频
+- `excluded` 数组可直接从 Step 1 `--json-out` 输出的 JSON 文件中读取，避免手动转录排除词
 - **此步骤不展示样卡，不询问用户**
 
 ### Step 3.5: 预下载音频（并发，不依赖 Anki）
@@ -253,7 +251,7 @@ fi
 ```
 失败项标出但不阻塞——音频失败降级为纯文本。
 
-### Step 4: 最终确认 + 同步/导出（唯一确认点）
+### Step 4: 最终确认 + 同步（唯一确认点）
 
 **4a. 展示最终汇总（含音频预下载状态）：**
 
@@ -268,7 +266,7 @@ fi
 
 **4c. 唯一确认：**
 
-展示汇总后，仅问一次：「确认同步？」（或导出模式下「确认导出？」）。
+展示汇总后，仅问一次：「确认同步？」
 
 **4d. 执行（音频已预下载，秒级完成）：**
 
@@ -286,43 +284,22 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
   -v
 ```
 
-> **导出模式**：音频并发已足够快（~30s），直接前台运行即可。
-
-```bash
-<skill_dir>/.venv/bin/python -u <skill_dir>/generate_apkg.py \
-  /tmp/vocab-anki-input-<bookId>.json \
-  -o ./<book_title_sanitized>_vocab.apkg \
-  -v
-```
-
 **同步超时处理：**
 - 正常完成 → 展示同步结果
 - 超时退出（exit 124）→ 告知用户：「同步脚本超时。可能原因：AnkiConnect 响应慢或网络不畅。重试即可。」
 - 非零退出码 → 打印 stderr，告知具体错误
 
-**模式判断逻辑：**
-- 用户说"同步/添加到 Anki" → 同步模式
-- 用户说"导出/生成文件" → 导出模式
-- 都不明确 → 检查 AnkiConnect：可达则同步，不可达则导出（并提示可安装 AnkiConnect）
-
-#### 同步模式详情（sync_anki.py）
+#### 同步详情（sync_anki.py）
 
 1. Step 3.5 (`--prefetch`): 并发生成全部音频 → 保存到临时目录 + manifest.json → 打印 `AUDIO_DIR=<path>`
 2. Step 4 (`--audio-dir <dir>`): 从目录加载预生成音频 → 连 AnkiConnect → 查已有卡片 → 上传媒体 → 添加新卡片
 3. 对每个词调用 `lemmatize_word()` 还原为原形 → 用原形构建 WordId、卡片词、音频文件名
-4. **单词音频优先级**：JSON IPA（Claude 提供）→ SSML 合成 / Free Dict API 真人录音 → API IPA + Edge TTS + SSML → Edge TTS 裸词
+4. **单词音频**：Claude IPA → SSML `<phoneme>` 合成；IPA 缺失时跳过单词音频
 5. **例句音频**：Edge TTS 朗读
 6. **已有卡片完全不动**，保留复习进度和调度数据
-7. **更新 meta manifest 卡片**：将本次 `excluded` 单词合并入元数据卡片（`WordId = __META__{bookId}`），卡片暂停（不参与复习），下次同步优先读取
+7. **更新 meta manifest 卡片**：将本次 `excluded` 单词写入 `"Excluded"` 字段；同步更新 Sentence 字段的完整 JSON manifest（`WordId = __META__{bookId}`），卡片暂停（不参与复习），下次同步优先读取
 
 牌组名自动从 JSON 推导：`"{title} ({author})"`。额外参数：`--deck "自定义"`、`--dry-run`、`--no-audio`。
-
-#### 导出模式详情（generate_apkg.py）
-
-1. 对每个词同样 `lemmatize_word()` 还原为原形
-2. 单词音频：JSON IPA → SSML / Free Dict API → Edge TTS + SSML fallback
-3. 例句音频：Edge TTS 朗读
-4. 打包 `.apkg` 文件（音频嵌入）
 
 ## 卡片格式
 
@@ -372,21 +349,16 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 | 不认识的书 | 如实告知无法回忆真实例句，提供词典例句替代方案 |
 | 超过 50 个单词 | Claude 直接生成全部内容 + 并发音频（8 线程），一次写入 JSON |
 | 脚本运行失败 | 检查依赖安装、网络连接，打印错误信息 |
-| 词典 API 不可用 | 脚本自动 fallback 到 Edge TTS + SSML，无音频时生成纯文本版本 |
+| 音频生成失败 | Edge TTS 不可用时自动跳过音频，生成纯文本卡片 |
 | `WEREAD_API_KEY` 未设置 | 提示用户设置：`export WEREAD_API_KEY=<your-key>` |
-| AnkiConnect 不可达 | 提示启动 Anki 并安装 AnkiConnect 插件后重试；fallback 到导出 .apkg |
-| 模型不在 Anki 中 | 提示先导入一次 .apkg 建立模型，再进行同步 |
+| AnkiConnect 不可达 | 提示启动 Anki 并安装 AnkiConnect 插件后重试 |
+| 模型不在 Anki 中 | 提示先通过 AnkiConnect 同步一次建立模型 |
 | 牌组中全是新词 | 全部添加，和首次导出效果一样 |
 | 同步脚本超时 | 提示原因（网络慢/词多/Anki 响应慢），建议 `--no-audio` 或分批 |
 | 没有新划线生词 | 直接告知用户「没有新的划线生词」，流程自动结束 |
 
 ## 输出
 
-**导出模式：**
-- 最终交付：`.apkg` 文件路径
-- 告知用户导入方式："在 Anki 中 File → Import 导入此文件即可"
-
-**同步模式：**
 - 打印新增/跳过的单词数量
 - 用户直接在 Anki 中看到新卡片出现
 - 复习进度完整的牌组不受影响
@@ -395,18 +367,18 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 
 | 脚本 | 用途 | 输入 | 输出 |
 |------|------|------|------|
-| `utils.py` | 共享工具模块 | — | safe_filename, fetch_word_data, lemmatize_word, edge_tts_bytes/file, 常量 |
-| `generate_apkg.py` | 生成 .apkg 文件 | JSON → Free Dict API + Edge TTS + SSML | `.apkg` 文件 |
+| `utils.py` | 共享工具模块 — lemmatize_word, edge_tts_bytes/file, safe_filename | — | 工具函数 |
 | `sync_anki.py` | 增量同步到 Anki | JSON + AnkiConnect | 直接添加卡片到 Anki |
 | `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
+| `filter_pipeline.py` | 合并过滤流水线 — lemmatize → Anki 去重 → COCA 检查 | WeRead API JSON (stdin) | 过滤结果 (stdout) + 结构化 JSON (--json-out) |
 | `coca_lookup.py` | COCA 20000 高频词查询 — 直接 set 查找 + lemminflect/后缀剥离兜底做派生归一（`indulgently`→`indulgent`） | 单词 → set 查找 + lemminflect + 后缀剥离 | 是否在 COCA 前 20000 词中 |
 | `coca_20000.txt` | COCA 20000 词表数据 | — | 17,640 个唯一 lemma |
 
 ## 设计原则
 
-- **职责分离**：Claude 做知识工作（理解语境、翻译），Python 做机械工作（HTTP、TTS、打包、同步）
+- **职责分离**：Claude 做知识工作（理解语境、翻译、IPA），Python 做机械工作（HTTP、TTS、同步）
 - **过滤前置**：Anki 去重和 COCA 频次检查在生成内容**之前**完成，避免浪费 Claude 精力。Anki 去重先于 COCA：已在牌组中的词不受 COCA 频次变化影响
-- **音频并发**：多线程（8 workers）并发下载音频（Step 3.5），将音频生成压缩到秒级
+- **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
 - **原形归一（两层分工）**：Step 1d `lemmatize_word()` 仅处理**屈折变化**（-ing/-ed/-s），不碰派生词（peaceful 不动），用于去重——确保 `pondered`+`ponder` 在管道入口合并为同一原形。Step 1f COCA 的 `in_coca()` fallback（lemminflect + 后缀剥离）处理**派生归一**（`indulgently`→`indulgent`、`resentfulness`→`resentful`），用于频次匹配——因为 COCA 20000 只收录基础词，不收录所有派生形式。两层互补，各司其职
 - **bookId 桥接**：Anki 卡片 WordId `{lemma}_{bookId}` 天然包含 bookId，用于精确关联微信读书，替代不可靠的书名匹配
@@ -414,3 +386,4 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **不重复造轮**：划线获取复用 weread-skills 的 API 规范；Python 脚本间提取共享 `utils.py` 消除重复代码
 - **故障降级**：音频获取失败不阻塞整体流程；同步超时有明确提示和建议
 - **增量安全**：同步模式只添加不修改，保留学习记录不受影响
+- **IPA 零网络依赖**：Claude 从训练数据直接生成 IPA，SSML `<phoneme>` 合成音频，无外部 IPA API 依赖
