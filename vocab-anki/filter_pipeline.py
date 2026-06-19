@@ -197,6 +197,7 @@ def main():
                 {"lemma": l, "rep": min(lemma_map[l], key=lambda x: (x[0].isupper(), len(x))),
                  "forms": lemma_map[l]}
                 for l in sorted(anki_lemmas)
+                if not l.startswith("__")  # skip meta manifest entries
             ]
         with open(json_out_path, "w", encoding="utf-8") as f:
             json.dump(json_out, f, ensure_ascii=False, indent=2)
