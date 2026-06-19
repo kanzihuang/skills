@@ -192,10 +192,16 @@ python3 -m venv /tmp/vocab-anki-venv
 /tmp/vocab-anki-venv/bin/pip install -q -r <skill_dir>/requirements.txt
 ```
 
-**同步模式——带 120 秒超时：**
+**同步模式——按词数动态超时：**
+
+每词预留 10s（音频生成 ~4s + 上传 ~1s + 余量），下限 120s：
 
 ```bash
-timeout 120 /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
+WORD_COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/vocab-anki-input-<bookId>.json'))['words']))")
+SYNC_TIMEOUT=$(( WORD_COUNT * 10 + 30 ))
+[ "$SYNC_TIMEOUT" -lt 120 ] && SYNC_TIMEOUT=120
+
+timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
   /tmp/vocab-anki-input-<bookId>.json \
   -v
 ```
@@ -211,7 +217,7 @@ timeout 120 /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
 
 **同步超时处理：**
 - 正常完成 → 展示同步结果
-- 超时退出（exit 124）→ 告知用户：「同步脚本超时（120s）。可能原因：网络慢（音频下载卡住）、单词过多、AnkiConnect 响应慢。可尝试加 `--no-audio` 跳过音频，或分批处理。」
+- 超时退出（exit 124）→ 告知用户：「同步脚本超时。可能原因：网络慢（音频下载卡住）、单词过多、AnkiConnect 响应慢。可尝试加 `--no-audio` 跳过音频，或分批处理。」
 - 非零退出码 → 打印 stderr，告知具体错误
 
 **模式判断逻辑：**
@@ -291,7 +297,7 @@ timeout 120 /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
 | AnkiConnect 不可达 | 提示启动 Anki 并安装 AnkiConnect 插件后重试；fallback 到导出 .apkg |
 | 模型不在 Anki 中 | 提示先导入一次 .apkg 建立模型，再进行同步 |
 | 牌组中全是新词 | 全部添加，和首次导出效果一样 |
-| 同步脚本超时（120s） | 提示原因（网络慢/词多/Anki 响应慢），建议 `--no-audio` 或分批 |
+| 同步脚本超时 | 提示原因（网络慢/词多/Anki 响应慢），建议 `--no-audio` 或分批 |
 | 没有新划线生词 | 直接告知用户「没有新的划线生词」，流程自动结束 |
 
 ## 输出
