@@ -98,6 +98,8 @@ Content-Type: application/json
 
 `updated[]` 数组含 `markText`、`chapterUid`、`createTime`；`chapters[]` 含章节标题。
 
+> **Claude 注意**：若 Step 1d 输出 `SUMMARY: 0 highlights → 0 lemmas`，在判定"没有划线"之前先用 `head -c 500` 查看原始 API 响应，确认 `updated` 字段确实存在且为空数组，排除 API 调用失败（如 `$WEREAD_API_KEY` 拼写错误导致认证失败）。
+
 **1d. 筛选 + 原形去重（单次 Python 流水线，不含 COCA，不询问用户）：**
 
 > 此步骤仅做机械提取和去重。COCA 检查延后到 Step 1f（Anki 去重之后）。
@@ -120,6 +122,11 @@ sys.path.insert(0, '<skill_dir>')
 from utils import lemmatize_word
 
 data = json.load(sys.stdin)
+# 校验 API 响应结构：缺少 updated 字段 = API 调用失败（认证错误/bad bookId/网络问题）
+if 'updated' not in data:
+    err_info = data.get('errmsg', '') or data.get('error', '') or f'keys: {list(data.keys())}'
+    print(f'ERROR: API response missing "updated" field — possible auth failure or bad bookId. Response hint: {err_info}', file=sys.stderr)
+    sys.exit(1)
 # 提取所有划线文本
 marks = [h.get('markText','').strip() for h in data.get('updated',[])]
 # 过滤非单词（含空格、纯数字/符号、空、长度=1）
@@ -401,7 +408,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 
 | 情况 | 处理 |
 |------|------|
-| 没有划线 | 提示："这本书暂无划线笔记。先在微信读书中标记生词后再试。" |
+| 没有划线 | 分两种情况：(1) Step 1d 报错退出（stderr 含 `ERROR:`）→ API 响应无效，检查 `$WEREAD_API_KEY` 拼写、bookId 是否正确，重试；(2) Step 1d 正常输出 `SUMMARY: 0 highlights` → 确实没有划线，提示用户在微信读书中标记生词后再试 |
 | 划线全是整句 | 提示："划线看起来是完整句子而非生词。仍然可以生成牌组，是否继续？" |
 | 不认识的书 | 如实告知无法回忆真实例句，提供词典例句替代方案 |
 | 超过 50 个单词 | Claude 直接生成全部内容 + 并发音频（8 线程），一次写入 JSON |
