@@ -194,17 +194,25 @@ python3 -m venv /tmp/vocab-anki-venv
 
 **同步模式——按词数动态超时：**
 
-每词预留 10s（音频生成 ~4s + 上传 ~1s + 余量），下限 120s：
+每词预留 10s（音频生成 ~4s + 上传 ~1s + 余量），下限 120s。
+
+> **执行策略**：同步可能持续数分钟，CLI 前台运行会阻塞对话。词数 ≥30 时 **必须使用 `run_in_background`** 后台运行，避免长时间无响应。完成后读取输出文件展示结果。
+>
+> **进度输出**：使用纯文本 `i/N label` 格式——Claude Code 无法渲染 `\r` 原地进度条，图形 bar 字符无意义。
 
 ```bash
 WORD_COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/vocab-anki-input-<bookId>.json'))['words']))")
 SYNC_TIMEOUT=$(( WORD_COUNT * 10 + 30 ))
 [ "$SYNC_TIMEOUT" -lt 120 ] && SYNC_TIMEOUT=120
 
-timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python <skill_dir>/sync_anki.py \
+# 后台运行（Claude Code Bash tool: run_in_background=true）
+# python -u 确保非 TTY 下进度逐行输出不被缓冲
+PYTHONUNBUFFERED=1 timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <skill_dir>/sync_anki.py \
   /tmp/vocab-anki-input-<bookId>.json \
   -v
 ```
+
+后台任务完成后，读取输出文件展示结果。词数 <30 时可前台运行。
 
 **导出模式：**
 

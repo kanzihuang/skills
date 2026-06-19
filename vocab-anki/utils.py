@@ -262,33 +262,23 @@ def edge_tts_file(
 
 
 # ---------------------------------------------------------------------------
-# Progress bar
+# Progress output (text-only, no graphical bar — Claude Code can't do \r)
 # ---------------------------------------------------------------------------
 
-BAR_WIDTH = 30
+def print_progress_bar(i: int, total: int, label: str = "", width: int = 0):
+    """Print a text progress line.
 
-
-def print_progress_bar(i: int, total: int, label: str = "", width: int = BAR_WIDTH):
-    """Print an in-place progress bar.
-
-    When stdout is a TTY, uses \\r to overwrite the current line for a
-    real-time in-place bar.  When stdout is not a TTY (piped, captured, or
-    running under Claude Code), uses \\n so each update appears as a
-    separate line — this ensures progress is visible in captured output.
+    Uses \\r for in-place update when stdout is a real TTY; appends a newline
+    otherwise (piped / captured / Claude Code).  Plain text format — no
+    graphical bar characters — so output reads cleanly in both environments.
 
     Example output:
-      [████████████░░░░░░░░░░░░░░░░░░]  42% 27/64  word_name
+      13/64  comfort  audio: word✓, sent✓
     """
-    pct = i * 100 // total
-    filled = max(1, i * width // total) if i > 0 else 0
-    bar = "█" * filled + "░" * (width - filled)
+    line = f"  {i}/{total}"
+    if label:
+        line += f"  {label}"
     if sys.stdout.isatty():
-        line = f"\r  [{bar}] {pct:>3}% {i}/{total}"
-        if label:
-            line += f"  {label}"
-        print(line, end="", flush=True)
+        print("\r" + line, end="", flush=True)
     else:
-        line = f"  [{bar}] {pct:>3}% {i}/{total}"
-        if label:
-            line += f"  {label}"
         print(line, flush=True)
