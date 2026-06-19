@@ -191,6 +191,8 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 **执行策略：分批写入，禁止一次性思考全部单词**
 
 > **核心问题**：若试图在 thinking block 中为 50+ 单词逐一回想并验证例句+IPA+释义+翻译，thinking 会持续 2-3 分钟无任何输出。**禁止预先思考全部单词——按批次边写边想，每批写完再想下一批。**
+>
+> **执行铁律**：读完 pipeline 输出后，**立即开始写入第一批**（Python json.dump 或 Write 工具）。不要在写入前在 thinking block 中回忆任何单词的例句——先写出第一批单词的 JSON，写的过程中自然回忆。第一批落地后再想第二批。
 
 **批次规则：**
 - ≤20 词：单批写入
@@ -199,10 +201,21 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 - 60+ 词：分 4+ 批，每批 ~15 词
 - 每批按字母序排列该批单词
 
-**写入流程（每批）：**
-1. 第一批：`Write` 完整 JSON（含 `book_title`/`book_author`/`book_id`/`excluded` + 第一批 `words`）
-2. 后续批次：`Read limit=5` 当前文件 → `Edit` 在 `words` 数组末尾追加新单词（在 `]` 前插入）
-   - 若 Edit 匹配不精确，改用 `Write` 全量覆盖（Read 完整文件后重写）
+**写入流程：**
+
+- **推荐方案（Python json.dump）**：整份 JSON 一次写入——Python 的 `json.dump` 无 Unicode 归一化问题，无需分批。
+  ```bash
+  python3 << 'PYEOF'
+  import json
+  data = { "book_title": "...", ... }
+  with open('/tmp/vocab-anki-input-<bookId>.json', 'w', encoding='utf-8') as f:
+      json.dump(data, f, ensure_ascii=False, indent=2)
+  PYEOF
+  ```
+- **备选方案（Write 工具分批）**：仅当翻译不含中文引号时可用。
+  1. 第一批：`Write` 完整 JSON（含 `book_title`/`book_author`/`book_id`/`excluded` + 第一批 `words`）
+  2. 后续批次：`Read limit=5` 当前文件 → `Edit` 在 `words` 数组末尾追加新单词（在 `]` 前插入）
+     - 若 Edit 匹配不精确，改用 `Write` 全量覆盖（Read 完整文件后重写）
 
 **注意**：第一批之前仍需 `rm -f + touch + Read limit=3` 初始化文件。后续批次只需 Read + Edit/Write。
 
@@ -212,8 +225,17 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 
 **性能说明：**
 - **分批写入是关键性能优化**：每批 ~15-20 词，单批 thinking ~10-15s + 写入 ~2s，总耗时 30-60s（vs 单次思考 2-3 分钟无输出）
-- JSON 写入**必须使用 `Write` 工具**而非 Bash heredoc——Write 直接写文件系统，跳过 shell 缓冲和序列化开销，省 ~10-15s
-- **Write 工具要求文件已被 Read 过**（当前会话上下文中有该文件），否则写入报错。因此第一批写入前需四步：
+- **JSON 写入优先用 Python `json.dump`**：Write 工具可能将中文弯引号（`""`）归一化为 ASCII `"`（U+0022），破坏 JSON 定界符。Python `json.dump` 无此问题，且 `ensure_ascii=False` 保留中文原文。推荐用 Bash heredoc 调用 Python：
+  ```bash
+  python3 << 'PYEOF'
+  import json
+  data = { ... }
+  with open('/tmp/vocab-anki-input-<bookId>.json', 'w', encoding='utf-8') as f:
+      json.dump(data, f, ensure_ascii=False, indent=2)
+  PYEOF
+  ```
+- 若翻译中不含中文引号等特殊字符，仍可用 Write 工具（更快）；否则切到 Python
+- **Write 工具要求文件已被 Read 过**（当前会话上下文中有该文件），否则写入报错。因此第一批写入前需三步（用 Python 可只做 touch + Read）：
   1. `Bash rm -f /tmp/vocab-anki-input-<bookId>.json` — 清理上次运行残留的旧文件，避免 Read 时加载无用的旧 JSON 到上下文
   2. `Bash touch /tmp/vocab-anki-input-<bookId>.json` — 创建空文件
   3. `Read /tmp/vocab-anki-input-<bookId>.json limit=3` — 将会话上下文注册该文件（满足 Write 的前提条件）；空文件仅 3 行，几乎不占上下文
@@ -385,8 +407,8 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 | `utils.py` | 共享工具模块 — lemmatize_word, edge_tts_bytes/file, safe_filename | — | 工具函数 |
 | `sync_anki.py` | 增量同步到 Anki | JSON + AnkiConnect | 直接添加卡片到 Anki |
 | `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
-| `filter_pipeline.py` | 合并过滤流水线 — lemmatize → Anki 去重 → COCA 检查 | WeRead API JSON (stdin) | 过滤结果 (stdout) + 结构化 JSON (--json-out) |
-| `coca_lookup.py` | COCA 20000 高频词查询 — 直接 set 查找 + lemminflect/后缀剥离兜底做派生归一（`indulgently`→`indulgent`） | 单词 → set 查找 + lemminflect + 后缀剥离 | 是否在 COCA 前 20000 词中 |
+| `filter_pipeline.py` | 合并过滤流水线 — 标点/大小写清理 → lemmatize → Anki 去重 → COCA 检查。自动剥离句边界标点（`vexed.`→`vexed`）并归一化非全大写词为小写（`Clad`→`clad`） | WeRead API JSON (stdin) | 过滤结果 (stdout) + 结构化 JSON (--json-out) |
+| `coca_lookup.py` | COCA 20000 高频词查询 — 直接 set 查找 + lemminflect（仅接受原形严格短于输入词的映射，如 `pondered`→`ponder`；同长映射如 `abode`→`abide` 被拒，避免名词误映射到无关动词）+ 后缀剥离兜底做派生归一（`indulgently`→`indulgent`） | 单词 → set 查找 + lemminflect + 后缀剥离 | 是否在 COCA 前 20000 词中 |
 | `coca_20000.txt` | COCA 20000 词表数据 | — | 17,640 个唯一 lemma |
 
 ## 设计原则
@@ -396,6 +418,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
 - **原形归一（两层分工）**：Step 1d `lemmatize_word()` 仅处理**屈折变化**（-ing/-ed/-s），不碰派生词（peaceful 不动），用于去重——确保 `pondered`+`ponder` 在管道入口合并为同一原形。Step 1f COCA 的 `in_coca()` fallback（lemminflect + 后缀剥离）处理**派生归一**（`indulgently`→`indulgent`、`resentfulness`→`resentful`），用于频次匹配——因为 COCA 20000 只收录基础词，不收录所有派生形式。两层互补，各司其职
+  - `in_coca()` 的 lemminflect 仅接受原形**严格短于**输入词的映射（`len(l) < len(w)`）。同长映射（`abode`→`abide`）被拒——同长不规则变化（如 `ran`→`run`、`sat`→`sit`）同为已知限制，但这些词属基础词汇，实际划线中极少出现。不同长不规则变化（`went`→`go`、`bought`→`buy`）正常通过
 - **bookId 桥接**：Anki 卡片 WordId 天然包含 bookId（`{lemma}_{bookId}`），meta manifest 卡片格式固定（`__META__{bookId}`），用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断
 - **不重复造轮**：划线获取复用 weread-skills 的 API 规范；Python 脚本间提取共享 `utils.py` 消除重复代码

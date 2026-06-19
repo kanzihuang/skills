@@ -69,7 +69,14 @@ def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
     if w in coca_lemmas:
         return True, f"{w}"
 
-    # Try lemmatization
+    # Try lemmatization — only accept if the lemma is strictly shorter
+    # (suffix removal). Same-length mappings (abode→abide, ran→run) are
+    # irregular stem changes that lemminflect can't verify without POS
+    # context; same-length VERB mappings to unrelated lemmas cause false
+    # positives (abode n.住所 → abide v.忍受).
+    # Same-length irregular verbs (ran→run, sat→sit) are basic vocabulary
+    # that users rarely highlight; the rarer longer→shorter forms
+    # (went→go, bought→buy) are caught by lemmatize_word().
     try:
         import lemminflect  # type: ignore
 
@@ -77,7 +84,7 @@ def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
             lemmas = lemminflect.getLemma(w, upos=pos)
             for lemma in lemmas:
                 l = lemma.lower()
-                if l in coca_lemmas:
+                if len(l) < len(w) and l in coca_lemmas:
                     return True, f"{w} -> {l}"
     except ImportError:
         pass

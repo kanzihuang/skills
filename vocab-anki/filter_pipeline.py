@@ -16,9 +16,47 @@ Output sections:
 """
 
 import json
+import re
 import sys
 import os
 from typing import Optional
+
+# Characters stripped from word boundaries — sentence-boundary punctuation
+# that can never be part of an English word. Excludes apostrophe (contractions
+# like don't) and hyphen (compounds like well-known).
+_PUNCT_STRIP = '.,;:!?()[]{}«»"\'""''…—–、。，；：！？』『「」 \t\n\r\v'
+
+
+def clean_mark(text: str) -> str:
+    """Strip surrounding punctuation and whitespace from a highlight mark.
+
+    Users often highlight a word plus trailing period/comma/quote.
+    This removes those artifacts while preserving internal punctuation
+    (apostrophes in contractions, hyphens in compounds).
+    """
+    return text.strip(_PUNCT_STRIP)
+
+
+def pick_rep(forms: list[str]) -> str:
+    """Pick the best surface form for display: shortest lowercase form.
+
+    Prefers lowercase over capitalized (e.g. "clad" over "Clad"),
+    normalizes to lowercase unless the word is an all-caps acronym.
+    """
+    # Pick shortest form preferring lowercase first-char over uppercase
+    best = None
+    for f in forms:
+        if best is None:
+            best = f
+        elif f[0].isupper() and not best[0].isupper():
+            continue  # lowercase best beats uppercase f
+        elif not f[0].isupper() and best[0].isupper():
+            best = f  # lowercase f beats uppercase best
+        elif len(f) < len(best):
+            best = f  # same case class, pick shorter
+    if best and not best.isupper():
+        best = best.lower()
+    return best or forms[0].lower()
 
 sys.path.insert(0, os.path.dirname(__file__))
 from utils import lemmatize_word
@@ -129,7 +167,8 @@ def main():
         sys.exit(1)
 
     # Step 1d: Extract, filter, lemmatize
-    marks = [h.get("markText", "").strip() for h in data.get("updated", [])]
+    # clean_mark strips sentence-boundary punctuation (e.g. "vexed." → "vexed")
+    marks = [clean_mark(h.get("markText", "")) for h in data.get("updated", [])]
     words_raw = [m for m in marks if m and " " not in m and not m.isdigit() and len(m) > 1]
     lemma_map: dict[str, list[str]] = {}
     for w in words_raw:
@@ -163,7 +202,7 @@ def main():
     rejected = []
     for lemma in lemmas_after_anki:
         forms = lemma_map[lemma]
-        rep = min(forms, key=lambda x: (x[0].isupper(), len(x)))
+        rep = pick_rep(forms)
         ok, detail = in_coca(lemma, coca_set)
         if ok:
             passed.append((lemma, rep, forms))
@@ -195,13 +234,13 @@ def main():
             print("---ANKI_SKIPPED---")
             for lemma in sorted(anki_skipped_cards):
                 forms = lemma_map[lemma]
-                rep = min(forms, key=lambda x: (x[0].isupper(), len(x)))
+                rep = pick_rep(forms)
                 print(f"{lemma}\t{rep}\t{','.join(forms)}")
         if anki_skipped_meta:
             print("---META_EXCLUDED---")
             for lemma in sorted(anki_skipped_meta):
                 forms = lemma_map[lemma]
-                rep = min(forms, key=lambda x: (x[0].isupper(), len(x)))
+                rep = pick_rep(forms)
                 print(f"{lemma}\t{rep}\t{','.join(forms)}")
 
     # --- JSON output (structured, for Claude to avoid manual transcription) ---
@@ -231,7 +270,7 @@ def main():
                     continue  # skip meta entries + stale excluded words no longer in highlights
                 anki_skipped_json.append({
                     "lemma": l,
-                    "rep": min(lemma_map[l], key=lambda x: (x[0].isupper(), len(x))),
+                    "rep": pick_rep(lemma_map[l]),
                     "forms": lemma_map[l],
                 })
             if anki_skipped_json:
@@ -243,7 +282,7 @@ def main():
                     continue  # stale meta entries no longer in current highlights
                 meta_excluded_json.append({
                     "lemma": l,
-                    "rep": min(lemma_map[l], key=lambda x: (x[0].isupper(), len(x))),
+                    "rep": pick_rep(lemma_map[l]),
                     "forms": lemma_map[l],
                 })
             if meta_excluded_json:
