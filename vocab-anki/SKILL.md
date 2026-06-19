@@ -152,30 +152,26 @@ python3 <skill_dir>/coca_lookup.py word1 word2 word3 ...
 - **不要重新创作**：翻译的目的是辅助理解英文原句，不是独立的中文美文
 
 **IPA 规则：**
-- 若知道该词在上下文中的正确 IPA → 填写。脚本会直接用 SSML 合成音频，跳过 Free Dictionary API
-- 若不确定或词无歧义 → 留空 `""`，脚本自动从 Free Dictionary API 获取
-- 特别对同形异音词（heteronym，如 `intimate` 形容词 /ˈɪntɪmət/ vs 动词 /ˈɪntɪmeɪt/），必须根据释义填入正确 IPA
+- **必须为每个单词提供 IPA**——Claude 可从训练数据直接输出音标，无需外部 API
+- 提供 IPA 后脚本用 SSML `<phoneme>` 合成单词音频，完全跳过 Free Dictionary API（省去每词 ~0.5-2s 的网络请求 + `API_DELAY`）
+- Free Dictionary API 仅作为脚本端兜底（IPA 缺失时），正常情况下不触发
+- 对同形异音词（heteronym，如 `intimate` 形容词 /ˈɪntɪmət/ vs 动词 /ˈɪntɪmeɪt/），必须根据释义填入正确 IPA
 
 **释义审查：**
 - 在 COCA 表中的单词，判断释义是否为罕见用法（古英语义、专业术语、已淘汰的表达）。若罕见 → 不收录
 - 若书中没有合适的例句 → 不收录
 
-**执行策略——按单词数量选择：**
+**执行策略：**
 
-- **C < 20 词**：主流程直接逐词生成内容，写入 JSON
-- **C ≥ 20 词**：使用多代理并行生成。按 20 词/代理 拆分为 N 批，用 `Agent` 工具同时启动 N 个子代理。每个子代理的 prompt 包含：
-  - 书籍信息（book_title, book_author, bookId）
-  - 该批次的单词列表（word + lemma/original form 对照，JSON 数组）
-  - 完整的生成规则（例句规则、翻译原则、IPA 规则、释义审查）
-  - 输出要求：返回严格 JSON 数组，每项含 `word`, `sentence`, `ipa`, `definition_cn`, `translation_cn`
-  - 提示：这是 The Little Prince 等名著的英文版，必须给出书中真实句子
-
-  收集所有代理结果后，合并 `words` 数组（按字母排序），写入 `/tmp/vocab-anki-input-<bookId>.json`。
+- 所有单词由 Claude 在单次响应中直接生成全部内容（IPA、例句、释义、翻译），按字母序写入 JSON 文件
+- **不再使用 SubAgent**：SubAgent 启动慢（权限确认、模型初始化），常误触发 WebSearch 浪费额度，多个 agent 的协调开销远超串行生成的实际耗时
+- 对于知名英文书（The Little Prince、Harry Potter 等），Claude 直接从训练数据回忆书中真实例句
+- 对于不熟悉的书籍：用 `WebFetch` 一次性获取书中段落辅助定位句子，仍由 Claude 直接生成全部内容
 
 **完成后：**构建 JSON 写入 `/tmp/vocab-anki-input-<bookId>.json`：
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）
 - `book_id` 为微信读书 bookId
-- `ipa` 可为空（脚本自动从 Free Dictionary API 获取），若填写则脚本用 SSML 合成音频
+- `ipa` 为必填（Claude 直接提供）；脚本用 SSML `<phoneme>` 合成音频，跳过 Free Dictionary API
 - `excluded` 数组记录未收录的单词及原因
 - **此步骤不展示样卡，不询问用户**
 
@@ -317,7 +313,7 @@ timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <skill_dir>/sync_anki.p
 | 没有划线 | 提示："这本书暂无划线笔记。先在微信读书中标记生词后再试。" |
 | 划线全是整句 | 提示："划线看起来是完整句子而非生词。仍然可以生成牌组，是否继续？" |
 | 不认识的书 | 如实告知无法回忆真实例句，提供词典例句替代方案 |
-| 超过 50 个单词 | 多代理并行（每批 ~20 词）+ 并发音频（8 线程），大批量也能高效完成 |
+| 超过 50 个单词 | Claude 直接生成全部内容 + 并发音频（8 线程），一次写入 JSON |
 | 脚本运行失败 | 检查依赖安装、网络连接，打印错误信息 |
 | 词典 API 不可用 | 脚本自动 fallback 到 Edge TTS + SSML，无音频时生成纯文本版本 |
 | `WEREAD_API_KEY` 未设置 | 提示用户设置：`export WEREAD_API_KEY=<your-key>` |
@@ -353,7 +349,7 @@ timeout $SYNC_TIMEOUT /tmp/vocab-anki-venv/bin/python -u <skill_dir>/sync_anki.p
 
 - **职责分离**：Claude 做知识工作（理解语境、翻译），Python 做机械工作（HTTP、TTS、打包、同步）
 - **过滤前置**：COCA 频次检查和 Anki 去重在生成内容**之前**完成，避免浪费 Claude 精力
-- **并行加速**：大量单词时多代理并行生成内容（Step 3）+ 多线程并发下载音频（Step 3.5），将 10 分钟流程压缩到 ~1 分钟
+- **音频并发**：多线程（8 workers）并发下载音频（Step 3.5），将音频生成压缩到秒级
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
 - **原形归一**：去重和筛选阶段即提前还原原形（`bewildered`→`bewilder`），确保同一原形的不同词形（如 `pondered` + `ponder`）在管道入口就合并，不会生成重复卡片。卡片词、WordId、API 查询均用原形，例句保留原文词形。仅处理屈折变化（-ing/-ed/-s），派生词（peaceful）不动
 - **bookId 桥接**：Anki 卡片 WordId `{lemma}_{bookId}` 天然包含 bookId，用于精确关联微信读书，替代不可靠的书名匹配

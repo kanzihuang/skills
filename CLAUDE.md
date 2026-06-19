@@ -55,7 +55,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **bookId bridging**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English)
 - **Single confirmation**: only one user prompt at the end (before sync/export); intermediate steps report progress without asking
 - **Cross-book independence**: same word from different books coexists as independent cards via WordId
-- **IPA-priority audio**: JSON-provided IPA → SSML synthesis; otherwise Free Dictionary API → Edge TTS + SSML fallback. Sentence audio always Edge TTS (context-aware)
+- **IPA-priority audio**: Claude always provides IPA → SSML `<phoneme>` synthesis (instant, no network); Free Dictionary API is script-side fallback only
 - **Graceful degradation**: audio failures don't block card generation
 - **Incremental safety**: sync mode only adds, never modifies existing cards
 - **Per-word timeout**: each word has a 30s timeout (`--word-timeout` flag); on timeout the word is skipped and sync continues; 3 consecutive timeouts abort the sync with a summary of failed words
