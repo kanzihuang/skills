@@ -41,7 +41,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 |--------|---------|
 | `utils.py` | Shared utilities: safe_filename, fetch_word_data, lemmatize_word, edge_tts_bytes/file, constants |
 | `generate_apkg.py` | Generate standalone `.apkg` file with embedded audio |
-| `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress, per-word timeout with `--word-timeout`) |
+| `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress, per-word timeout with `--word-timeout`, auto-creates suspended meta manifest card for excluded words) |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client library |
 | `coca_lookup.py` | COCA 20000 frequency check with CLI batch mode |
 | `coca_20000.txt` | COCA 20000 lemma list (17,640 entries) |
@@ -50,7 +50,8 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 
 **Design principles:**
 - **Separation of concerns**: knowledge work (Claude) vs mechanical work (Python)
-- **Filter-first**: COCA frequency check and Anki dedup happen BEFORE Claude generates content, avoiding wasted effort
+- **Filter-first**: all mechanical filtering (Anki dedup, COCA frequency check) happens BEFORE Claude generates content, avoiding wasted effort
+- **Anki-before-COCA**: Anki dedup runs before COCA frequency check. Words already in Anki are preserved regardless of COCA frequency changes; COCA only filters truly new words
 - **Lemma-first dedup**: lemmatizes all highlighted words BEFORE dedup and filtering, so inflected forms (`pondered`, `bewildered`) collapse to their lemma at the pipeline entry point. Card word, WordId, and API lookup all use lemma. Only inflectional (-ing/-ed/-s), not derivational (peaceful untouched)
 - **bookId bridging**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English)
 - **Single confirmation**: only one user prompt at the end (before sync/export); intermediate steps report progress without asking
@@ -58,11 +59,13 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **IPA-priority audio**: Claude always provides IPA → SSML `<phoneme>` synthesis (instant, no network); Free Dictionary API is script-side fallback only
 - **Graceful degradation**: audio failures don't block card generation
 - **Incremental safety**: sync mode only adds, never modifies existing cards
+- **Meta manifest card**: one suspended card per book (`WordId = __META__{bookId}`) stores cumulative COCA-excluded words; read on subsequent syncs to skip known excluded words instantly
+- **No WebFetch for well-known books**: Claude recalls real sentences from training data for well-known books (The Little Prince, Harry Potter, etc.); WebFetch/WebSearch is only for unfamiliar books
 - **Per-word timeout**: each word has a 30s timeout (`--word-timeout` flag); on timeout the word is skipped and sync continues; 3 consecutive timeouts abort the sync with a summary of failed words
 - **Text progress output**: plain text progress `i/N label` (in-place `\r` on real TTY, line-by-line when piped/captured; no `-v` needed); no graphical bar characters since Claude Code can't render `\r`; verbose mode adds audio source details and byte counts; media upload progress shown in same format
 - **Background execution for large syncs**: when word count ≥30, run sync in background (`run_in_background: true`) with `python -u` (unbuffered) to avoid blocking the conversation for several minutes; read the output file after completion to show results
 - **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`
-- **Merged filter pipeline**: word extraction, lemmatization, dedup, and COCA lookup run in a single Python pipeline call — one Bash invocation instead of three
+- **Three-stage filter pipeline**: Step 1d lemmatize → Step 1e Anki dedup → Step 1f COCA check. Anki result feeds COCA; COCA only runs on words not already in deck
 - **Write tool for JSON**: Step 3 JSON output uses `Write` tool (not Bash heredoc) — skips shell buffering overhead; precede with `Bash touch` to create the file when it doesn't exist
 
 ## Integration
