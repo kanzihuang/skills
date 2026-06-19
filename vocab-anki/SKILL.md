@@ -51,7 +51,7 @@ wait
 ```
 
 若 AnkiConnect 可达：
-- **全库 0 张 "Vocabulary Card (WeRead)" 笔记** → Step 2 直接得 A=0，**不查 Anki**。
+- **全库 0 张 "Vocabulary Card (WeRead)" 笔记** → Step 1e 直接得 A=0，**不查 Anki**。
 - 若有卡片 → 对每个使用 "Vocabulary Card (WeRead)" 模型的牌组，取一张卡片的 `WordId` 字段（格式 `{lemma}_{bookId}`），解析出 `bookId`。形成映射表：
 
 ```
@@ -98,9 +98,9 @@ Content-Type: application/json
 
 `updated[]` 数组含 `markText`、`chapterUid`、`createTime`；`chapters[]` 含章节标题。
 
-**1d. 筛选、原形去重 + COCA 批量检查（合并为单次 Python 流水线，不询问用户）：**
+**1d. 筛选 + 原形去重（单次 Python 流水线，不含 COCA，不询问用户）：**
 
-> 此步骤在 Claude 做任何知识工作**之前**完成，仅做机械过滤。单次 Bash 调用完成：提取划线 → 过滤非单词 → 还原原形 → 去重 → COCA 检查，一次返回所有结果。
+> 此步骤仅做机械提取和去重。COCA 检查延后到 Step 1f（Anki 去重之后）。
 
 ```bash
 # 确保 venv 存在（仅首次）
@@ -109,7 +109,7 @@ if [ ! -d <skill_dir>/.venv ]; then
     <skill_dir>/.venv/bin/pip install -q -r <skill_dir>/requirements.txt
 fi
 
-# 合并流水线：原形去重 + COCA 检查，一次性完成
+# 提取划线 → 过滤 → 原形去重（不含 COCA）
 curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
   -H "Authorization: Bearer $WEREAD_API_KEY" \
   -H "Content-Type: application/json" \
@@ -118,7 +118,6 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 import sys, json
 sys.path.insert(0, '<skill_dir>')
 from utils import lemmatize_word
-from coca_lookup import load_coca, in_coca
 
 data = json.load(sys.stdin)
 # 提取所有划线文本
@@ -132,20 +131,58 @@ for w in words_raw:
     if lemma not in lemma_map:
         lemma_map[lemma] = []
     lemma_map[lemma].append(w)
-# COCA 检查 + 汇总（coca 词表只加载一次；以原形查询，与原形归一原则一致）
-coca_set = load_coca()
-passed = []   # COCA 通过
-rejected = [] # COCA 排除
+# 输出
+print(f'SUMMARY: {len(marks)} highlights → {len(lemma_map)} lemmas')
+print('---ALL_LEMMAS---')
 for lemma in sorted(lemma_map.keys()):
-    ok, _ = in_coca(lemma, coca_set)
     forms = lemma_map[lemma]
     rep = min(forms, key=lambda x: (x[0].isupper(), len(x)))
+    print(f'{lemma}\t{rep}\t{\",\".join(forms)}')
+"
+```
+
+输出：`SUMMARY:` 行 + `---ALL_LEMMAS---` 表（lemma \t rep \t forms）。Claude 解析后用于下一步。
+
+**1e. Anki 去重（先于 COCA，基于原形，不询问用户）：**
+
+> 输入为 Step 1d 输出的**全部**原形列表。Anki 去重先于 COCA 执行——已在牌组中的词直接跳过，不再受 COCA 影响。
+
+- **若 Step 0b 已确认全库 0 张 Vocabulary Card (WeRead) 笔记 → 直接 A=0，跳过本步骤。**
+- 否则：
+  1. **先读 meta manifest**：查 `WordId = __META__{bookId}` → 解析 `excluded` 获取历史排除词
+  2. 查目标牌组已有卡片 WordId（格式 `{lemma}_{bookId}`），匹配则跳过
+- 输出 Anki 去重后的剩余原形列表，供 Step 1f 做 COCA 检查
+
+**1f. COCA 批量检查（Anki 去重之后，不询问用户）：**
+
+> 仅对 Step 1e Anki 去重后**剩余**的原形做 COCA 检查。已在牌组中的词不参与 COCA。
+
+```bash
+# COCA 检查：从 stdin 读取原形列表（每行 lemma\trep\tforms），输出 IN_COCA / EXCLUDED
+echo '<TAB_SEPARATED_LEMMA_LIST>' | \
+<skill_dir>/.venv/bin/python3 -c "
+import sys, json
+sys.path.insert(0, '<skill_dir>')
+from coca_lookup import load_coca, in_coca
+
+coca_set = load_coca()
+passed = []
+rejected = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    lemma = parts[0]
+    rep = parts[1]
+    forms_str = parts[2] if len(parts) > 2 else rep
+    ok, _ = in_coca(lemma, coca_set)
     if ok:
-        passed.append((lemma, rep, forms))
+        passed.append((lemma, rep, forms_str.split(',')))
     else:
         rejected.append((lemma, rep, '不在 COCA 20000 中'))
-# 输出
-print(f'SUMMARY: {len(marks)} highlights → {len(lemma_map)} lemmas → {len(passed)} in COCA → {len(rejected)} excluded')
+
+print(f'SUMMARY: {len(passed)} in COCA → {len(rejected)} excluded')
 print('---IN_COCA---')
 for lemma, rep, forms in passed:
     print(f'{lemma}\t{rep}\t{\",\".join(forms)}')
@@ -155,31 +192,21 @@ for lemma, rep, reason in rejected:
 "
 ```
 
-输出分为三段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表。Claude 解析后直接使用。
+输出分为三段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表。
 
-### Step 2: Anki 去重（基于原形，生成内容之前，不询问用户）
+**Step 1 汇总（仅数字，不确认）：**
 
-> 输入为 Step 1d 输出的 COCA 通过的原形列表。
-
-**若 Step 0b 已确认全库 0 张 Vocabulary Card (WeRead) 笔记 → 直接 A=0，跳过本步骤。**
-
-否则（已有牌组）：
-1. **先读 meta manifest**：查牌组中 `WordId = __META__{bookId}` 的元数据卡片，解析 `excluded` 字段获取历史排除词，直接跳过
-2. 查目标牌组已有卡片：WordId 格式为 `{lemma}_{bookId}`，用原形列表精确匹配已在牌组中的词，直接跳过
-
-> meta manifest 卡片（一张/书）存储所有历史排除词，暂停不显示。每次同步自动更新，下次同步优先读它，避免重复处理已知排除词。
-
-**输出汇总（仅数字，不确认）：**
+> Step 1d → 1e → 1f 连续执行，中间不暂停、不询问用户。
 
 ```
 划线 X 条 → 原形去重 Y 个 → Anki 已有 A 个 → COCA 排除 B 个 → 待生成内容 C 个
 ```
 
-> COCA 查本地文本文件（毫秒级），Anki 查 localhost（毫秒级），每次实时查询即可，无需缓存。
+> Anki 去重先于 COCA：已在牌组中的词直接保留，不受 COCA 频次影响。COCA 仅对真正的新词做筛。所有检查均为本地/本地网络查询（毫秒级），无需缓存。
 
 ### Step 3: 生成内容（Claude 知识工作，范围收窄）
 
-仅对 Step 2 筛出的 C 个单词生成内容。对每个单词提供：
+仅对 Step 1 筛出的 C 个单词生成内容。对每个单词提供：
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
@@ -410,7 +437,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 ## 设计原则
 
 - **职责分离**：Claude 做知识工作（理解语境、翻译），Python 做机械工作（HTTP、TTS、打包、同步）
-- **过滤前置**：COCA 频次检查和 Anki 去重在生成内容**之前**完成，避免浪费 Claude 精力
+- **过滤前置**：Anki 去重和 COCA 频次检查在生成内容**之前**完成，避免浪费 Claude 精力。Anki 去重先于 COCA：已在牌组中的词不受 COCA 频次变化影响
 - **音频并发**：多线程（8 workers）并发下载音频（Step 3.5），将音频生成压缩到秒级
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
 - **原形归一**：去重和筛选阶段即提前还原原形（`bewildered`→`bewilder`），确保同一原形的不同词形（如 `pondered` + `ponder`）在管道入口就合并，不会生成重复卡片。卡片词、WordId、API 查询均用原形，例句保留原文词形。仅处理屈折变化（-ing/-ed/-s），派生词（peaceful）不动
