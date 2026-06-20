@@ -415,7 +415,7 @@ def sync(
         meta_manifest = _read_meta_manifest(ac, deck_name, book_id)
         prev_excluded: set[str] = set()
         if meta_manifest:
-            prev_excluded = set(meta_manifest.get("excluded", {}).keys())
+            prev_excluded = set(meta_manifest.get("excluded", []))
             if prev_excluded:
                 print(f"  Meta manifest: {len(prev_excluded)} previously excluded words")
 
