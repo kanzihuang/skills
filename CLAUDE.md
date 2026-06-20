@@ -33,7 +33,7 @@ Generate weekly work reports from daily reports. Categorizes similar tasks acros
 Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book highlights.
 
 **Architecture:** Claude ↔ Python two-phase design:
-- **Claude**: knowledge work — recalls real book sentences for each highlighted word, provides Chinese definitions, translations, and IPA
+- **Claude**: knowledge work — extracts sentences from web-sourced book text (Step 3.0), provides Chinese definitions, translations, and IPA
 - **Python**: mechanical work — lemmatizes words, generates word/sentence TTS via Edge TTS, syncs to Anki via AnkiConnect
 
 **Scripts:**
@@ -61,14 +61,14 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **Graceful degradation**: audio failures don't block card generation
 - **Incremental safety**: sync mode only adds, never modifies existing cards
 - **Meta manifest card**: one suspended card per book (`WordId = __META__{bookId}`) stores cumulative COCA-excluded words; read on subsequent syncs to skip known excluded words instantly
-- **No WebFetch for well-known books**: Claude recalls real sentences from training data for well-known books (The Little Prince, Harry Potter, etc.); WebFetch/WebSearch is only for unfamiliar books
+- **Source text retrieval (Step 3.0)**: sentences are extracted from web-sourced book text via mechanical word matching — no longer rely on Claude recall. Eliminates fabricated sentences (e.g., attributing a word to the wrong passage). Falls back to recall mode only when source text is unavailable, with explicit disclaimer in Step 4 summary
 - **Per-word timeout**: each word has a 30s timeout (`--word-timeout` flag); on timeout the word is skipped and sync continues; 3 consecutive timeouts abort the sync with a summary of failed words
 - **Text progress output**: plain text progress `i/N label` (in-place `\r` on real TTY, line-by-line when piped/captured; no `-v` needed); no graphical bar characters since Claude Code can't render `\r`; verbose mode adds audio source details and byte counts; media upload progress shown in same format
 - **Background execution for large syncs**: when word count ≥30, run sync in background (`run_in_background: true`) with `python -u` (unbuffered) to avoid blocking the conversation for several minutes; read the output file after completion to show results
 - **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`
 - **Single-pass filter pipeline**: Step 1 runs `filter_pipeline.py` — one Python invocation that pipelines lemmatize → Anki dedup → COCA check. All data flows through stdin/stdout between processes; Claude never carries tab-separated word lists in echo commands. Eliminates the prior ~33s Claude round-trip overhead (capture output → regenerate as echo → re-parse) down to ~0.5s
 - **JSON output via Python json.dump**: Step 3 JSON output prefers Python `json.dump` over `Write` tool — avoids Unicode quote normalization issues (Write tool may normalize Chinese curly quotes `""` to ASCII `"`, breaking JSON). Python `json.dump` with `ensure_ascii=False` preserves Chinese text correctly. Fallback to Write tool only when translations contain no special Unicode quotes
-- **Batched content generation**: for >20 words, write JSON in batches of ~15-20 words using Python json.dump (preferred) or `Edit` to append to the `words` array. First batch: full JSON skeleton + first batch. Subsequent batches: `Read limit=5` → `Edit` appends new words before `  ],\n  "excluded"`. **Critical**: start writing immediately after pipeline output — do NOT pre-think all words in a thinking block before writing. Think only about the current batch's words, write them, then move to next batch. Prevents massive thinking blocks (2-3 min zero output trying to recall all sentences at once); per-batch thinking ~10-15s, total ~30-60s
+- **Batched content generation**: for >20 words, write JSON in batches of ~15-20 words using Python json.dump (preferred) or `Edit` to append to the `words` array. First batch: full JSON skeleton + first batch. Subsequent batches: `Read limit=5` → `Edit` appends new words before `  ],\n  "excluded"`. **Critical**: after pipeline output, first run Step 3.0 to fetch source text and mechanically extract all sentences. Then write JSON with pre-extracted sentences — no recall needed. Batch writing focuses on IPA + definitions + translations only; per-batch ~5-8s, total ~15-30s
 
 ## Integration
 

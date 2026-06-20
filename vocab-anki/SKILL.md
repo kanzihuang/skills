@@ -149,9 +149,43 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 
 > Anki 去重先于 COCA：已在牌组中的词直接保留，不受 COCA 频次影响。历史排除词（存储在 meta manifest 中）也跳过，不再重复 COCA 检查。COCA 仅对真正的新词做筛。所有检查均为本地/本地网络查询（~0.5s），无需缓存。
 
+### Step 3.0: 获取源文本（句子检索替代回忆）
+
+> **核心改进**：回忆式例句生成不可靠——即使对知名书，具体到每个词在哪个句子里也常出错。改为从网上拉取书中实际文本，机械匹配每个生词所在句子，**彻底消除编造风险**。
+
+**3.0a. 搜索源文本：**
+
+WebSearch `<英文书名> full text` 或 `<英文书名> <作者> full text`。优先选 Project Gutenberg、Standard Ebooks 等公版书站点。
+
+**3.0b. 拉取源文本（1-2 次 WebFetch）：**
+
+WebFetch 全书文本。若一次拉不完 → 按 Step 1 中划线最多的章节优先拉取。
+
+**3.0c. 句子匹配（替换回忆）：**
+
+对每个待生成单词，在源文本中搜索该词（大小写不敏感）→ 提取所在完整句子。
+
+- **匹配到** → 该句即为 `sentence` 字段内容，用 `<b>` 包裹目标词
+- **未匹配到**（源文本不全/翻译版本不同）→ 仅该词回退到回忆模式，标记 `⚠️`
+
+**3.0d. 版本校验（1 次快速检查）：**
+
+源文本中搜一句书中知名台词（如《小王子》搜 `wasted for your rose`）：
+- 匹配到 → 版本一致
+- 未匹配 → 版本可能不同，但仍以源文本句子为准（比回忆可靠）
+
+**3.0e. 截断长句：**
+
+若提取的句子 >150 字符 → 保留核心分句，用 `…` 连接上下文。优先保留包含生词的主谓结构。
+
+**源文本获取失败时：**
+- WebSearch/WebFetch 均无法获取 → 回退到回忆模式，Step 4 汇总中标明「源文本不可用，例句未校验」
+
+**完成后进入 Step 3**——句子已从源文本提取，Claude 仅需提供 IPA + 释义 + 翻译。
+
 ### Step 3: 生成内容（Claude 知识工作，范围收窄）
 
-仅对 Step 1 筛出的 C 个单词生成内容。对每个单词提供：
+仅对 Step 1 筛出的 C 个单词生成内容。句子已在 Step 3.0 从源文本提取，此步骤聚焦 IPA、释义、翻译。对每个单词提供：
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
@@ -190,7 +224,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 
 > **核心问题**：若试图在 thinking block 中为 50+ 单词逐一回想并验证例句+IPA+释义+翻译，thinking 会持续 2-3 分钟无任何输出。**禁止预先思考全部单词——按批次边写边想，每批写完再想下一批。**
 >
-> **执行铁律**：读完 pipeline 输出后，**立即开始写入第一批**（Python json.dump 或 Write 工具）。不要在写入前在 thinking block 中回忆任何单词的例句——先写出第一批单词的 JSON，写的过程中自然回忆。第一批落地后再想第二批。
+> **执行铁律**：读完 pipeline 输出后，**先执行 Step 3.0 拉取源文本**，从源文本中机械匹配所有单词的句子。然后在写入 JSON 时直接填入已提取的句子。不要在 thinking block 中回忆例句——句子已从源文本检索到。
 
 **批次规则：**
 - ≤20 词：单批写入
@@ -218,8 +252,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 **注意**：第一批之前仍需 `rm -f + touch + Read limit=3` 初始化文件。后续批次只需 Read + Edit/Write。
 
 - **不再使用 SubAgent**：SubAgent 启动慢（权限确认、模型初始化），常误触发 WebSearch 浪费额度，多个 agent 的协调开销远超串行生成的实际耗时
-- **知名书禁止 WebFetch/WebSearch**：对于 Claude 训练数据中充分覆盖的知名英文书（The Little Prince、Harry Potter、Animal Farm、1984、Pride and Prejudice、Charlotte's Web 等），**严禁使用 WebFetch 或 WebSearch**——直接从训练数据回忆书中真实例句。查外部资源只会浪费时间，且 WebFetch 可能被网络策略拦截导致流程卡死
-- 对于不熟悉的书籍：如 Claude 确实无法从训练数据回忆该书的句子，**仅此时**才用 `WebFetch` 一次性获取书中段落辅助定位
+- **句子来源**：所有书的例句均通过 Step 3.0 从源文本机械提取，不再依赖 Claude 回忆。源文本不可用时回退到回忆模式，并在 Step 4 汇总中标明
 
 **性能说明：**
 - **分批写入是关键性能优化**：每批 ~15-20 词，单批 thinking ~10-15s + 写入 ~2s，总耗时 30-60s（vs 单次思考 2-3 分钟无输出）
@@ -382,7 +415,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 |------|------|
 | 没有划线 | 分两种情况：(1) Step 1d 报错退出（stderr 含 `ERROR:`）→ API 响应无效，检查 `$WEREAD_API_KEY` 拼写、bookId 是否正确，重试；(2) Step 1d 正常输出 `SUMMARY: 0 highlights` → 确实没有划线，提示用户在微信读书中标记生词后再试 |
 | 划线全是整句 | 提示："划线看起来是完整句子而非生词。仍然可以生成牌组，是否继续？" |
-| 不认识的书 | 如实告知无法回忆真实例句，提供词典例句替代方案 |
+| 源文本不可用 | WebSearch/WebFetch 均无法获取书中文本 → 回退到回忆模式，Step 4 汇总中标明「例句未校验」；若回忆也不确定，使用词典例句替代 |
 | 超过 50 个单词 | Claude 直接生成全部内容 + 并发音频（8 线程），一次写入 JSON |
 | 脚本运行失败 | 检查依赖安装、网络连接，打印错误信息 |
 | 音频生成失败 | Edge TTS 不可用时自动跳过音频，生成纯文本卡片 |
@@ -412,7 +445,8 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 
 ## 设计原则
 
-- **职责分离**：Claude 做知识工作（理解语境、翻译、IPA），Python 做机械工作（HTTP、TTS、同步）
+- **职责分离**：Claude 做知识工作（理解语境、翻译、IPA），Python 做机械工作（HTTP、TTS、同步）。句子提取由 Step 3.0 源文本检索完成，不依赖 Claude 回忆
+- **源文本检索替代回忆**：例句不再依赖 Claude 记忆生成，改为从网上拉取书中实际文本后机械匹配。Claude 的知识工作从「回忆句子+翻译+IPA」收窄为「翻译+IPA」，消除最易出错的环节
 - **过滤前置**：Anki 去重和 COCA 频次检查在生成内容**之前**完成，避免浪费 Claude 精力。Anki 去重先于 COCA：已在牌组中的词不受 COCA 频次变化影响
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
