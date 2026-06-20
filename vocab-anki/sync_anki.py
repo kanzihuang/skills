@@ -178,6 +178,35 @@ def build_note_entry(
     }
 
 
+def _validate_word_entries(words: list[dict]) -> list[str]:
+    """Validate word entries before sync. Returns list of error messages (empty = pass).
+
+    Checks sentence length (≤150 chars), <b> tag matches word field,
+    and required fields (ipa, definition_cn, translation_cn) are non-empty.
+    """
+    errors = []
+    for w in words:
+        word = w.get("word", "")
+        sentence = w.get("sentence", "")
+
+        # 1. <b> content must match word field
+        b_match = re.search(r"<b>(.*?)</b>", sentence)
+        b_text = b_match.group(1) if b_match else ""
+        if b_text != word:
+            errors.append(f"[{word}] <b> mismatch: <b>{b_text}</b> ≠ word '{word}'")
+
+        # 2. Sentence length ≤ 150 chars
+        if len(sentence) > 150:
+            errors.append(f"[{word}] sentence too long: {len(sentence)} chars (max 150)")
+
+        # 3. Required fields non-empty
+        for field in ["ipa", "definition_cn", "translation_cn"]:
+            if not w.get(field):
+                errors.append(f"[{word}] missing '{field}'")
+
+    return errors
+
+
 def _find_anki_media_dir() -> str | None:
     """Locate Anki's collection.media directory on the local filesystem.
 
@@ -721,6 +750,14 @@ def main() -> None:
     if len(deduped) < len(data["words"]):
         print(f"Note: deduplicated {len(data['words']) - len(deduped)} word(s)\n")
     data["words"] = deduped
+
+    # Validate quality rules before sync
+    errors = _validate_word_entries(data["words"])
+    if errors:
+        print(f"Quality check FAILED ({len(errors)} error(s)):", file=sys.stderr)
+        for e in errors:
+            print(f"  {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Auto-derive deck name to match generate_apkg.py convention
     if args.deck:

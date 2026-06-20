@@ -156,6 +156,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 | 字段 | 说明 | 示例 |
 |------|------|------|
 | `word` | 生词（书中出现的表面词形，**不是**原形——脚本内部会自行还原建 WordId） | `pondered`（不是 `ponder`），`considerably`（不是 `considerable`） |
+| `lemma` | 单词原形（推荐填写，用于 Step 4 展示原形列表；可从 filter_pipeline.py 输出的 `--json-out` 中按 `rep` 反查 `lemma`） | `ponder`，`considerable` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I <b>pondered</b> deeply, then, over the adventures of the jungle.` |
 | `ipa` | IPA 音标（如已知；否则留空由脚本自动获取） | `/ˈpɒndər/` |
 | `definition_cn` | 在该书上下文中的中文释义 | `沉思，深思` |
@@ -167,6 +168,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 - 句子中出现的生词形式可能不同于原形（如 `straying` vs `stray`），用 `<b>` 包裹书中实际出现的词形。**`<b>` 必须包裹句中完整的表面词形，绝不能包裹原形后拼接剩余字母**——例如句中写的是 `considerably`，就写 `<b>considerably</b>`，**禁止**写 `<b>considerable</b>ly`（原形 `considerable` + 后缀 `ly`）。`word` 字段必须与 `<b>` 包裹的文本一致
 - **`<b>` 目标词校验**：句子中 `<b>` 包裹的词必须是当前卡片的生词。若同一句中还出现了本牌组其他生词（如 `baobabs`），**绝不能**把 `<b>` 标到别的词上——生成后逐词确认 `<b>…</b>` 内的文本与 `word` 字段一致
 - 例句应简洁：1-2 句，通常 ≤150 字符。**禁止**使用整段对话或长段落——仅提取目标词所在的核心句及其紧邻上下文，让学习者在 3 秒内定位到生词
+- **以上规则由 `sync_anki.py` 在同步前自动校验**：句子长度 >150 字符、`<b>` 内容与 `word` 字段不匹配、必填字段（ipa/definition_cn/translation_cn）缺失均会拒绝同步并打印错误。尽早生成高质量内容，避免回滚重做
 
 **翻译原则：**
 
@@ -246,17 +248,17 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
   "book_author": "圣埃克絮佩里",
   "book_id": "22720170",
   "words": [
-    {"word": "...", "ipa": "/.../", "sentence": "...", "definition_cn": "...", "translation_cn": "..."}
+    {"word": "pondered", "lemma": "ponder", "ipa": "/.../", "sentence": "...", "definition_cn": "...", "translation_cn": "..."}
   ],
   "excluded": [
-    {"word": "abashed", "reason": "不在 COCA 20000 中"}
+    {"word": "abash", "reason": "不在 COCA 20000 中"}
   ]
 }
 ```
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）
 - `book_id` 为微信读书 bookId
 - `ipa` 由 Claude 直接提供（训练数据），用于卡片显示；单词音频由 Edge TTS 默认发音生成；IPA 缺失时跳过单词音频
-- `excluded` 数组可直接从 Step 1 `--json-out` 输出的 JSON 文件中读取，避免手动转录排除词
+- `excluded` 数组从 Step 1 `--json-out` 输出的 JSON 文件中读取，**使用 `lemma` 字段**（非 `rep`）填入 `word`，确保排除词以原形展示；`reason` 字段直接沿用
 - **此步骤不展示样卡，不询问用户**
 
 ### Step 3.5: 预下载音频（并发，不依赖 Anki）
@@ -288,9 +290,9 @@ fi
 
 **4a. 展示最终汇总（含音频预下载状态）：**
 
-- **新增排除**：本轮 COCA 检查中新发现不在表中的词（单词 + 原因）
+- **新增排除**：本轮 COCA 检查中新发现不在表中的词（**原形** + 原因）。使用 `excluded[].word`（已是原形）
 - **音频状态**：Step 3.5 结果（如 `word✓ 64/64, sent✓ 62/64`）
-- **本次新增**：将同步的单词列表（仅单词名，不展示样卡）
+- **本次新增**：将同步的单词列表（仅单词**原形**，不展示样卡）。使用 `words[].lemma` 字段展示；若未提供 `lemma` 则从 filter_pipeline.py `--json-out` 的 `in_coca` 数组按 `rep` → `lemma` 反查
 - Anki 已有的词仅一句话带过数量，不列出
 
 **4b. 空跑判定：**
@@ -304,6 +306,7 @@ fi
 **4d. 执行（音频已预下载，秒级完成）：**
 
 > 音频已在 Step 3.5 预下载到临时目录。同步阶段仅上传媒体 + 创建卡片，无需等待音频生成。
+> 脚本启动时自动校验 JSON 质量（句子长度、`<b>` 匹配、必填字段），违规则拒绝同步。
 > 超时按每词 3s（上传 ~1s + 余量），下限 60s。由于很快，通常前台直接运行即可。
 
 ```bash

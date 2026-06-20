@@ -120,12 +120,8 @@ def query_meta_excluded(ac: AnkiConnect, book_id: str) -> set[str]:
             return set()
 
         excluded_dict = manifest.get("excluded", {})
-        # Meta manifest stores surface forms (e.g. "abashed"), but lemma_map
-        # keys are lemmas (e.g. "abash"). Lemmatize each word to match.
-        lemmas = set()
-        for word in excluded_dict.keys():
-            lemmas.add(lemmatize_word(word).lower())
-        return lemmas
+        # Meta manifest stores lemmas. Lowercase for case-insensitive match.
+        return {word.lower() for word in excluded_dict.keys()}
     except AnkiConnectError as e:
         print(f"WARNING: AnkiConnect query failed for meta manifest: {e}", file=sys.stderr)
     except (json.JSONDecodeError, KeyError) as e:
