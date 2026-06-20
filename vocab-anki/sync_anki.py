@@ -277,7 +277,7 @@ def _upload_media_direct(
 # Meta manifest card (one per book, suspended, stores excluded words)
 # ---------------------------------------------------------------------------
 
-META_MANIFEST_VERSION = 1
+META_MANIFEST_VERSION = 2
 
 
 def _build_meta_word_id(book_id: str) -> str:
@@ -340,23 +340,21 @@ def _write_meta_manifest(
     existing_ids = ac.find_notes_by_field(deck_name, "WordId", meta_word_id)
 
     # Merge with existing manifest if present
-    existing_excluded: dict[str, str] = {}
+    existing_excluded: set[str] = set()
     if existing_ids:
         old = _read_meta_manifest(ac, deck_name, book_id)
         if old:
-            existing_excluded = old.get("excluded", {})
+            existing_excluded = set(old.get("excluded", []))
 
-    # Merge: new entries overwrite old ones with same lemma
-    merged = dict(existing_excluded)
-    for entry in excluded:
-        merged[entry["word"]] = entry.get("reason", "未知")
+    # Merge: union of existing + new words
+    merged = existing_excluded | {entry["word"] for entry in excluded}
 
     manifest = {
         "type": "vocab-anki-meta",
         "version": META_MANIFEST_VERSION,
         "book_title": book_title,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "excluded": merged,
+        "excluded": sorted(merged),
     }
 
     manifest_json = json.dumps(manifest, ensure_ascii=False)

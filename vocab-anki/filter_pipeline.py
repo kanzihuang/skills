@@ -119,9 +119,8 @@ def query_meta_excluded(ac: AnkiConnect, book_id: str) -> set[str]:
         if manifest.get("type") != "vocab-anki-meta":
             return set()
 
-        excluded_dict = manifest.get("excluded", {})
-        # Meta manifest stores lemmas. Lowercase for case-insensitive match.
-        return {word.lower() for word in excluded_dict.keys()}
+        excluded_value = manifest.get("excluded", [])
+        return {word.lower() for word in excluded_value}
     except AnkiConnectError as e:
         print(f"WARNING: AnkiConnect query failed for meta manifest: {e}", file=sys.stderr)
     except (json.JSONDecodeError, KeyError) as e:
