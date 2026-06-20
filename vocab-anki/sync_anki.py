@@ -33,7 +33,7 @@ from ankiconnect import AnkiConnect, AnkiConnectError
 from utils import (
     edge_tts_bytes,
     lemmatize_word,
-    print_progress_bar,
+    print_progress,
     safe_filename,
 )
 
@@ -263,13 +263,13 @@ def _upload_media_direct(
                 f.write(data)
             copied += 1
             if verbose:
-                print_progress_bar(i, total, f"{filename} ({len(data)} bytes)")
+                print_progress(i, total, f"{filename} ({len(data)} bytes)")
             else:
-                print_progress_bar(i, total)
+                print_progress(i, total)
         except OSError:
             print()
             print(f"  ✗ {filename}: write failed")
-            print_progress_bar(i, total)
+            print_progress(i, total)
     return copied
 
 
@@ -546,12 +546,12 @@ def sync(
                         parts.append("word✓" if has_word else "word✗")
                         parts.append("sent✓" if has_sent else "sent✗")
                         label = f"{label}  audio: {', '.join(parts)}"
-                    print_progress_bar(completed, total, label)
+                    print_progress(completed, total, label)
                 except Exception as e:
                     failed_words.append(word)
                     print()
                     print(f"  ✗ {word}: {e}")
-                    print_progress_bar(completed, total, word)
+                    print_progress(completed, total, word)
 
         print()
 
@@ -628,24 +628,24 @@ def sync(
                 try:
                     results = ac.store_media_files_batch(batch, batch_size=batch_size)
                     for i, result in enumerate(results):
-                        filename, data = batch[i]
+                        filename, audio_data = batch[i]
                         global_idx = batch_start + i + 1
                         if result is not None:
                             audio_count += 1
                             if verbose:
-                                print_progress_bar(global_idx, total_media, f"{filename} ({len(data)} bytes)")
+                                print_progress(global_idx, total_media, f"{filename} ({len(audio_data)} bytes)")
                             else:
-                                print_progress_bar(global_idx, total_media)
+                                print_progress(global_idx, total_media)
                         else:
                             print()
                             print(f"  ✗ {filename}: failed (duplicate or error)")
-                            print_progress_bar(global_idx, total_media)
+                            print_progress(global_idx, total_media)
                 except AnkiConnectError as e:
                     for i, (filename, _data) in enumerate(batch):
                         global_idx = batch_start + i + 1
                         print()
                         print(f"  ✗ {filename}: {e}")
-                        print_progress_bar(global_idx, total_media)
+                        print_progress(global_idx, total_media)
             print()
             print(f"  Uploaded: {audio_count}/{total_media}")
 

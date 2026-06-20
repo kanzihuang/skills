@@ -167,7 +167,7 @@ def edge_tts_file(
 # Progress output (text-only, no graphical bar — Claude Code can't do \r)
 # ---------------------------------------------------------------------------
 
-def print_progress_bar(i: int, total: int, label: str = "", width: int = 0):
+def print_progress(i: int, total: int, label: str = ""):
     """Print a text progress line.
 
     Uses \\r for in-place update when stdout is a real TTY; appends a newline
