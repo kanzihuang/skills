@@ -20,6 +20,12 @@ description: >
 - Python 3 + venv（脚本会自动创建 venv 并安装依赖）
 - Anki 正在运行 + [AnkiConnect 插件](https://ankiweb.net/shared/info/2055492159) 已安装
 
+> **云主机/远程环境**：若 Claude Code 运行在远程主机而 Anki 在本地，需通过 SSH 反向隧道转发 AnkiConnect 端口：
+> ```bash
+> ssh -R 8765:localhost:8765 user@remote-host
+> ```
+> 转发后，远程主机的 `localhost:8765` 即指向本地 AnkiConnect。连接不稳定时可加 `-o ServerAliveInterval=60` 保持隧道活跃。
+
 ## 工作流
 
 > **核心原则：每次执行都必须重新从微信读书获取最新划线。禁止依赖缓存的 JSON 或之前的运行结果，因为用户可能在此期间添加了新的划线。**
@@ -420,7 +426,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 | 脚本运行失败 | 检查依赖安装、网络连接，打印错误信息 |
 | 音频生成失败 | Edge TTS 不可用时自动跳过音频，生成纯文本卡片 |
 | `WEREAD_API_KEY` 未设置 | 提示用户设置：`export WEREAD_API_KEY=<your-key>` |
-| AnkiConnect 不可达 | 提示启动 Anki 并安装 AnkiConnect 插件后重试 |
+| AnkiConnect 不可达 | 提示启动 Anki 并安装 AnkiConnect 插件后重试；若为远程环境，提示使用 `ssh -R 8765:localhost:8765` 建立反向隧道 |
 | 模型不在 Anki 中 | 提示先通过 AnkiConnect 同步一次建立模型 |
 | 牌组中全是新词 | 全部添加，和首次导出效果一样 |
 | 同步脚本超时 | 提示原因（网络慢/词多/Anki 响应慢），建议 `--no-audio` 或分批 |
