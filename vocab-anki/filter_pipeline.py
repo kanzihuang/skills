@@ -163,14 +163,45 @@ def main():
 
     # Step 1d: Extract, filter, lemmatize
     # clean_mark strips sentence-boundary punctuation (e.g. "vexed." → "vexed")
-    marks = [clean_mark(h.get("markText", "")) for h in data.get("updated", [])]
+    #
+    # Also extract chapter info: each highlight has a chapterUid; chapters[]
+    # maps chapterUid → title. We preserve this so Step 3.0 can narrow
+    # sentence-matching to the chapter the word was highlighted in.
+    chapters_raw = data.get("chapters", [])
+    chapter_map: dict[int, str] = {}
+    for ch in chapters_raw:
+        uid = ch.get("chapterUid")
+        title = ch.get("title", "")
+        if uid is not None:
+            chapter_map[uid] = title
+
+    highlights = data.get("updated", [])
+    marks = [clean_mark(h.get("markText", "")) for h in highlights]
     words_raw = [m for m in marks if m and " " not in m and not m.isdigit() and len(m) > 1]
+
+    # Build a mapping from markText → list of chapterUids (one word may be
+    # highlighted in multiple chapters).  ChapterUid may be absent (None)
+    # for highlights without chapter context; treat as "unknown".
+    mark_chapters: dict[str, list[int | None]] = {}
+    for h in highlights:
+        mt = clean_mark(h.get("markText", ""))
+        if not mt or mt not in words_raw:
+            continue
+        ch_uid = h.get("chapterUid")
+        if mt not in mark_chapters:
+            mark_chapters[mt] = []
+        mark_chapters[mt].append(ch_uid if ch_uid in chapter_map else None)
+
     lemma_map: dict[str, list[str]] = {}
+    lemma_chapters: dict[str, set[int | None]] = {}  # lemma → set of chapterUids
     for w in words_raw:
         lemma = lemmatize_word(w)
         if lemma not in lemma_map:
             lemma_map[lemma] = []
+            lemma_chapters[lemma] = set()
         lemma_map[lemma].append(w)
+        for ch_uid in mark_chapters.get(w, [None]):
+            lemma_chapters[lemma].add(ch_uid)
 
     all_lemmas = sorted(lemma_map.keys())
     n_highlights = len(marks)
@@ -250,7 +281,13 @@ def main():
                 "final": n_final,
             },
             "in_coca": [
-                {"lemma": lemma, "rep": rep, "forms": forms}
+                {
+                    "lemma": lemma, "rep": rep, "forms": forms,
+                    "chapters": sorted([
+                        {"chapterUid": uid, "chapterTitle": chapter_map.get(uid, "")}
+                        for uid in lemma_chapters.get(lemma, set()) if uid is not None
+                    ], key=lambda x: x["chapterUid"]),
+                }
                 for lemma, rep, forms in passed
             ],
             "excluded": [
