@@ -155,7 +155,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
-| `word` | 生词（书中出现的表面词形，**不是**原形——脚本内部会自行还原建 WordId） | `pondered`（不是 `ponder`），`considerably`（不是 `considerable`） |
+| `word` | 生词（书中出现的表面词形，**不是**原形——脚本内部会自行还原建 WordId） | `pondered`（不是 `ponder`），`devoted`（不是 `devote`），`considerably`（不是 `considerable`） |
 | `lemma` | 单词原形（推荐填写，用于 Step 4 展示原形列表；可从 filter_pipeline.py 输出的 `--json-out` 中按 `rep` 反查 `lemma`） | `ponder`，`considerable` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I <b>pondered</b> deeply, then, over the adventures of the jungle.` |
 | `ipa` | IPA 音标（如已知；否则留空由脚本自动获取） | `/ˈpɒndər/` |
@@ -165,7 +165,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 **例句规则（不变）：**
 - 必须是书中真实句子，不是词典通用例句
 - 如果对该书不够熟悉，无法回忆真实句子 → 如实告知用户，并提供词典例句作为替代
-- 句子中出现的生词形式可能不同于原形（如 `straying` vs `stray`），用 `<b>` 包裹书中实际出现的词形。**`<b>` 必须包裹句中完整的表面词形，绝不能包裹原形后拼接剩余字母**——例如句中写的是 `considerably`，就写 `<b>considerably</b>`，**禁止**写 `<b>considerable</b>ly`（原形 `considerable` + 后缀 `ly`）。`word` 字段必须与 `<b>` 包裹的文本一致
+- 句子中出现的生词形式可能不同于原形（如 `straying` vs `stray`），用 `<b>` 包裹书中实际出现的词形。**`<b>` 必须包裹句中完整的表面词形，绝不能包裹原形后拼接剩余字母**——例如句中写的是 `considerably`，就写 `<b>considerably</b>`，**禁止**写 `<b>considerable</b>ly`（原形 `considerable` + 后缀 `ly`）。同理，句中写的是 `devoted`，就写 `<b>devoted</b>`，**禁止**写 `<b>devote</b>d`——脚本内部会自行对 `word` 做原形还原，**绝不可以在 `<b>` 或 `word` 字段中手动将表面词形替换为原形**。`word` 字段必须与 `<b>` 包裹的文本一致
 - **`<b>` 目标词校验**：句子中 `<b>` 包裹的词必须是当前卡片的生词。若同一句中还出现了本牌组其他生词（如 `baobabs`），**绝不能**把 `<b>` 标到别的词上——生成后逐词确认 `<b>…</b>` 内的文本与 `word` 字段一致
 - 例句应简洁：1-2 句，通常 ≤150 字符。**禁止**使用整段对话或长段落——仅提取目标词所在的核心句及其紧邻上下文，让学习者在 3 秒内定位到生词
 - **以上规则由 `sync_anki.py` 在同步前自动校验**：句子长度 >150 字符、`<b>` 内容与 `word` 字段不匹配、必填字段（ipa/definition_cn/translation_cn）缺失均会拒绝同步并打印错误。尽早生成高质量内容，避免回滚重做
