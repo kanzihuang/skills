@@ -31,7 +31,7 @@
 ## 设计原则
 
 - **职责分离**：Claude 做知识工作，Python 做机械工作
-- **原形优先去重（两层分工）**：先还原原形再统一去重/筛选，同原形的不同词形不会生成重复卡片。`lemmatize_word()` 仅处理屈折变化（pondered→ponder），不碰派生词；COCA `in_coca()` fallback 做派生归一（indulgently→indulgent），两层互补
+- **原形优先去重（两层分工）**：先还原原形再统一去重/筛选，同原形的不同词形不会生成重复卡片。`lemmatize_word()` 仅处理屈折变化（pondered→ponder、crammed→cram），不碰派生词；COCA `in_coca()` fallback 做派生归一（indulgently→indulgent）。两层均用 `len(lemma) < len(word)` 防跨词性误判（abode n.↛abide v.），互补统一
 - **跨书独立**：`WordId = {lemma}_{bookId}` 作为首字段，不同书中的同一单词互不冲突
 - **IPA 零网络依赖**：Claude 从训练数据直接生成 IPA 用于卡片显示，单词音频由 Edge TTS 默认发音生成，无外部 API 依赖
 - **故障降级**：音频生成失败不阻塞卡片创建（Edge TTS 不可用时自动跳过音频）

@@ -33,20 +33,20 @@ def safe_filename(word: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-# Valid English inflectional suffixes for sanity-checking lemmatization results
-_VALID_INFLECTIONS = frozenset(
-    {"s", "es", "ed", "d", "ing", "er", "est"}
-)
-
-
 def lemmatize_word(word: str) -> str:
     """Reduce an inflected word to its lemma (base form).
 
     Uses lemminflect (VERB + NOUN only — ADJ/ADV produces false positives).
-    Only accepts a lemma if removing a valid inflectional suffix:
       straying → stray, eruptions → eruption, caterpillars → caterpillar
     Base forms and derivational words are left unchanged:
       linger → linger, precious → precious, peaceful → peaceful
+
+    Only accepts a lemma that is strictly shorter than the input word.
+    This avoids same-length cross-POS false positives (e.g. abode n.→abide v.)
+    while correctly handling doubled-consonant patterns that lemminflect misses:
+      crammed→cram, forsaken→forsake.
+    Same-length irregular verbs (ran→run, sat→sit) remain unhandled — these are
+    basic vocabulary and rarely appear as highlighted words.
 
     Returns the lemma, or the original word if no change.
     """
@@ -58,11 +58,7 @@ def lemmatize_word(word: str) -> str:
         lemmas = lemminflect.getLemma(w, pos)
         if lemmas:
             lemma = lemmas[0].lower()
-            if lemma == w:
-                continue  # same word — try next POS
-            # Sanity check: the removed suffix must be a real inflection
-            suffix = w[len(lemma):]
-            if suffix in _VALID_INFLECTIONS:
+            if lemma != w and len(lemma) < len(w):
                 return lemma
     return w
 
