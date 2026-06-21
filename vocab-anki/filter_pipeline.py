@@ -217,9 +217,24 @@ def main():
         anki_cards = query_anki_existing(ac, anki_book_id)
         anki_all_handled = anki_cards | meta_excluded
 
-    lemmas_after_anki = [l for l in all_lemmas if l.lower() not in anki_all_handled]
-    n_anki_cards = sum(1 for l in all_lemmas if l.lower() in anki_cards)
-    n_meta = sum(1 for l in all_lemmas if l.lower() in meta_excluded and l.lower() not in anki_cards)
+    def _lemma_handled(lemma: str, forms: list[str], handled: set[str]) -> bool:
+        """Return True if lemma or any surface form is already in Anki."""
+        # 1. surface forms first (catches derivational adj like blundering_{id})
+        if any(f.lower() in handled for f in forms):
+            return True
+        # 2. then lemma (existing behaviour for inflectional forms)
+        if lemma.lower() in handled:
+            return True
+        return False
+
+    lemmas_after_anki = [
+        l for l in all_lemmas
+        if not _lemma_handled(l, lemma_map[l], anki_all_handled)
+    ]
+    n_anki_cards = sum(1 for l in all_lemmas if _lemma_handled(l, lemma_map[l], anki_cards))
+    n_meta = sum(1 for l in all_lemmas
+                 if not _lemma_handled(l, lemma_map[l], anki_cards)
+                 and _lemma_handled(l, lemma_map[l], meta_excluded))
     n_anki_total = n_anki_cards + n_meta
 
     # Step 1f: COCA check
