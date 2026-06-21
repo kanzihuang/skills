@@ -197,6 +197,13 @@ WebFetch 全书文本。若一次拉不完 → 按划线章节分布优先拉取
 - **未匹配到**（源文本不全/翻译版本不同）→ 仅该词回退到回忆模式，标记 `⚠️`
 - **章节边界不确定时**（如源文本无明确章节标记）→ 全文本搜索，仍以匹配到的第一句为准
 
+**3.0c-1. 句子匹配校验（必做）：**
+
+匹配到句子后，**必须逐词确认**：
+- 目标词的表面词形（如 `blundering`、`conceited`）实际出现在匹配到的句子中（大小写不敏感）
+- 若句中找不到 → 扩大搜索范围到相邻段落；仍找不到 → 标记 `⚠️ 未匹配`，回退到回忆模式
+- **绝不**在未确认的情况下将 `word` 字段设为句中不存在的词形
+
 **3.0d. 版本校验（1 次快速检查）：**
 
 源文本中搜一句书中知名台词（如《小王子》搜 `wasted for your rose`）：
@@ -218,11 +225,11 @@ WebFetch 全书文本。若一次拉不完 → 按划线章节分布优先拉取
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
-| `word` | 生词（书中出现的表面词形，**不是**原形——脚本内部会自行还原建 WordId） | `pondered`（不是 `ponder`），`devoted`（不是 `devote`），`considerably`（不是 `considerable`） |
-| `lemma` | 单词原形（推荐填写，用于 Step 4 展示原形列表；可从 filter_pipeline.py 输出的 `--json-out` 中按 `rep` 反查 `lemma`） | `ponder`，`considerable` |
-| `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I <b>pondered</b> deeply, then, over the adventures of the jungle.` |
-| `ipa` | IPA 音标（如已知；否则留空由脚本自动获取） | `/ˈpɒndər/` |
-| `definition_cn` | 在该书上下文中的中文释义 | `沉思，深思` |
+| `word` | 书中出现的**表面词形**——`<b>` 包裹什么就写什么。**绝不**填原形 | `blundering`（不是 `blunder`），`conceited`（不是 `conceit`），`pondered`（不是 `ponder`）|
+| `lemma` | **必须提供**——Claude 根据语境判断的正确原形。**屈折变化**退回词根（`pondered`→`ponder`、`straying`→`stray`）；**派生形容词保持自身**（`blundering` adj.→`blundering`，不退 `blunder`；`conceited` adj.→`conceited`，不退 `conceit`）。若不确定，脑中过一遍 `lemmatize_word(word)` 的结果：结果词性与句中用法一致→可用；不一致→覆写 | `pondered`→`ponder`；`blundering`(adj)→`blundering`；`conceited`(adj)→`conceited` |
+| `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I felt awkward and <b>blundering</b>.` |
+| `ipa` | 对应 **lemma（卡片展示词）**的 IPA 音标，**不是**对应 `word`（表面词形）| `lemma=blundering`→`/ˈblʌndərɪŋ/`；`lemma=ponder`→`/ˈpɒndər/` |
+| `definition_cn` | **按句中实际用法释义**，不按原形常见义项。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）|
 | `translation_cn` | 整句的中文翻译（遵循翻译原则） | `我于是对丛林中的冒险深深思索起来。` |
 
 **例句规则（不变）：**
@@ -243,8 +250,8 @@ WebFetch 全书文本。若一次拉不完 → 按划线章节分布优先拉取
 - **不要重新创作**：翻译的目的是辅助理解英文原句，不是独立的中文美文
 
 **IPA 规则：**
+- **IPA 必须对应 lemma（卡片展示词）**——卡片正面显示的是原形，音标应与卡片展示词一致。`lemma=blundering`→`/ˈblʌndərɪŋ/`；`lemma=ponder`→`/ˈpɒndər/`
 - **必须为每个单词提供 IPA**——Claude 可从训练数据直接输出音标，无需外部 API
-- IPA 用于卡片正面显示，帮助学习者正确发音
 - 单词音频由 Edge TTS 默认发音生成（不使用 SSML `<phoneme>`——`edge_tts.Communicate` 内部对输入做 `escape()` 后再用 `mkssml()` 包一层 `<speak>`，外部 SSML 会被二次转义导致 TTS 朗读 XML 源码）
 - IPA 缺失时跳过单词音频生成，卡片仍正常创建（例句音频正常生成）
 - 对同形异音词（heteronym，如 `intimate` 形容词 /ˈɪntɪmət/ vs 动词 /ˈɪntɪmeɪt/），必须根据释义填入正确 IPA
@@ -261,6 +268,15 @@ WebFetch 全书文本。若一次拉不完 → 按划线章节分布优先拉取
 - 41-60 词：分 3 批，每批 ~20 词
 - 60+ 词：分 4+ 批，每批 ~15 词
 - 每批按字母序排列该批单词
+
+**每批自查清单（写入 JSON 后、下一批开始前必做）：**
+
+每批写入完成后，逐词检查以下四项，发现错误立即修正：
+
+1. **lemma 正确性**：脑中过一遍 `lemmatize_word(word)` 的返回结果。结果词性与句中实际用法一致（屈折变化）→ 可用；不一致（派生 adj 被当屈折）→ 必须显式覆写 `lemma`。例如 `blundering`(adj)→lemmatize→`blunder`(v) 词性不对，覆写 `lemma: "blundering"`；`pondered`(v)→lemmatize→`ponder`(v) 正确，不需要覆写
+2. **IPA 对应性**：每个 IPA 是否对应 `lemma`（卡片展示词）的正确发音？异读词（如 `intimate`）必须根据释义选择 `/ˈɪntɪmət/`(adj) 或 `/ˈɪntɪmeɪt/`(v)
+3. **释义词性对齐**：`definition_cn` 是否反映了句中实际用法的词性？`blundering` adj→"笨拙的"（非"犯大错"）；`conceited` adj→"自负的"（非"自负"）
+4. **word 字段一致**：`word` 是否 = `<b>` 包裹的文本 = 句中出现的形式？
 
 **写入流程：**
 
@@ -355,6 +371,8 @@ fi
 - **新增排除**：本轮 COCA 检查中新发现不在表中的词（**原形** + 原因）。使用 `excluded[].word`（已是原形）
 - **音频状态**：Step 3.5 结果（如 `word✓ 64/64, sent✓ 62/64`）
 - **本次新增**：将同步的单词列表（仅单词**原形**，不展示样卡）。使用 `words[].lemma` 字段展示；若未提供 `lemma` 则从 filter_pipeline.py `--json-out` 的 `in_coca` 数组按 `rep` → `lemma` 反查
+- **源文本校验状态**：已通过源文本校验的单词数 / 总数。回退到回忆模式的单词标 `⚠️`
+- **lemma 覆写数量**：本轮 Claude 显式覆写了几个 lemma（`lemmatize_word` 结果被纠正）
 - Anki 已有的词仅一句话带过数量，不列出
 
 **4b. 空跑判定：**

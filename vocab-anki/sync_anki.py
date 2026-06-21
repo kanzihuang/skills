@@ -119,7 +119,8 @@ def _process_one_word(
     Returns (note, audio_uploads, ipa).
     """
     word = w["word"]
-    lemma = lemmatize_word(word)
+    json_lemma = w.get("lemma", "").strip()
+    lemma = json_lemma if json_lemma else lemmatize_word(word)
     safe = safe_filename(lemma)
     ipa = w.get("ipa", "")
     audio_uploads: list[tuple[str, bytes]] = []
@@ -182,27 +183,64 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
     """Validate word entries before sync. Returns list of error messages (empty = pass).
 
     Checks sentence length (≤150 chars), <b> tag matches word field,
+    word actually appears in sentence text (after stripping tags),
     and required fields (ipa, definition_cn, translation_cn) are non-empty.
+
+    Soft warnings (IPA format, definition sanity) are printed to stderr
+    directly and do NOT block sync.
     """
     errors = []
     for w in words:
         word = w.get("word", "")
         sentence = w.get("sentence", "")
 
-        # 1. <b> content must match word field
+        # 1. <b> content must match word field (hard error)
         b_match = re.search(r"<b>(.*?)</b>", sentence)
         b_text = b_match.group(1) if b_match else ""
         if b_text != word:
             errors.append(f"[{word}] <b> mismatch: <b>{b_text}</b> ≠ word '{word}'")
 
-        # 2. Sentence length ≤ 150 chars
+        # 2. Sentence must contain the word (case-insensitive, after stripping tags) — hard error
+        clean_sentence = re.sub(r"<[^>]+>", "", sentence)
+        if word.lower() not in clean_sentence.lower():
+            errors.append(
+                f"[{word}] word not found in sentence: "
+                f"'{word}' not in '{clean_sentence[:80]}{'...' if len(clean_sentence) > 80 else ''}'"
+            )
+
+        # 3. Sentence length ≤ 150 chars (hard error)
         if len(sentence) > 150:
             errors.append(f"[{word}] sentence too long: {len(sentence)} chars (max 150)")
 
-        # 3. Required fields non-empty
+        # 4. Required fields non-empty (hard error)
         for field in ["ipa", "definition_cn", "translation_cn"]:
             if not w.get(field):
                 errors.append(f"[{word}] missing '{field}'")
+
+        # --- Soft warnings (stderr only, do not block sync) ---
+
+        # 5. IPA format sanity check
+        ipa = w.get("ipa", "")
+        if ipa:
+            ipa_clean = ipa.strip()
+            if "/" not in ipa_clean:
+                print(f"  [WARN] [{word}] IPA missing '/' delimiters: {ipa}", file=sys.stderr)
+            else:
+                # Strip delimiters and stress marks, count phoneme chars
+                phonemes = re.sub(r"[/ˈˌ.]", "", ipa_clean)
+                if len(phonemes) < 2:
+                    print(f"  [WARN] [{word}] IPA too short: {ipa}", file=sys.stderr)
+            if re.search(r"[一-鿿]", ipa_clean):
+                print(f"  [WARN] [{word}] IPA contains Chinese characters: {ipa}", file=sys.stderr)
+
+        # 6. Definition sanity check
+        definition = w.get("definition_cn", "")
+        if definition:
+            cjk_count = len(re.findall(r"[一-鿿]", definition))
+            if cjk_count < 2:
+                print(f"  [WARN] [{word}] definition_cn has <2 Chinese chars: '{definition}'", file=sys.stderr)
+            if definition.strip().lower() == word.lower():
+                print(f"  [WARN] [{word}] definition_cn equals word: '{definition}'", file=sys.stderr)
 
     return errors
 
