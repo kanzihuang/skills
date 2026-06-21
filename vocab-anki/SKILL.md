@@ -177,16 +177,27 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 字段：
 
 **3.0a. 搜索源文本：**
 
-WebSearch `<英文书名> full text` 或 `<英文书名> <作者> full text`。优先选 Project Gutenberg、Standard Ebooks 等公版书站点。
+WebSearch `<英文书名> full text` 或 `<英文书名> <作者> full text`。优先选 Internet Archive（`archive.org` 的原始文本链接）、Project Gutenberg、Standard Ebooks 等公版书站点。**搜索时重点留意可直链下载的纯文本 URL**（以 `.txt` 结尾或 `/download/` 路径），供下一步 curl 使用。
 
-**3.0b. 拉取源文本（1-2 次 WebFetch）：**
+**3.0b. 拉取源文本（优先 curl 直链，WebFetch 仅作兜底）：**
 
-WebFetch 全书文本。若一次拉不完 → 按划线章节分布优先拉取：
-- 从 `filter_pipeline.py --json-out` 输出的 `in_coca[].chapters` 获取每个词的章节归属
-- 统计各章节的单词数量，按单词密度降序排列
-- 优先拉取单词最密集的章节
+> **WebFetch 有严格引用字数限制（~125 字符/条），不适合拉取全书文本。必须优先用 `curl -sL` 直接下载。**
 
-> **章节感知拉取**：对于超长书（>500KB），若源文本支持按章节 URL 访问（如 `.../chapter01.htm`），可直接按单词所在章节列表拉取对应章节，跳过无关章节。全本纯文本无章节 URL 时仍拉全本，但后续句子匹配按章节范围搜索。
+```bash
+# 优先方案：curl 直链下载纯文本文件
+curl -sL --max-time 60 '<3.0a 找到的原始文本 URL>' -o /tmp/<book>-full.txt
+# 检查文件大小：公版书通常在 50KB~500KB
+wc -c /tmp/<book>-full.txt
+```
+
+- **curl 成功**（文件 >20KB 且包含书中文本）→ 直接用，跳过 WebFetch
+- **curl 返回 HTML 包装页**而非纯文本 → 试 Internet Archive 的 `/download/` 路径或换其他源
+  - Internet Archive 的 `/stream/` URL 常返回 HTML，改为 `/download/` 路径通常可拿到原始文件
+  - 例：`https://archive.org/stream/xxx/xxx_djvu.txt` → 试 `https://archive.org/download/xxx/xxx_djvu.txt`
+- **所有直链均失败** → 回退 WebFetch 逐章拉取（按章节密度降序，每章单独 WebFetch）
+- **章节感知拉取**：对于超长书（>500KB），若源文本支持按章节 URL 访问（如 `.../chapter01.htm`），可直接按单词所在章节列表拉取对应章节，跳过无关章节
+
+**curl 拿到的文本验证**：`head -c 500` 确认是书中实际文本而非 HTML/JS，搜一句知名台词确认版本。（若来源为 Internet Archive，文件头可能有少量元数据说明文字，属正常现象。）
 
 **3.0c. 句子匹配（替换回忆）：**
 
@@ -215,7 +226,7 @@ WebFetch 全书文本。若一次拉不完 → 按划线章节分布优先拉取
 若提取的句子 >150 字符 → 保留核心分句，用 `…` 连接上下文。优先保留包含生词的主谓结构。截断后的 sentence 即为最终版本，**翻译基于截断后的 sentence 生成**。
 
 **源文本获取失败时：**
-- WebSearch/WebFetch 均无法获取 → 回退到回忆模式，Step 4 汇总中标明「源文本不可用，例句未校验」
+- curl 直链 + WebSearch/WebFetch 均无法获取 → 回退到回忆模式，Step 4 汇总中标明「源文本不可用，例句未校验」
 
 **完成后进入 Step 3**——句子已从源文本提取并截断至最终长度。Claude 基于截断后的 sentence 生成 IPA + 释义 + 翻译。
 
@@ -471,7 +482,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 |------|------|
 | 没有划线 | 分两种情况：(1) Step 1d 报错退出（stderr 含 `ERROR:`）→ API 响应无效，检查 `$WEREAD_API_KEY` 拼写、bookId 是否正确，重试；(2) Step 1d 正常输出 `SUMMARY: 0 highlights` → 确实没有划线，提示用户在微信读书中标记生词后再试 |
 | 划线全是整句 | 提示："划线看起来是完整句子而非生词。仍然可以生成牌组，是否继续？" |
-| 源文本不可用 | WebSearch/WebFetch 均无法获取书中文本 → 回退到回忆模式，Step 4 汇总中标明「例句未校验」；若回忆也不确定，使用词典例句替代 |
+| 源文本不可用 | curl 直链 + WebSearch/WebFetch 均无法获取书中文本 → 回退到回忆模式，Step 4 汇总中标明「例句未校验」；若回忆也不确定，使用词典例句替代 |
 | 超过 50 个单词 | Claude 直接生成全部内容 + 并发音频（8 线程），一次写入 JSON |
 | 脚本运行失败 | 检查依赖安装、网络连接，打印错误信息 |
 | 音频生成失败 | Edge TTS 不可用时自动跳过音频，生成纯文本卡片 |
@@ -503,6 +514,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 
 - **职责分离**：Claude 做知识工作（理解语境、翻译、IPA），Python 做机械工作（HTTP、TTS、同步）。句子提取由 Step 3.0 源文本检索完成，不依赖 Claude 回忆
 - **源文本检索替代回忆**：例句不再依赖 Claude 记忆生成，改为从网上拉取书中实际文本后机械匹配。Claude 的知识工作从「回忆句子+翻译+IPA」收窄为「翻译+IPA」，消除最易出错的环节
+- **curl 优先于 WebFetch**：源文本拉取优先用 `curl -sL` 直链下载纯文本文件（Internet Archive、Project Gutenberg 等公版书站）。WebFetch 有严格引用字数限制（~125 字符/条），不适用于全书文本拉取，仅用作 curl 失败时的逐章兜底方案
 - **章节优先匹配**：filter_pipeline.py 透传 WeRead 的 `chapterUid`/`chapterTitle` 到 JSON 输出，Step 3.0 优先在单词所属章节范围内搜索句子，避免同名异义词匹配到书中其他位置（如 `fair` 在"公平的"和"集市"两个义项间不会串章）。章节边界不确定时回退到全文本搜索
 - **过滤前置**：Anki 去重和 COCA 频次检查在生成内容**之前**完成，避免浪费 Claude 精力。Anki 去重先于 COCA：已在牌组中的词不受 COCA 频次变化影响
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
