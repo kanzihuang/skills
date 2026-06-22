@@ -240,7 +240,7 @@ wc -c /tmp/<book>-full.txt
 | `lemma` | **必须提供**——Claude 根据语境判断的正确原形。**屈折变化**退回词根（`pondered`→`ponder`、`straying`→`stray`）；**派生形容词保持自身**（`blundering` adj.→`blundering`，不退 `blunder`；`conceited` adj.→`conceited`，不退 `conceit`）。若不确定，脑中过一遍 `lemmatize_word(word)` 的结果：结果词性与句中用法一致→可用；不一致→覆写 | `pondered`→`ponder`；`blundering`(adj)→`blundering`；`conceited`(adj)→`conceited` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I felt awkward and <b>blundering</b>.` |
 | `ipa` | 对应 **lemma（卡片展示词）**的 IPA 音标，**不是**对应 `word`（表面词形）| `lemma=blundering`→`/ˈblʌndərɪŋ/`；`lemma=ponder`→`/ˈpɒndər/` |
-| `definition_cn` | **按句中实际用法释义**，不按原形常见义项。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）|
+| `definition_cn` | **按句中实际用法释义**，不按原形常见义项，也不自动选择最常见的词典义。特别注意多义词的含义选择：同一个词在不同句子中可能是完全不同的意思。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）；`thriftily` 在 "he must be treated thriftily" 中→"有节制地，有所保留地"（**不写**"节俭地"）|
 | `translation_cn` | 整句的中文翻译（遵循翻译原则） | `我于是对丛林中的冒险深深思索起来。` |
 
 **例句规则（不变）：**
@@ -259,6 +259,7 @@ wc -c /tmp/<book>-full.txt
 - **句式按中文习惯调整**：英文的代词、从句、被动语态大胆打破，换成中文流水句。但词义不走样
 - **动词优先选用与英文义项直接对应的词**：`intimated` → "暗示"（而非"婉转地表示"），`linger` → "徘徊"（而非"流连"），确保学习者能根据中文反查英文原词
 - **不要重新创作**：翻译的目的是辅助理解英文原句，不是独立的中文美文
+- **多义词语境陷阱（common sense trap）**：英文中大量词汇有多个义项，不要自动选择最常见或最熟悉的义项。回到原文判断该词在此句中具体表达什么意思。例如 `thriftily` 在 "he must be treated thriftily" 中意为"有节制地，有所保留地"（sparingly, with restraint），而非"节俭地"（frugally, economically）——节俭适用于钱物，不适用于对人的"对待"。每次遇到不确定的词，先用中文问自己"这句话里这个词到底在说什么"，再选译义。若多个义项在中文中都说得通，优先选最能体现原文动作/状态特征的那个
 
 **IPA 规则：**
 - **IPA 必须对应 lemma（卡片展示词）**——卡片正面显示的是原形，音标应与卡片展示词一致。`lemma=blundering`→`/ˈblʌndərɪŋ/`；`lemma=ponder`→`/ˈpɒndər/`
@@ -297,6 +298,11 @@ wc -c /tmp/<book>-full.txt
 2. **IPA 对应性**：每个 IPA 是否对应 `lemma`（卡片展示词）的正确发音？异读词（如 `intimate`）必须根据释义选择 `/ˈɪntɪmət/`(adj) 或 `/ˈɪntɪmeɪt/`(v)
 3. **释义词性对齐**：`definition_cn` 是否反映了句中实际用法的词性？`blundering` adj→"笨拙的"（非"犯大错"）；`conceited` adj→"自负的"（非"自负"）
 4. **word 字段一致**：`word` 是否 = `<b>` 包裹的文本 = 句中出现的形式？
+5. **语义情境对齐（多义词义项验证）**：对每个词，重读 sentence 中的上下文，确认 `definition_cn` 和 `translation_cn` 选择了该词在此句中的正确义项，而非其最常见词典义。执行以下验证：
+   - **代入验证法**：将 `definition_cn`（去除"的/地/了"等标记）代入原英文句替换原词，看代入后的概念是否通顺合理。若替换后句子意思不通或产生逻辑矛盾，说明义项选错。例如 "he must be treated thriftily" → "节俭地对待他" 不通（对人不能"节俭"），说明应换义项
+   - **义项枚举法**：脑中快速列出该词你知道的 2-3 个义项，逐一用代入验证法测试，选出最合理的一个
+   - **跨句一致性检查**：若同一词在牌组中多次出现（不同句子），确认每个句子中该词的义项独立判断——前一句是"节俭"不意味着本句也是"节俭"
+   - 发现定义/翻译与句子语境冲突时，修正后继续，不要遗留到下一批
 
 **写入流程：**
 
