@@ -89,6 +89,11 @@ def parse_args() -> argparse.Namespace:
         help="Always upload media via AnkiConnect API instead of direct filesystem copy",
     )
     parser.add_argument(
+        "--no-ankiweb-sync",
+        action="store_true",
+        help="Skip triggering AnkiWeb sync after cards are added",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Show detailed progress"
     )
     return parser.parse_args()
@@ -431,6 +436,7 @@ def sync(
     prefetch: bool = False,
     audio_dir: str | None = None,
     no_direct_media: bool = False,
+    no_ankiweb_sync: bool = False,
 ) -> dict:
     """Run the full sync workflow. Returns a summary dict."""
     words = data["words"]
@@ -725,6 +731,16 @@ def sync(
             if verbose:
                 print(f"  (meta manifest skipped: {e})")
 
+    # 10. Trigger AnkiWeb sync (fire-and-forget)
+    ankiweb_synced = False
+    if ac and not no_ankiweb_sync and not dry_run:
+        try:
+            ac.sync()
+            ankiweb_synced = True
+            print(f"\nAnkiWeb sync triggered.")
+        except AnkiConnectError as e:
+            print(f"\nAnkiWeb sync skipped: {e}")
+
     # Summary
     print(f"\n{'='*50}")
     print(f"Sync complete for \"{book_title}\"")
@@ -749,6 +765,7 @@ def sync(
         "failed_words": failed_words,
         "prev_excluded": len(prev_excluded),
         "excluded": len(data.get("excluded", [])),
+        "ankiweb_synced": ankiweb_synced,
     }
 
 
@@ -814,6 +831,7 @@ def main() -> None:
             prefetch=args.prefetch,
             audio_dir=args.audio_dir,
             no_direct_media=args.no_direct_media,
+            no_ankiweb_sync=args.no_ankiweb_sync,
         )
         if result.get("error"):
             sys.exit(1)

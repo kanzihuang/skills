@@ -278,6 +278,18 @@ class AnkiConnect:
         """Update tags of an existing note."""
         return self._call("updateNoteTags", note=note_id, tags=tags)
 
+    def sync(self) -> None:
+        """Trigger AnkiWeb sync.
+
+        Fire-and-forget: a successful response means Anki accepted the
+        request, not that AnkiWeb has received the data. If a blocking
+        dialog appears in Anki (e.g. conflict resolution), the sync
+        may remain queued silently.
+
+        Requires AnkiWeb credentials configured in Anki.
+        """
+        return self._call("sync")
+
     def ensure_deck_and_model(self, deck_name: str, model_name: str) -> bool:
         """Verify that the deck exists and the model is available.
 

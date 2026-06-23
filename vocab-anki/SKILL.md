@@ -440,8 +440,9 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 5. **例句音频**：Edge TTS 朗读
 6. **已有卡片完全不动**，保留复习进度和调度数据
 7. **更新 meta manifest 卡片**：将本次 `excluded` 单词写入 Sentence 字段的 JSON manifest（`WordId = __META__{bookId}`），卡片暂停（不参与复习），下次同步优先读取
+8. **触发 AnkiWeb 同步**：卡片添加完成后自动触发 `sync` 操作，将新卡片同步到 AnkiWeb。此操作为 fire-and-forget——成功响应仅表示 Anki 已接受请求，不代表 AnkiWeb 已收到数据。若 Anki 弹出冲突解决对话框，同步可能静默排队。使用 `--no-ankiweb-sync` 跳过此步骤
 
-牌组名自动从 JSON 推导：`"{title} ({author})"`。额外参数：`--deck "自定义"`、`--dry-run`、`--no-audio`。
+牌组名自动从 JSON 推导：`"{title} ({author})"`。额外参数：`--deck "自定义"`、`--dry-run`、`--no-audio`、`--no-ankiweb-sync`。
 
 ## 卡片格式
 
