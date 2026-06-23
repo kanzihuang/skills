@@ -247,6 +247,37 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
             if definition.strip().lower() == word.lower():
                 print(f"  [WARN] [{word}] definition_cn equals word: '{definition}'", file=sys.stderr)
 
+        # 7. Sentence fragment detection (soft warnings, do not block sync)
+        clean = re.sub(r"<[^>]+>", "", sentence).strip()
+        if clean:
+            # 7a. Starts with lowercase letter — suggests mid-sentence extraction
+            first_char = clean[0]
+            if first_char.isalpha() and first_char.islower():
+                print(
+                    f"  [WARN] [{word}] sentence starts with lowercase "
+                    f"'{first_char}' — may be a truncated fragment",
+                    file=sys.stderr,
+                )
+
+            # 7b. No finite verb detected — suggests noun phrase fragment
+            has_finite_verb = bool(
+                re.search(r'\b(?:is|are|was|were|am|has|have|had|do|does|did|'
+                          r'will|would|can|could|shall|should|may|might|must)\b',
+                          clean, re.IGNORECASE)
+            )
+            if not has_finite_verb:
+                # Check for past tense / 3rd-person verbs: word ending in -ed, -s
+                # (excluding common non-verb -s: this, his, us, thus, etc.)
+                verb_ending = bool(
+                    re.search(r'\b\w+(?:ed|s)\b', clean)
+                )
+                if not verb_ending:
+                    print(
+                        f"  [WARN] [{word}] sentence may lack a finite verb "
+                        f"— possible noun phrase fragment: '{clean[:80]}{"..." if len(clean) > 80 else ""}'",
+                        file=sys.stderr,
+                    )
+
     return errors
 
 
