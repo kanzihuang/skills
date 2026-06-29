@@ -268,7 +268,7 @@ wc -c /tmp/<book>-full.txt
 | 字段 | 说明 | 示例 |
 |------|------|------|
 | `word` | 书中出现的**表面词形**——`<b>` 包裹什么就写什么。**绝不**填原形 | `blundering`（不是 `blunder`），`conceited`（不是 `conceit`），`pondered`（不是 `ponder`）|
-| `lemma` | **派生形容词/特殊覆写时必填，常规屈折变化留空即可**。`sync_anki.py` 内置的 `resolve_lemma()` 会自动处理屈折还原（`attached`→`attach`、`burning`→`burn`、`closest`→`close`、`chosen`→`choose`），无需 Claude 手动填写。**仅在**派生形容词（`blundering` adj.→不退 `blunder`；`conceited` adj.→不退 `conceit`）或 `resolve_lemma()` 无法正确还原的情况下才显式设置 `lemma`。若不确定，脑中过一遍 `lemmatize_word(word)` 的结果：结果词性与句中用法一致→`lemma` **留空**；不一致→必须显式覆写 | `pondered`→留空（自动还原为 `ponder`）；`blundering`(adj)→`"blundering"`；`conceited`(adj)→`"conceited"` |
+| `lemma` | **派生形容词/特殊覆写时必填，常规屈折变化留空即可**。`sync_anki.py` 内置两层防护：(1) `resolve_lemma()` 自动还原（`attached`→`attach`、`burning`→`burn`、`closest`→`close`、`chosen`→`choose`）；(2) **spaCy 句子级校验**——对 `-ed`/`-ing` 词读一遍原句，若判定为形容词则阻止还原（如 `a distinguished fisherman`→保持 `distinguished`，不退 `distinguish`）。因此 Claude **仅在**派生形容词（`blundering` adj.、`conceited` adj.、`wicked` adj. 等）时显式设置 `lemma`。若不确定，脑中过一遍 `lemmatize_word(word)` 的结果：词性与句中用法一致→**留空**；不一致→显式覆写 | `pondered`→留空（自动 `ponder`）；`blundering`(adj)→`"blundering"`；`distinguished`(adj)→`"distinguished"` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I felt awkward and <b>blundering</b>.` |
 | `ipa` | 对应 **lemma（卡片展示词）**的 IPA 音标，**不是**对应 `word`（表面词形）| `lemma=blundering`→`/ˈblʌndərɪŋ/`；`lemma=ponder`→`/ˈpɒndər/` |
 | `definition_cn` | **按句中实际用法释义**，不按原形常见义项，也不自动选择最常见的词典义。特别注意多义词的含义选择：同一个词在不同句子中可能是完全不同的意思。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）；`thriftily` 在 "he must be treated thriftily" 中→"有节制地，有所保留地"（**不写**"节俭地"）|
@@ -314,12 +314,14 @@ wc -c /tmp/<book>-full.txt
 
 **派生形容词 COCA 复查：**
 
-`lemmatize_word` 将派生 adj 还原为词根（`blundering`→`blunder`、`conceited`→`conceit`），词根在 COCA 中放行。对于此类词，Claude 需额外判断：
-- 确认句中用法为**派生形容词**（非屈折变化）→ 检查表面词形自身是否在 COCA 20000 中
-- 不在 → **不生成卡片**，加入 `excluded` 数组，reason 为 `"派生形容词，不在 COCA 20000 中"`
-- 在 → 正常生成
+`lemmatize_word` 将派生 adj 还原为词根（`blundering`→`blunder`、`conceited`→`conceit`），词根在 COCA 中放行。对于此类词有两层防护：
 
-> 例：`blundering`(adj) 不在 COCA，`blunder`(v) 在 → 排除。`pondered`(v 过去式) 是屈折变化 → 不触发此规则
+1. **Claude 在自查清单中逐批校验**：确认句中用法为派生形容词 → 显式设置 `lemma`（如 `"lemma": "blundering"`）
+2. **spaCy 在同步前做句子级校验**：对 `-ed`/`-ing` 词，spaCy 读原句判断词性——若判定为形容词，阻止 `resolve_lemma()` 的还原（见 `_process_one_word()`）
+
+若派生形容词的自身不在 COCA 20000 中 → **不生成卡片**，加入 `excluded` 数组，reason 为 `"派生形容词，不在 COCA 20000 中"`。
+
+> 例：`blundering`(adj) 不在 COCA → 排除。`distinguished`(adj) 在 COCA → 生成，Claude 设 `lemma: "distinguished"`，spaCy 读 `a <b>distinguished</b> fisherman` 确认为形容词 → 不还原为 `distinguish`
 
 **每批自查清单（写入 JSON 后、下一批开始前必做）：**
 
@@ -543,7 +545,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 | 脚本 | 用途 | 输入 | 输出 |
 |------|------|------|------|
 | `utils.py` | 共享工具模块 — lemmatize_word, edge_tts_bytes/file, safe_filename | — | 工具函数 |
-| `sync_anki.py` | 增量同步到 Anki | JSON + AnkiConnect | 直接添加卡片到 Anki |
+| `sync_anki.py` | 增量同步到 Anki — 含 `resolve_lemma()` 自动原形还原 + spaCy 句子级校验 | JSON + AnkiConnect | 直接添加卡片到 Anki |
 | `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
 | `filter_pipeline.py` | 合并过滤流水线 — 标点/大小写清理 → lemmatize → Anki 去重 → COCA 检查。自动剥离句边界标点（`vexed.`→`vexed`）并归一化非全大写词为小写（`Clad`→`clad`）。透传章节信息（`chapterUid` + `chapterTitle`）供 Step 3.0 章节优先匹配 | WeRead API JSON (stdin) | 过滤结果 (stdout) + 结构化 JSON (--json-out，含 `chapters` 字段) |
 | `coca_lookup.py` | COCA 20000 高频词查询 — 直接 set 查找 + lemminflect（仅接受原形严格短于输入词的映射，如 `pondered`→`ponder`；同长映射如 `abode`→`abide` 被拒，避免名词误映射到无关动词）+ 后缀剥离兜底做派生归一（`indulgently`→`indulgent`） | 单词 → set 查找 + lemminflect + 后缀剥离 | 是否在 COCA 前 20000 词中 |
@@ -558,7 +560,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **过滤前置**：Anki 去重和 COCA 频次检查在生成内容**之前**完成，避免浪费 Claude 精力。Anki 去重先于 COCA：已在牌组中的词不受 COCA 频次变化影响
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
-- **原形归一（两层分工）**：Step 1d `lemmatize_word()` 仅处理**屈折变化**（-ing/-ed/-s），不碰派生词（peaceful 不动），用于去重——确保 `pondered`+`ponder` 在管道入口合并为同一原形。Step 1f COCA 的 `in_coca()` fallback（lemminflect + 后缀剥离）处理**派生归一**（`indulgently`→`indulgent`、`resentfulness`→`resentful`），用于频次匹配——因为 COCA 20000 只收录基础词，不收录所有派生形式。两层互补，各司其职
+- **原形归一（三层分工）**：Step 1d `lemmatize_word()` 处理**屈折变化**（-ing/-ed/-s），用于去重。Step 1f COCA 的 `in_coca()` fallback 处理**派生归一**（`indulgently`→`indulgent`），用于频次匹配。Step 4 `sync_anki.py` 中 **spaCy 句子级校验**读原句判断 `-ed`/`-ing` 词的词性，阻止派生形容词被误还原（`distinguished` adj. 不退 `distinguish` v.）。三层互补，各司其职
   - 两层均使用 `len(lemma) < len(word)` 作为准入条件：同长映射（`abode` n.→`abide` v.）被拒，避免跨词性误判。不同长映射正常通过（`crammed`→`cram`、`went`→`go`）。同长不规则变化（`ran`→`run`、`sat`→`sit`）同为已知限制，但这些词属基础词汇，实际划线中极少出现
 - **bookId 桥接**：Anki 卡片 WordId 天然包含 bookId（`{lemma}_{bookId}`），meta manifest 卡片格式固定（`__META__{bookId}`），用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断

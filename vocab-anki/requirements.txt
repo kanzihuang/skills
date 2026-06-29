@@ -1,3 +1,4 @@
 edge-tts>=6.0.0
 requests>=2.28.0
 lemminflect>=0.2.0
+spacy>=3.8.0
