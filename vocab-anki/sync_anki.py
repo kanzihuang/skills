@@ -185,38 +185,52 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
 
     # 2. Regular -est/-er/-ier/-iest patterns (before lemmatize_word,
     #    which may over-reduce: lemminflect maps *happier* → *hap*).
-    for sfx, slen in [("iest", 4), ("est", 3), ("ier", 3), ("er", 2)]:
-        if w.endswith(sfx) and len(w) > slen + 1:
-            stem = w[:-slen]
-            if sfx.startswith("i"):
-                cand = stem + "y"          # happiest→happy, happier→happy
-            else:
-                cand = stem                 # smallest→small, closer→close?
-                # Doubled consonant: biggest→big (only when the stem ends
-                # in CVC where C is the doubled consonant & not a true
-                # double-letter ending like -ll, -ss, -ff in the base).
-                if len(stem) >= 3 and stem[-1] == stem[-2] and stem[-1] not in "aeiouyls":
-                    cand2 = stem[:-1]
-                    cand = cand2
-                # Dropped-e: closest→close (only if stem doesn't already
-                # look like a valid word, e.g. *small* from *smallest*).
-                if cand == stem and not (
-                    len(stem) >= 2
-                    and stem[-1] == stem[-2]
-                    and stem[-1] not in "aeiouy"
-                ):
-                    cand_e = stem + "e"
-                    if cand_e != w and len(cand_e) < len(w):
-                        cand = cand_e
-            if cand != w and len(cand) < len(w):
-                return cand
-            break
+    #    Only apply when the word is NOT already in COCA, preventing
+    #    false reductions like beer→bee, anger→ange, sacred→sacre.
+    _coca: set[str] = set()
+    try:
+        from lib.coca import load_coca
+        _coca = load_coca()
+    except ImportError:
+        pass
+    if w not in _coca:
+        for sfx, slen in [("iest", 4), ("est", 3), ("ier", 3), ("er", 2)]:
+            if w.endswith(sfx) and len(w) > slen + 1:
+                stem = w[:-slen]
+                if sfx.startswith("i"):
+                    cand = stem + "y"          # happiest→happy, happier→happy
+                else:
+                    cand = stem                 # smallest→small, closer→close?
+                    # Doubled consonant: biggest→big (only when the stem ends
+                    # in CVC where C is the doubled consonant & not a true
+                    # double-letter ending like -ll, -ss, -ff in the base).
+                    if len(stem) >= 3 and stem[-1] == stem[-2] and stem[-1] not in "aeiouyls":
+                        cand2 = stem[:-1]
+                        cand = cand2
+                    # Dropped-e: closest→close (only if stem doesn't already
+                    # look like a valid word, e.g. *small* from *smallest*).
+                    if cand == stem and not (
+                        len(stem) >= 2
+                        and stem[-1] == stem[-2]
+                        and stem[-1] not in "aeiouy"
+                    ):
+                        cand_e = stem + "e"
+                        if cand_e != w and len(cand_e) < len(w):
+                            cand = cand_e
+                if cand != w and len(cand) < len(w):
+                    return cand
+                break
 
-    # 3. Auto-correct inflectional forms (unless derivational adjective)
+    # 3. Auto-correct inflectional forms (unless derivational adjective).
+    #    Apply COCA gate: only reduce if the word is NOT already in COCA,
+    #    OR the reduced form is also a valid COCA entry.  This prevents
+    #    false reductions like sacred→sacre, tremendous→tremendou where
+    #    lemminflect hallucinates a non-existent verb base.
     if not _is_derivational_adj(word):
         reduced = lemmatize_word(word)
         if reduced != w:
-            return reduced
+            if w not in _coca or reduced in _coca:
+                return reduced
 
     # 4. lemmatize_word couldn't reduce — try lib's IRREG dict
     try:
