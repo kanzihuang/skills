@@ -325,7 +325,7 @@ wc -c /tmp/<book>-full.txt
 
 每批写入完成后，逐词检查以下四项，发现错误立即修正：
 
-1. **lemma 正确性**：脑中过一遍 `lemmatize_word(word)` 的返回结果。结果词性与句中实际用法一致（屈折变化）→ `lemma` **留空**，脚本自动还原；不一致（派生 adj 被当屈折）→ 必须显式覆写 `lemma`。例如 `blundering`(adj)→lemmatize→`blunder`(v) 词性不对，覆写 `lemma: "blundering"`；`pondered`(v)→lemmatize→`ponder`(v) 正确，`lemma` 留空。**绝不在 `lemma` 字段中填写与 `word` 相同的表面词形**——留空让脚本处理，填表面词形反而阻止自动还原
+1. **lemma 正确性**：脑中过一遍 `lemmatize_word(word)` 的返回结果。结果词性与句中实际用法一致（屈折变化）→ `lemma` **留空**，脚本自动还原；不一致（派生 adj 被当屈折）→ 必须显式覆写 `lemma`。例如 `blundering`(adj)→lemmatize→`blunder`(v) 词性不对，覆写 `lemma: "blundering"`；`distinguished`(adj)→lemmatize→`distinguish`(v) 词性不对，覆写 `lemma: "distinguished"`；`pondered`(v)→lemmatize→`ponder`(v) 正确，`lemma` 留空。**绝不在 `lemma` 字段中填写与 `word` 相同的表面词形**——留空让脚本处理，填表面词形反而阻止自动还原
 2. **IPA 对应性**：每个 IPA 是否对应 `lemma`（卡片展示词）的正确发音？异读词（如 `intimate`）必须根据释义选择 `/ˈɪntɪmət/`(adj) 或 `/ˈɪntɪmeɪt/`(v)
 3. **释义词性对齐**：`definition_cn` 是否反映了句中实际用法的词性？`blundering` adj→"笨拙的"（非"犯大错"）；`conceited` adj→"自负的"（非"自负"）
 4. **word 字段一致**：`word` 是否 = `<b>` 包裹的文本 = 句中出现的形式？

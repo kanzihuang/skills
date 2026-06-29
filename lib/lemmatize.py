@@ -126,8 +126,9 @@ IRREG.update({
 # derivational adjectives in context.  Without a POS tagger we can't reliably
 # distinguish, so we maintain a small manual blocklist for common cases.
 DERIVATIONAL_ADJ_BLOCKLIST: set[str] = {
-    "blundering",   # derivational adj., not "blunder" v. participle
-    "conceited",    # derivational adj., not "conceit" n./v. participle
+    "blundering",     # derivational adj., not "blunder" v. participle
+    "conceited",      # derivational adj., not "conceit" n./v. participle
+    "distinguished",  # derivational adj., not "distinguish" v. participle
 }
 
 

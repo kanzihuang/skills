@@ -113,7 +113,7 @@ def parse_args() -> argparse.Namespace:
 
 
 # Words lemminflect can't distinguish as derivational adjectives.
-_DERIVATIONAL_ADJ_BLOCKLIST: set[str] = {"blundering", "conceited"}
+_DERIVATIONAL_ADJ_BLOCKLIST: set[str] = {"blundering", "conceited", "distinguished"}
 
 
 def _is_derivational_adj(word: str) -> bool:
