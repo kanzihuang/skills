@@ -249,7 +249,10 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
         _coca = load_coca()
     except ImportError:
         pass
-    if w not in _coca:
+    # -est/-iest suffixes are reliable (superlatives, near-zero false
+    # positives).  -er/-ier can match nouns (beer, anger, fiber) so we
+    # only apply those when the word is NOT already in COCA.
+    if w not in _coca or w.endswith("est") or w.endswith("iest"):
         for sfx, slen in [("iest", 4), ("est", 3), ("ier", 3), ("er", 2)]:
             if w.endswith(sfx) and len(w) > slen + 1:
                 stem = w[:-slen]
@@ -271,7 +274,7 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
                         and stem[-1] not in "aeiouy"
                     ):
                         cand_e = stem + "e"
-                        if cand_e != w and len(cand_e) < len(w):
+                        if cand_e in _coca and cand_e != w:
                             cand = cand_e
                 if cand != w and len(cand) < len(w):
                     return cand
