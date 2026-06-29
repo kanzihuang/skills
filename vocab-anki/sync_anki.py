@@ -650,9 +650,12 @@ def sync(
     else:
         existing = {}
 
-    # 5. Identify new words (check lemma-based WordId, fallback to original)
+    # 5. Identify new words (check lemma-based WordId, fallback to original).
+    #    Repair cards whose WordId still uses the surface form instead of
+    #    the resolved lemma (e.g. crossing_xxx → cross_xxx).
     new_words = []
     skipped_words = []
+    repaired = 0
     for w in words:
         json_lemma = w.get("lemma", "").strip()
         lemma = resolve_lemma(w["word"], json_lemma)
@@ -660,10 +663,26 @@ def sync(
         lemma_id = f"{lemma}_{book_id}"
         if lemma_id in existing or original_id in existing:
             skipped_words.append(w)
-            if verbose:
+            # Repair: if the card exists under the surface-form WordId
+            # but the resolved lemma differs, update WordId + Word + audio.
+            if ac and original_id in existing and lemma_id != original_id:
+                old_nid = existing[original_id]
+                safe = safe_filename(lemma)
+                ac.update_note_fields(old_nid, {
+                    "WordId": lemma_id,
+                    "Word": lemma,
+                    "WordAudio": f"[sound:{safe}_word.mp3]",
+                })
+                repaired += 1
+                if verbose:
+                    print(f"  REPAIR {w['word']} → {lemma} (WordId + audio updated)")
+            elif verbose:
                 print(f"  SKIP {w['word']} (already in deck)")
         else:
             new_words.append(w)
+
+    if repaired:
+        print(f"  Repaired: {repaired} card(s) (surface-form WordId → lemma)")
 
     print(f"\n  New words to add: {len(new_words)}")
     print(f"  Already in deck: {len(skipped_words)}")
