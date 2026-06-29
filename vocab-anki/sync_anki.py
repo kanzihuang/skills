@@ -114,6 +114,40 @@ def parse_args() -> argparse.Namespace:
 
 # Words lemminflect can't distinguish as derivational adjectives.
 _DERIVATIONAL_ADJ_BLOCKLIST: set[str] = set()
+_SPACY_NLP = None  # cached spaCy model
+
+
+def _get_spacy():
+    """Load spaCy model (cached)."""
+    global _SPACY_NLP
+    if _SPACY_NLP is None:
+        try:
+            import spacy
+            _SPACY_NLP = spacy.load("en_core_web_sm")
+        except Exception:
+            pass
+    return _SPACY_NLP
+
+
+def _spacy_lemma(word: str, sentence: str) -> str | None:
+    """Use spaCy to lemmatize a word in sentence context.
+
+    spaCy's POS tagger uses context to decide whether an -ed/-ing word
+    is an adjective (keep surface form) or verb (reduce to stem).
+    Returns the corrected lemma, or None if spaCy is unavailable.
+    """
+    nlp = _get_spacy()
+    if nlp is None:
+        return None
+    w = word.lower()
+    try:
+        doc = nlp(sentence)
+        for token in doc:
+            if token.text.lower() == w:
+                return token.lemma_.lower()
+    except Exception:
+        pass
+    return None
 
 
 def _load_derivational_adjectives() -> set[str]:
@@ -281,6 +315,19 @@ def _process_one_word(
     word = w["word"]
     json_lemma = w.get("lemma", "").strip()
     lemma = resolve_lemma(word, json_lemma)
+
+    # Safety net: for -ed/-ing words, verify with spaCy's sentence-context
+    # lemmatizer.  If spaCy says the word is an adjective (surface form),
+    # override the mechanical reduction.  This prevents crossing like
+    # distinguished→distinguish, wicked→wick.
+    wl = word.lower()
+    if lemma != wl and wl.endswith(("ed", "ing")):
+        sent = w.get("sentence", "")
+        if sent:
+            spacy_result = _spacy_lemma(word, sent)
+            if spacy_result and spacy_result == wl:
+                lemma = wl
+
     safe = safe_filename(lemma)
     ipa = w.get("ipa", "")
     audio_uploads: list[tuple[str, bytes]] = []
