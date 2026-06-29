@@ -407,6 +407,24 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
         if b_text != word:
             errors.append(f"[{word}] <b> mismatch: <b>{b_text}</b> ≠ word '{word}'")
 
+        # 1b. <b> must wrap the COMPLETE surface word — detect tag-split
+        #     errors like <b>dip</b>ped, <b>nail</b>s, <b>bind</b>ing
+        if b_match and b_text:
+            after = sentence[b_match.end():]
+            if after and after[0].isalpha() and after[0].islower():
+                remaining = ""
+                for ch in after:
+                    if ch.isalpha():
+                        remaining += ch
+                    else:
+                        break
+                full_word = b_text + remaining
+                errors.append(
+                    f"[{word}] <b> tag splits surface word: "
+                    f"<b>{b_text}</b>{remaining} → should wrap complete "
+                    f"surface form '<b>{full_word}</b>'"
+                )
+
         # 2. Sentence must contain the word (case-insensitive, after stripping tags) — hard error
         clean_sentence = re.sub(r"<[^>]+>", "", sentence)
         if word.lower() not in clean_sentence.lower():
