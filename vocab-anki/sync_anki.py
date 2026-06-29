@@ -113,19 +113,40 @@ def parse_args() -> argparse.Namespace:
 
 
 # Words lemminflect can't distinguish as derivational adjectives.
-_DERIVATIONAL_ADJ_BLOCKLIST: set[str] = {"blundering", "conceited", "distinguished"}
+_DERIVATIONAL_ADJ_BLOCKLIST: set[str] = set()
+
+
+def _load_derivational_adjectives() -> set[str]:
+    """Load known derivational adjectives from shared data file."""
+    global _DERIVATIONAL_ADJ_BLOCKLIST
+    if _DERIVATIONAL_ADJ_BLOCKLIST:
+        return _DERIVATIONAL_ADJ_BLOCKLIST
+    try:
+        from pathlib import Path
+        path = (
+            Path(__file__).resolve().parent.parent
+            / "lib" / "data" / "derivational_adjectives.txt"
+        )
+        if path.exists():
+            with open(path) as f:
+                _DERIVATIONAL_ADJ_BLOCKLIST = {line.strip().lower() for line in f if line.strip()}
+    except Exception:
+        pass
+    return _DERIVATIONAL_ADJ_BLOCKLIST
 
 
 def _is_derivational_adj(word: str) -> bool:
     """Check if a word is likely a derivational adjective.
 
-    Uses both a manual blocklist and lemminflect's ADJ lemmatizer.
-    For -ing forms, lemminflect is reliable.  For -ed forms we also
-    check lemminflect but supplement with the blocklist for cases it
-    mis-analyses.
+    Uses a comprehensive adjective list (loaded from shared data) and
+    lemminflect's ADJ lemmatizer.  For -ing forms lemminflect is
+    reliable; for -ed forms we rely on the adjective list because
+    lemminflect can't distinguish past participles from true
+    adjectives (it flags both *attached* and *wicked* the same way).
     """
     w = word.lower()
-    if w in _DERIVATIONAL_ADJ_BLOCKLIST:
+    blocklist = _load_derivational_adjectives()
+    if w in blocklist:
         return True
     if not (w.endswith("ing") or w.endswith("ed")):
         return False
@@ -136,11 +157,12 @@ def _is_derivational_adj(word: str) -> bool:
         verb = getLemma(word, "VERB")
         adj_unchanged = adj and all(a == word for a in adj)
         verb_changes = verb and any(v != word for v in verb)
-        # For -ed: only treat as derivational adj if ADJ is clearly
-        # unchanged AND the word is in the blocklist (lemminflect is
-        # too broad for past participles like *attached*).
-        if w.endswith("ed") and not (w in _DERIVATIONAL_ADJ_BLOCKLIST):
+        # For -ed: only trust lemminflect if the word is ALSO
+        # in the adjective list (prevents false positives like
+        # attached→attach being blocked).
+        if w.endswith("ed"):
             return False
+        # For -ing: lemminflect is reliable
         return adj_unchanged and verb_changes
     except ImportError:
         return False

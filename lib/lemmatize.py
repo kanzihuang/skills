@@ -17,6 +17,8 @@ lemmatize_conservative(word) -> str
 
 from __future__ import annotations
 
+from pathlib import Path
+
 # ============================================================================
 # IRREGULAR FORM DICTIONARY (inflected -> base lemma)
 # ============================================================================
@@ -122,25 +124,39 @@ IRREG.update({
 # Derivational adjective detection (prevents cross-POS lemmatization)
 # ============================================================================
 
-# Words that lemminflect mis-analyses as verb participles but are actually
-# derivational adjectives in context.  Without a POS tagger we can't reliably
-# distinguish, so we maintain a small manual blocklist for common cases.
-DERIVATIONAL_ADJ_BLOCKLIST: set[str] = {
-    "blundering",     # derivational adj., not "blunder" v. participle
-    "conceited",      # derivational adj., not "conceit" n./v. participle
-    "distinguished",  # derivational adj., not "distinguish" v. participle
-}
+# Known derivational adjectives — loaded from shared data file.
+# These are words lemminflect mis-analyses as verb participles but which
+# are actually adjectives (e.g. blundering, conceited, distinguished).
+_ADJ_CACHE: set[str] | None = None
+_ADJ_PATH = Path(__file__).resolve().parent / "data" / "derivational_adjectives.txt"
+
+
+def _load_derivational_adjectives() -> set[str]:
+    """Load known derivational adjectives from shared data file (cached)."""
+    global _ADJ_CACHE
+    if _ADJ_CACHE is None:
+        _ADJ_CACHE = set()
+        if _ADJ_PATH.exists():
+            with open(_ADJ_PATH, encoding="utf-8") as fh:
+                for line in fh:
+                    w = line.strip().lower()
+                    if w:
+                        _ADJ_CACHE.add(w)
+    return _ADJ_CACHE
 
 
 def _is_derivational_adj(w: str) -> bool:
     """Check whether an -ing/-ed word is more likely a derivational adjective.
 
-    Uses lemminflect: if the ADJ lemmatizer keeps the word unchanged while
-    the VERB lemmatizer reduces it, the word is probably a true adjective
-    (e.g. *interesting*, *boring*) rather than a verb participle.
+    For -ing forms: uses lemminflect (ADJ unchanged + VERB changed).
+    For -ed forms: checks the shared adjective list (lemminflect is too
+    broad for past participles — it can't distinguish *attached* v. from
+    *wicked* adj.).
     """
-    if w in DERIVATIONAL_ADJ_BLOCKLIST:
+    if w in _load_derivational_adjectives():
         return True
+    if not (w.endswith("ing") or w.endswith("ed")):
+        return False
     try:
         from lemminflect import getLemma  # noqa: F811
     except ImportError:
@@ -149,6 +165,9 @@ def _is_derivational_adj(w: str) -> bool:
     verb = getLemma(w, "VERB")
     adj_unchanged = adj and all(a == w for a in adj)
     verb_changes = verb and any(v != w for v in verb)
+    # For -ed: only trust lemminflect if word is also in the adj list
+    if w.endswith("ed"):
+        return False
     return adj_unchanged and verb_changes
 
 
