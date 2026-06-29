@@ -112,6 +112,125 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
+# Words lemminflect can't distinguish as derivational adjectives.
+_DERIVATIONAL_ADJ_BLOCKLIST: set[str] = {"blundering", "conceited"}
+
+
+def _is_derivational_adj(word: str) -> bool:
+    """Check if a word is likely a derivational adjective.
+
+    Uses both a manual blocklist and lemminflect's ADJ lemmatizer.
+    For -ing forms, lemminflect is reliable.  For -ed forms we also
+    check lemminflect but supplement with the blocklist for cases it
+    mis-analyses.
+    """
+    w = word.lower()
+    if w in _DERIVATIONAL_ADJ_BLOCKLIST:
+        return True
+    if not (w.endswith("ing") or w.endswith("ed")):
+        return False
+    try:
+        from lemminflect import getLemma
+
+        adj = getLemma(word, "ADJ")
+        verb = getLemma(word, "VERB")
+        adj_unchanged = adj and all(a == word for a in adj)
+        verb_changes = verb and any(v != word for v in verb)
+        # For -ed: only treat as derivational adj if ADJ is clearly
+        # unchanged AND the word is in the blocklist (lemminflect is
+        # too broad for past participles like *attached*).
+        if w.endswith("ed") and not (w in _DERIVATIONAL_ADJ_BLOCKLIST):
+            return False
+        return adj_unchanged and verb_changes
+    except ImportError:
+        return False
+    try:
+        from lemminflect import getLemma
+
+        adj = getLemma(word, "ADJ")
+        verb = getLemma(word, "VERB")
+        adj_unchanged = adj and all(a == word for a in adj)
+        verb_changes = verb and any(v != word for v in verb)
+        return adj_unchanged and verb_changes
+    except ImportError:
+        return False
+
+
+def resolve_lemma(word: str, json_lemma: str) -> str:
+    """Resolve the canonical lemma for a word.
+
+    Strategy (in priority order):
+
+    1. Explicit override: *json_lemma* differs from the surface form
+       → Claude set it deliberately (e.g. derivational adj).  Trust it.
+
+    2. Auto-correct: *json_lemma* is empty or equals the surface form
+       AND the word is not a derivational adjective → run
+       lemmatize_word().
+
+    3. IRREG fallback for cases lemmatize_word() misses.
+
+    4. Otherwise keep the provided lemma (or surface form).
+
+    Claude should only set *lemma* for derivational adjectives /
+    deliberate overrides.  Regular inflectional forms should have an
+    empty *lemma* — lemmatize_word() handles those automatically.
+    """
+    w = word.lower()
+    jl = json_lemma.strip().lower() if json_lemma else ""
+
+    # 1. Explicit override: lemma differs from surface form → trust Claude
+    if jl and jl != w:
+        return jl
+
+    # 2. Regular -est/-er/-ier/-iest patterns (before lemmatize_word,
+    #    which may over-reduce: lemminflect maps *happier* → *hap*).
+    for sfx, slen in [("iest", 4), ("est", 3), ("ier", 3), ("er", 2)]:
+        if w.endswith(sfx) and len(w) > slen + 1:
+            stem = w[:-slen]
+            if sfx.startswith("i"):
+                cand = stem + "y"          # happiest→happy, happier→happy
+            else:
+                cand = stem                 # smallest→small, closer→close?
+                # Doubled consonant: biggest→big (only when the stem ends
+                # in CVC where C is the doubled consonant & not a true
+                # double-letter ending like -ll, -ss, -ff in the base).
+                if len(stem) >= 3 and stem[-1] == stem[-2] and stem[-1] not in "aeiouyls":
+                    cand2 = stem[:-1]
+                    cand = cand2
+                # Dropped-e: closest→close (only if stem doesn't already
+                # look like a valid word, e.g. *small* from *smallest*).
+                if cand == stem and not (
+                    len(stem) >= 2
+                    and stem[-1] == stem[-2]
+                    and stem[-1] not in "aeiouy"
+                ):
+                    cand_e = stem + "e"
+                    if cand_e != w and len(cand_e) < len(w):
+                        cand = cand_e
+            if cand != w and len(cand) < len(w):
+                return cand
+            break
+
+    # 3. Auto-correct inflectional forms (unless derivational adjective)
+    if not _is_derivational_adj(word):
+        reduced = lemmatize_word(word)
+        if reduced != w:
+            return reduced
+
+    # 4. lemmatize_word couldn't reduce — try lib's IRREG dict
+    try:
+        from lib.lemmatize import IRREG  # type: ignore[import-not-found]
+
+        if w in IRREG:
+            return IRREG[w]
+    except ImportError:
+        pass
+
+    # 5. Keep as-is
+    return jl or w
+
+
 def _process_one_word(
     w: dict,
     book_id: str,
@@ -125,7 +244,7 @@ def _process_one_word(
     """
     word = w["word"]
     json_lemma = w.get("lemma", "").strip()
-    lemma = json_lemma if json_lemma else lemmatize_word(word)
+    lemma = resolve_lemma(word, json_lemma)
     safe = safe_filename(lemma)
     ipa = w.get("ipa", "")
     audio_uploads: list[tuple[str, bytes]] = []
@@ -505,7 +624,8 @@ def sync(
     new_words = []
     skipped_words = []
     for w in words:
-        lemma = lemmatize_word(w["word"])
+        json_lemma = w.get("lemma", "").strip()
+        lemma = resolve_lemma(w["word"], json_lemma)
         original_id = f"{w['word'].strip().lower()}_{book_id}"
         lemma_id = f"{lemma}_{book_id}"
         if lemma_id in existing or original_id in existing:

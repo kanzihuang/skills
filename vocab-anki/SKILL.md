@@ -268,7 +268,7 @@ wc -c /tmp/<book>-full.txt
 | 字段 | 说明 | 示例 |
 |------|------|------|
 | `word` | 书中出现的**表面词形**——`<b>` 包裹什么就写什么。**绝不**填原形 | `blundering`（不是 `blunder`），`conceited`（不是 `conceit`），`pondered`（不是 `ponder`）|
-| `lemma` | **必须提供**——Claude 根据语境判断的正确原形。**屈折变化**退回词根（`pondered`→`ponder`、`straying`→`stray`）；**派生形容词保持自身**（`blundering` adj.→`blundering`，不退 `blunder`；`conceited` adj.→`conceited`，不退 `conceit`）。若不确定，脑中过一遍 `lemmatize_word(word)` 的结果：结果词性与句中用法一致→可用；不一致→覆写 | `pondered`→`ponder`；`blundering`(adj)→`blundering`；`conceited`(adj)→`conceited` |
+| `lemma` | **派生形容词/特殊覆写时必填，常规屈折变化留空即可**。`sync_anki.py` 内置的 `resolve_lemma()` 会自动处理屈折还原（`attached`→`attach`、`burning`→`burn`、`closest`→`close`、`chosen`→`choose`），无需 Claude 手动填写。**仅在**派生形容词（`blundering` adj.→不退 `blunder`；`conceited` adj.→不退 `conceit`）或 `resolve_lemma()` 无法正确还原的情况下才显式设置 `lemma`。若不确定，脑中过一遍 `lemmatize_word(word)` 的结果：结果词性与句中用法一致→`lemma` **留空**；不一致→必须显式覆写 | `pondered`→留空（自动还原为 `ponder`）；`blundering`(adj)→`"blundering"`；`conceited`(adj)→`"conceited"` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I felt awkward and <b>blundering</b>.` |
 | `ipa` | 对应 **lemma（卡片展示词）**的 IPA 音标，**不是**对应 `word`（表面词形）| `lemma=blundering`→`/ˈblʌndərɪŋ/`；`lemma=ponder`→`/ˈpɒndər/` |
 | `definition_cn` | **按句中实际用法释义**，不按原形常见义项，也不自动选择最常见的词典义。特别注意多义词的含义选择：同一个词在不同句子中可能是完全不同的意思。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）；`thriftily` 在 "he must be treated thriftily" 中→"有节制地，有所保留地"（**不写**"节俭地"）|
@@ -277,7 +277,7 @@ wc -c /tmp/<book>-full.txt
 **例句规则（不变）：**
 - 必须是书中真实句子，不是词典通用例句
 - 如果对该书不够熟悉，无法回忆真实句子 → 如实告知用户，并提供词典例句作为替代
-- 句子中出现的生词形式可能不同于原形（如 `straying` vs `stray`），用 `<b>` 包裹书中实际出现的词形。**`<b>` 必须包裹句中完整的表面词形，绝不能包裹原形后拼接剩余字母**——例如句中写的是 `considerably`，就写 `<b>considerably</b>`，**禁止**写 `<b>considerable</b>ly`（原形 `considerable` + 后缀 `ly`）。同理，句中写的是 `devoted`，就写 `<b>devoted</b>`，**禁止**写 `<b>devote</b>d`——脚本内部会自行对 `word` 做原形还原，**绝不可以在 `<b>` 或 `word` 字段中手动将表面词形替换为原形**。`word` 字段必须与 `<b>` 包裹的文本一致
+- 句子中出现的生词形式可能不同于原形（如 `straying` vs `stray`），用 `<b>` 包裹书中实际出现的词形。**`<b>` 必须包裹句中完整的表面词形，绝不能包裹原形后拼接剩余字母**——例如句中写的是 `considerably`，就写 `<b>considerably</b>`，**禁止**写 `<b>considerable</b>ly`（原形 `considerable` + 后缀 `ly`）。同理，句中写的是 `devoted`，就写 `<b>devoted</b>`，**禁止**写 `<b>devote</b>d`——脚本内置的 `resolve_lemma()` 会自行将 `word` 还原为原形用于 WordId 和卡片正面展示，**绝不可以在 `<b>` 或 `word` 字段中手动将表面词形替换为原形**。`word` 字段必须与 `<b>` 包裹的文本一致
 - **`<b>` 目标词校验**：句子中 `<b>` 包裹的词必须是当前卡片的生词。若同一句中还出现了本牌组其他生词（如 `baobabs`），**绝不能**把 `<b>` 标到别的词上——生成后逐词确认 `<b>…</b>` 内的文本与 `word` 字段一致
 - 例句应简洁：1-2 句，通常 ≤150 字符。**禁止**使用整段对话或长段落——仅提取目标词所在的核心句及其紧邻上下文，让学习者在 3 秒内定位到生词
 - **以上规则由 `sync_anki.py` 在同步前自动校验**：句子长度 >150 字符、`<b>` 内容与 `word` 字段不匹配、必填字段（ipa/definition_cn/translation_cn）缺失均会拒绝同步并打印错误。尽早生成高质量内容，避免回滚重做
@@ -325,7 +325,7 @@ wc -c /tmp/<book>-full.txt
 
 每批写入完成后，逐词检查以下四项，发现错误立即修正：
 
-1. **lemma 正确性**：脑中过一遍 `lemmatize_word(word)` 的返回结果。结果词性与句中实际用法一致（屈折变化）→ 可用；不一致（派生 adj 被当屈折）→ 必须显式覆写 `lemma`。例如 `blundering`(adj)→lemmatize→`blunder`(v) 词性不对，覆写 `lemma: "blundering"`；`pondered`(v)→lemmatize→`ponder`(v) 正确，不需要覆写
+1. **lemma 正确性**：脑中过一遍 `lemmatize_word(word)` 的返回结果。结果词性与句中实际用法一致（屈折变化）→ `lemma` **留空**，脚本自动还原；不一致（派生 adj 被当屈折）→ 必须显式覆写 `lemma`。例如 `blundering`(adj)→lemmatize→`blunder`(v) 词性不对，覆写 `lemma: "blundering"`；`pondered`(v)→lemmatize→`ponder`(v) 正确，`lemma` 留空。**绝不在 `lemma` 字段中填写与 `word` 相同的表面词形**——留空让脚本处理，填表面词形反而阻止自动还原
 2. **IPA 对应性**：每个 IPA 是否对应 `lemma`（卡片展示词）的正确发音？异读词（如 `intimate`）必须根据释义选择 `/ˈɪntɪmət/`(adj) 或 `/ˈɪntɪmeɪt/`(v)
 3. **释义词性对齐**：`definition_cn` 是否反映了句中实际用法的词性？`blundering` adj→"笨拙的"（非"犯大错"）；`conceited` adj→"自负的"（非"自负"）
 4. **word 字段一致**：`word` 是否 = `<b>` 包裹的文本 = 句中出现的形式？

@@ -25,8 +25,10 @@ Usage:
 
 import os
 
-# Path to the COCA word list, relative to this file
-_LIST_PATH = os.path.join(os.path.dirname(__file__), "coca_20000.txt")
+# Path to the COCA word list — shared data in lib/
+_LIST_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "lib", "data", "coca_20000.txt"
+)
 
 # Cache the loaded set to avoid re-reading
 _coca_cache: set[str] | None = None
