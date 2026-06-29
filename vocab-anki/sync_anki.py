@@ -341,6 +341,22 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
             if not w.get(field):
                 errors.append(f"[{word}] missing '{field}'")
 
+        # 4.5 lemma sanity: if explicitly set AND differs from both the
+        #     surface word AND lemmatize_word(word) → almost certainly a
+        #     mistake (e.g. beautiful→beautifully).  The correct pattern
+        #     is to leave *lemma* empty for regular inflection and only
+        #     set it for derivational-adjective overrides (lemma == word).
+        json_lemma = w.get("lemma", "").strip()
+        if json_lemma:
+            resolved = resolve_lemma(word, "")
+            machine = lemmatize_word(word)
+            if json_lemma.lower() != word.lower() and json_lemma.lower() != machine.lower():
+                errors.append(
+                    f"[{word}] suspicious lemma '{json_lemma}': differs from both "
+                    f"surface form '{word}' and lemmatize_word() result '{machine}'. "
+                    f"Leave lemma empty for regular inflection (auto-correct → '{resolved}')"
+                )
+
         # --- Soft warnings (stderr only, do not block sync) ---
 
         # 5. IPA format sanity check
