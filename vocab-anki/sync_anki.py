@@ -520,7 +520,10 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
 
         # --- Soft warnings (stderr only, do not block sync) ---
 
-        # 5. IPA matches lemma (not surface form): e.g. lemma=hunt
+        # 5. IPA format sanity check
+        ipa = w.get("ipa", "")
+
+        # 6. IPA matches lemma (not surface form): e.g. lemma=hunt
         #    but IPA=/ˈhʌntɪŋ/ (for hunting).
         json_lemma2 = w.get("lemma", "").strip()
         resolved = resolve_lemma(word, json_lemma2)
@@ -530,9 +533,6 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                 f"does not end in -ing (surface form: '{word}')",
                 file=sys.stderr,
             )
-
-        # 6. IPA format sanity check
-        ipa = w.get("ipa", "")
         if ipa:
             ipa_clean = ipa.strip()
             if "/" not in ipa_clean:
