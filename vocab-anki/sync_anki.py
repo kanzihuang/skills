@@ -1209,6 +1209,18 @@ def main() -> None:
         print(f"Note: deduplicated {len(data['words']) - len(deduped)} word(s)\n")
     data["words"] = deduped
 
+    # Pre-fill IPA from cmudict before validation.
+    # Claude may leave ipa empty — cmudict fills it automatically for known words.
+    # Only words truly not in cmudict will still have empty ipa and fail validation
+    # (requiring Claude to provide a manual IPA).
+    for w in data["words"]:
+        if not w.get("ipa", "").strip():
+            json_lemma = w.get("lemma", "").strip()
+            lookup_word = json_lemma if json_lemma else w["word"]
+            cmu_ipa = _cmu_ipa(lookup_word)
+            if cmu_ipa:
+                w["ipa"] = cmu_ipa
+
     # Validate quality rules before sync
     errors = _validate_word_entries(data["words"])
     if errors:

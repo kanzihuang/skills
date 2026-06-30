@@ -126,8 +126,29 @@ class AnkiConnect:
         AnkiConnect supports inline audio via base64 data URLs or local
         file references. Media files should be uploaded separately via
         store_media_file() first, then referenced as [sound:filename.mp3].
+
+        When the batch call fails because some notes are duplicates,
+        AnkiConnect may return an array of per-note errors instead of
+        a result list.  We catch that case and retry each note individually
+        to get accurate per-note results.
         """
-        return self._call("addNotes", notes=notes)
+        try:
+            return self._call("addNotes", notes=notes)
+        except AnkiConnectError as e:
+            errmsg = str(e)
+            if "duplicate" in errmsg.lower():
+                # Batch failed — some notes may be duplicates.
+                # Retry individually to distinguish real dupes from
+                # notes rejected only because of the batch failure.
+                results: list[int | None] = []
+                for note in notes:
+                    try:
+                        note_id = self._call("addNote", note=note)
+                        results.append(note_id)
+                    except AnkiConnectError:
+                        results.append(None)
+                return results
+            raise
 
     def update_note_fields(self, note_id: int, fields: dict[str, str]) -> None:
         """Update fields of an existing note (preserves scheduling)."""
