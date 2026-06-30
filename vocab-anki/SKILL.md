@@ -5,14 +5,28 @@ description: >
   English book highlights. Syncs directly to Anki via AnkiConnect plugin.
   Use when user wants to create Anki cards from WeRead highlights, e.g.
   "/vocab-anki The Little Prince" or "为这本书的划线生词生成 Anki 牌组".
+  Also supports full-text mode: extract vocabulary from entire book text
+  with COCA frequency range and chapter range filtering.
   Integrates with weread-skills for data; Claude does knowledge work
   (sentences, translations), Python scripts handle audio + sync.
 ---
 
 # vocab-anki — 英文书词汇 Anki 牌组生成
 
-将微信读书英文原版书的划线生词通过 AnkiConnect 直接同步到 Anki，嵌入发音音频。
+将微信读书英文原版书的划线生词（或全书词汇）通过 AnkiConnect 直接同步到 Anki，嵌入发音音频。
 自动对比已有卡片，仅添加新词，保留学习进度不受影响。
+
+## 两种模式
+
+| 模式 | 输入 | 触发词 | 适用场景 |
+|------|------|--------|----------|
+| **划线模式**（默认） | 微信读书划线 | "/vocab-anki 书名"、"划线生词" | 从已读划线的生词制作卡片 |
+| **全文模式** | 图书原文 | "全文制作"、"全量词汇"、"按 COCA 词频"、"词频范围"、"指定章节"、"全文" | 按词频/章节范围从全书提取词汇 |
+
+全文模式额外支持：
+- **COCA 词频范围**：自然语言描述（如 "COCA 3000-10000"、"排除前3000高频词"），不明确时提问确认
+- **章节范围**：先展示检测到的章节列表，用户选择（如 `1-5,7,10-12`）
+- **Anki 去重范围**：必须提问确认——仅排除同本书已有卡片，还是排除本技能制作的所有牌组中的单词
 
 ## 前置条件
 
@@ -170,6 +184,155 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 字段：
 ```
 
 > Anki 去重先于 COCA：已在牌组中的词直接保留，不受 COCA 频次影响。历史排除词（存储在 meta manifest 中）也跳过，不再重复 COCA 检查。COCA 仅对真正的新词做筛。所有检查均为本地/本地网络查询（~0.5s），无需缓存。
+
+---
+
+## 全文模式工作流
+
+> 当用户使用以下关键词时，跳过划线模式 Step 1，走以下全文模式分支：
+> **"全文制作"、"全量词汇"、"全文"、"按 COCA 词频"、"词频范围"、"指定章节"、"排除前X高频词"、"COCA X-Y"、"COCA X到Y"、"全部生词"**
+>
+> 仅含 "生成牌组"、"制作卡片"、"Anki" 等词而不含上述关键词 → 走划线模式。
+> 全文模式的其他步骤（Step 3.0、Step 3、Step 3.5、Step 4）与划线模式相同。
+
+### Step 1-FT.0: 需求确认
+
+在获取数据前，确认用户未明确表述的需求：
+
+| 参数 | 默认 | 何时提问 |
+|------|------|---------|
+| COCA 词频范围 | 无限制（全部 COCA 20000） | 用户未指定范围，或表述模糊（如 "中频词"） |
+| 章节范围 | 全部章节 | 用户未指定，或表述模糊 |
+| Anki 去重范围 | **必须提问确认** | 用户未明确说明时显式提问；提及 "所有牌组"/"全局" → 全库去重；提及 "仅本书"/"同书" → 仅同书 |
+
+**COCA 范围意图解析：**
+
+| 用户表达 | 解析结果 | `--basic-range` |
+|----------|---------|-----------------|
+| "COCA 3000-10000" | 排名 3001-10000 | `3001-10000` |
+| "排除前3000高频词" / "排除前3000" | 排除 top 3000 | `3001-18964` |
+| "5000以内" / "前5000" | 排名 1-5000 | `1-5000` |
+| "中频词" / "中等难度" | 大致 3001-8000 | **提问确认具体范围** |
+| "全部COCA词" / 未提及 | 无范围限制 | 省略 `--basic-range` |
+
+> 1-based rank: rank 1 = 最高频词 ("the")。范围两端均 inclusive。
+
+### Step 1-FT.1: 获取数据（并行两步）
+
+**与划线模式共享 Step 0、Step 1a-1b**（bookId 桥接、搜索/路由、bookInfo）。
+
+并行执行：
+
+**(a) 获取 WeRead 章节列表：**
+
+```json
+{"api_name": "/book/chapterinfo", "bookId": "<bookId>", "skill_version": "1.0.3"}
+```
+
+目的：获取完整章节层级。返回的 `chapters[]` 含 `level` 字段——level=1 是封面/版权/书名页等元数据，level=2 是实际内容章节。`updated[]` 划线数据在全文模式不使用。
+
+> **注意**：`/book/bookmarklist` 的 `chapters[]` 仅返回 level-1 章节，会漏掉嵌套的实际内容章节。**全文模式必须用 `/book/chapterinfo`**。
+
+**(b) 获取全文：**
+
+与 Step 3.0a-3.0b 相同：WebSearch → curl 下载 → 验证（`head -c 500` 确认是书的内容，文件 >20KB）。
+
+```bash
+curl -sL --max-time 60 '<URL>' -o /tmp/<safe_title>-full.txt
+```
+
+> 全文下载在此步骤完成，后续 Step 3.0 即可直接使用，无需重复获取。
+
+### Step 1-FT.2: 章节展示 + 用户选择
+
+从 `/book/chapterinfo` 响应 `chapters[]` 中**过滤 level=2 的章节**（实际内容章节，排除封面/版权/书名页等 level=1 元数据），按原始顺序扁平编号（1-based）：
+
+```
+检测到 6 个章节:
+  1. 一
+  2. 二
+  ...
+  6. 六
+
+请输入需要制作的章节范围（如 1-3,5），或回车选择全部章节：
+```
+
+**用户输入解析规则：**
+- 空白 / "全部" / "all" → 全选
+- `1-5,7,10-12` → 章节 1-5、7、10-12
+- 章节标题关键词匹配（如 "一"、"Chapter 1"）→ 包含即选中
+
+验证：范围在 [1, N] 内，不包含倒置范围（如 10-5）。
+
+如果无 level=2 章节（如短篇无分章），跳过此步，直接处理全文。
+
+> 简短书籍（≤5 章）且用户未指定章节范围时，跳过确认直接处理全部章节。
+
+### Step 1-FT.3: 运行 filter_fulltext.py
+
+```bash
+# 确保 venv 存在（仅首次）
+if [ ! -d <skill_dir>/.venv ]; then
+    python3 -m venv <skill_dir>/.venv
+    <skill_dir>/.venv/bin/pip install -q -r <skill_dir>/requirements.txt
+fi
+
+# 提取 + 过滤全文词汇
+cat /tmp/<safe_title>-full.txt | \
+<skill_dir>/.venv/bin/python3 <skill_dir>/filter_fulltext.py \
+  --basic-range 3001-10000 \
+  --chapter-range "1-5,7,10-12" \
+  --chapter-titles '<chapters_json>' \
+  --anki <bookId> --book-id <bookId> \
+  --json-out /tmp/vocab-anki-filtered-<bookId>.json
+```
+
+**flags：**
+- `--basic-range M-N`：COCA 频率排名范围。省略表示不限制。
+- `--chapter-range RANGE`：用户选择的章节。省略表示全部。
+- `--chapter-titles JSON`：WeRead API `/book/chapterinfo` 返回的 `chapters[]` 中 **level=2 的章节**序列化为 JSON 字符串（注意 shell 转义）。
+- `--anki <bookId>`：启用 Anki 去重。若 Step 0b 确认全库 0 张卡片可省略。
+- `--book-id <bookId>`：用于 meta manifest 查询。
+- `--anki-all-decks`：仅在用户明确要求全库去重时添加。
+- `--json-out <path>`：输出结构化 JSON。
+
+**脚本内流水线：**
+1. 分词：`re.findall(r"[a-zA-Z]{2,}", text)`
+2. 章节切分：在原文中搜索 WeRead 章节标题（精确 → 忽略大小写 → 去标点），按字节偏移构建区间
+3. 词形还原：`lib.lemmatize.lemmatize()`（全面模式，含 IRREG + 规则变形）
+4. COCA 范围过滤：`in_coca()` 含派生还原（如 `indulgently` → `indulgent`）+ 频率排名范围
+5. Anki 去重：同书（或全库）已有卡片 + meta manifest 历史排除
+6. JSON 输出：格式与划线模式 `filter_pipeline.py` 输出一致
+
+### Step 1-FT.4: 汇总展示
+
+```
+全文模式分析完成:
+- 全文总词例 (tokens): 48,523
+- 去重后原形 (lemmas): 3,210
+- Anki 已有: 0 个
+- COCA 范围外: 2,429 个
+- 待生成卡片: 781 个
+```
+
+从 stdout `SUMMARY:` 行和 JSON `summary` 字段提取数字展示。**不在此步确认**——继续执行 Step 3.0。
+
+### Step 3.0: 句子匹配（全文模式调整）
+
+全文已在 Step 1-FT.1 下载（`/tmp/<safe_title>-full.txt`），**跳过 3.0a 和 3.0b**，直接从 3.0c 开始。
+
+其余步骤与划线模式完全相同：
+- 3.0c 机械匹配句子（章节优先，利用 JSON 中 `in_coca[].chapters` 字段）
+- 3.0c-1 验证表面形式确实在句子中
+- 3.0c-2 句子完整性检查
+- 3.0d 版本验证（查一句名言）
+- 3.0e 截断处理（>150 字符）
+
+> **全文模式特有**：每个 lemma 的 `forms` 数组列出了文本中出现的所有表面形式（如 `["abandoned", "abandoning"]`）。匹配句子时，在对应章节的文本中搜索任一形式。`word` 字段填匹配到的表面形式，`lemma` 填原形。
+
+> 若全书文本无法获取（Step 1-FT.1 下载失败）→ 跳过整个 batch，不生成卡片。
+
+---
 
 ### Step 3.0: 获取源文本（句子检索替代回忆）
 
@@ -388,6 +551,7 @@ wc -c /tmp/<book>-full.txt
   "book_title": "小王子（英文版）",
   "book_author": "圣埃克絮佩里",
   "book_id": "22720170",
+  "deck_name": "小王子（英文版） (圣埃克絮佩里)",
   "words": [
     {"word": "pondered", "lemma": "ponder", "ipa": "/.../", "sentence": "...", "definition_cn": "...", "translation_cn": "..."}
   ],
@@ -398,7 +562,8 @@ wc -c /tmp/<book>-full.txt
 ```
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）
 - `book_id` 为微信读书 bookId
-- `ipa` 由 Claude 直接提供（训练数据），用于卡片显示；单词音频由 Edge TTS 默认发音生成；IPA 缺失时跳过单词音频
+- `deck_name`：**从 Step 0b 的 `{牌组名: bookId}` 映射中反查**。若 bookId 已有牌组 → 填入 Anki 中实际牌组名（确保新旧卡片归入同一牌组）；若新书无已有牌组 → 用 `{title} ({author})` 拼接（**去掉作者国籍前缀如 `[美]`**）
+- `ipa` 由 cmudict 自动生成；Claude 仅在多发音词时提供投票参考
 - `excluded` 数组从 Step 1 `--json-out` 输出的 JSON 文件中读取，**使用 `lemma` 字段**（非 `rep`）填入 `word`，确保排除词以原形展示；`reason` 字段直接沿用
 - **此步骤不展示样卡，不询问用户**
 
@@ -480,7 +645,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 7. **更新 meta manifest 卡片**：将本次 `excluded` 单词写入 Sentence 字段的 JSON manifest（`WordId = __META__{bookId}`），卡片暂停（不参与复习），下次同步优先读取
 8. **触发 AnkiWeb 同步**：卡片添加完成后自动触发 `sync` 操作，将新卡片同步到 AnkiWeb。此操作为 fire-and-forget——成功响应仅表示 Anki 已接受请求，不代表 AnkiWeb 已收到数据。若 Anki 弹出冲突解决对话框，同步可能静默排队。使用 `--no-ankiweb-sync` 跳过此步骤
 
-牌组名自动从 JSON 推导：`"{title} ({author})"`。额外参数：`--deck "自定义"`、`--dry-run`、`--no-audio`、`--no-ankiweb-sync`。
+牌组名优先从 JSON `deck_name` 字段读取（Claude 在 Step 3 从 Step 0b 的 `{牌组名: bookId}` 映射反查填入）。未提供时回退 `--deck` 参数；都未提供才自动拼接。
 
 ## 卡片格式
 

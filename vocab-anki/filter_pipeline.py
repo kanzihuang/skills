@@ -86,7 +86,7 @@ def query_anki_existing(ac: AnkiConnect, book_id: str) -> set[str]:
         lemmas = set()
         for note in info:
             word_id = note.get("fields", {}).get("WordId", {}).get("value", "")
-            if word_id and "_" in word_id:
+            if word_id and "_" in word_id and not word_id.startswith("__META__"):
                 lemma = word_id.rsplit("_", 1)[0]
                 lemmas.add(lemma.lower())
         return lemmas

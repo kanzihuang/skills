@@ -1217,8 +1217,14 @@ def main() -> None:
             print(f"  {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Auto-derive deck name to match generate_apkg.py convention
-    if args.deck:
+    # Deck name resolution priority:
+    #   1. JSON deck_name field (set by Claude from Step 0b {deck: bookId} mapping)
+    #   2. --deck CLI flag (explicit override)
+    #   3. Auto-derive from book_title + book_author (new deck, fallback)
+    json_deck = data.get("deck_name", "").strip()
+    if json_deck:
+        deck_name = json_deck
+    elif args.deck:
         deck_name = args.deck
     else:
         author = data.get("book_author", "")

@@ -307,3 +307,28 @@ class AnkiConnect:
                 "then retry syncing."
             )
         return True
+
+    def query_anki_all_lemmas(self) -> set[str]:
+        """Return ALL lemmas from ALL notes of model 'Vocabulary Card (WeRead)'.
+
+        Strips bookId suffix from WordId, excludes __META__ entries.
+        Used for cross-deck dedup in full-text mode.
+
+        Returns empty set if no notes exist or on AnkiConnect error.
+        """
+        try:
+            note_ids = self.find_notes('note:"Vocabulary Card (WeRead)"')
+            if not note_ids:
+                return set()
+            info = self.notes_info(note_ids)
+            lemmas: set[str] = set()
+            for note in info:
+                word_id = note.get("fields", {}).get("WordId", {}).get("value", "")
+                if word_id and "_" in word_id and not word_id.startswith("__META__"):
+                    lemma = word_id.rsplit("_", 1)[0]
+                    lemmas.add(lemma.lower())
+            return lemmas
+        except AnkiConnectError:
+            return set()
+        except Exception:
+            return set()
