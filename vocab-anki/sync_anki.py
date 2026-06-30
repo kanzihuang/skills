@@ -160,14 +160,54 @@ _ARPABET_TO_IPA = {
 }
 
 
-def _cmu_ipa(word: str) -> str | None:
-    """Look up IPA for *word* in cmudict.  Returns None if not found."""
+def _pick_best_pronunciation(
+    entries: list[list[str]], claude_ipa: str
+) -> list[str]:
+    """Pick the cmudict entry closest to Claude's IPA by vowel match."""
+    # Extract vowel set from Claude IPA (simplified)
+    claude_vowels = set()
+    for ch in claude_ipa.strip("/"):
+        if ch in "iɪeæɑɔoʊuʌəɜa":
+            claude_vowels.add(ch)
+
+    def score(phones: list[str]) -> int:
+        s = 0
+        for p in phones:
+            base = p.rstrip("012")
+            mapped = _ARPABET_TO_IPA.get(base, "")
+            # Count matching vowels (approximate)
+            for ch in mapped:
+                if ch in claude_vowels:
+                    s += 1
+            # Prefer exact stress match
+            if p[-1].isdigit() and "ˈ" in claude_ipa and p.endswith("1"):
+                s += 1
+        return s
+
+    best = max(entries, key=score)
+    return best
+
+
+def _cmu_ipa(word: str, claude_ipa: str = "") -> str | None:
+    """Look up IPA for *word* in cmudict.  Returns None if not found.
+
+    For multi-pronunciation words, *claude_ipa* is used as a tiebreaker
+    to pick the phonetically closest entry (handles heteronyms like
+    read/read, wound/wound).  Without a Claude IPA, defaults to the
+    first entry.
+    """
     cmu = _load_cmudict()
     w = word.lower()
     if w not in cmu:
         return None
-    phones = cmu[w][0]  # first (most common) pronunciation
-    # Count stressed vowels → monosyllabic words get no stress mark
+    # Single pronunciation → use directly
+    entries = cmu[w]
+    if len(entries) == 1 or not claude_ipa:
+        phones = entries[0]
+    else:
+        # Multiple → pick closest to Claude's IPA by vowel match
+        phones = _pick_best_pronunciation(entries, claude_ipa)
+    # Convert ARPAbet phones to IPA string
     vowel_count = sum(1 for p in phones if any(c.isdigit() for c in p))
     result: list[str] = []
     for p in phones:
@@ -341,8 +381,9 @@ def _process_one_word(
 
     safe = safe_filename(lemma)
 
-    # IPA: cmudict (deterministic) preferred, Claude fallback for OOV
-    cmu_ipa = _cmu_ipa(lemma)
+    # IPA: cmudict preferred.  Claude's IPA used as tiebreaker for
+    # heteronyms (read/read, wound/wound) and fallback for OOV words.
+    cmu_ipa = _cmu_ipa(lemma, w.get("ipa", ""))
     ipa = cmu_ipa if cmu_ipa else w.get("ipa", "")
 
     audio_uploads: list[tuple[str, bytes]] = []
@@ -1196,7 +1237,7 @@ def _test_arpabet_to_ipa() -> None:
 
     def check(word: str, expected: str) -> None:
         nonlocal failures
-        got = _cmu_ipa(word)
+        got = _cmu_ipa(word)  # no Claude IPA → uses first entry
         if got != expected:
             failures += 1
             print(f"  FAIL: {word} → {got} (expected {expected})", file=sys.stderr)
