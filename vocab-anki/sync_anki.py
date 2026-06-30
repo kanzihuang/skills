@@ -822,18 +822,24 @@ def sync(
         if lemma_id in existing or original_id in existing:
             skipped_words.append(w)
             # Repair: if the card exists under the surface-form WordId
-            # but the resolved lemma differs, update WordId + Word + audio.
+            # but the resolved lemma differs, update ALL dependent fields.
             if ac and original_id in existing and lemma_id != original_id:
                 old_nid = existing[original_id]
                 safe = safe_filename(lemma)
-                ac.update_note_fields(old_nid, {
+                fields = {
                     "WordId": lemma_id,
                     "Word": lemma,
                     "WordAudio": f"[sound:{safe}_{book_id}_word.mp3]",
-                })
+                    "SentenceAudio": f"[sound:{safe}_{book_id}_sent.mp3]",
+                }
+                # IPA from cmudict if available
+                cmu = _cmu_ipa(lemma)
+                if cmu:
+                    fields["IPA"] = cmu
+                ac.update_note_fields(old_nid, fields)
                 repaired += 1
                 if verbose:
-                    print(f"  REPAIR {w['word']} → {lemma} (WordId + audio updated)")
+                    print(f"  REPAIR {w['word']} → {lemma} (WordId, audio, IPA updated)")
             elif verbose:
                 print(f"  SKIP {w['word']} (already in deck)")
         else:
