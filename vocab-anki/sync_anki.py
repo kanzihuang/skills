@@ -764,6 +764,23 @@ def _write_meta_manifest(
     return manifest
 
 
+def _repair_audio(
+    ac: AnkiConnect, lemma: str, sentence: str, book_id: str
+) -> None:
+    """Re-upload word + sentence audio for a repaired card."""
+    safe = safe_filename(lemma)
+    # Word audio
+    word_tts = edge_tts_bytes(lemma)
+    if word_tts:
+        ac.store_media_file(f"{safe}_{book_id}_word.mp3", word_tts)
+    # Sentence audio
+    if sentence:
+        clean = re.sub(r"<[^>]+>", "", sentence)
+        sent_tts = edge_tts_bytes(clean)
+        if sent_tts:
+            ac.store_media_file(f"{safe}_{book_id}_sent.mp3", sent_tts)
+
+
 def sync(
     data: dict,
     deck_name: str,
@@ -822,7 +839,8 @@ def sync(
         if lemma_id in existing or original_id in existing:
             skipped_words.append(w)
             # Repair: if the card exists under the surface-form WordId
-            # but the resolved lemma differs, update ALL dependent fields.
+            # but the resolved lemma differs, update ALL dependent fields
+            # AND re-upload audio under the new filename.
             if ac and original_id in existing and lemma_id != original_id:
                 old_nid = existing[original_id]
                 safe = safe_filename(lemma)
@@ -837,6 +855,9 @@ def sync(
                 if cmu:
                     fields["IPA"] = cmu
                 ac.update_note_fields(old_nid, fields)
+
+                # Re-upload audio with new filenames (word + sentence)
+                _repair_audio(ac, lemma, w.get("sentence", ""), book_id)
                 repaired += 1
                 if verbose:
                     print(f"  REPAIR {w['word']} → {lemma} (WordId, audio, IPA updated)")
