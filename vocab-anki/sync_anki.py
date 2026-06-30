@@ -389,11 +389,13 @@ def _process_one_word(
     audio_uploads: list[tuple[str, bytes]] = []
 
     if not no_audio:
-        # Word audio: Claude IPA → SSML synthesis; no IPA → skip word audio
+        # Word audio: Edge TTS on lemma (with IPA if available).
+        #   Include book_id — heteronyms like "wound" have different
+        #   pronunciations in different books.
         if ipa:
             tts = edge_tts_bytes(lemma, ipa=ipa)
             if tts:
-                audio_uploads.append((f"{safe}_word.mp3", tts))
+                audio_uploads.append((f"{safe}_{book_id}_word.mp3", tts))
 
         # Sentence audio: Edge TTS on cleaned sentence.
         #   Include book_id in filename — different books have different
@@ -423,7 +425,7 @@ def build_note_entry(
     """
     display = (lemma or word_data["word"]).strip().lower()
     safe = safe_filename(display)
-    word_audio_ref = f"[sound:{safe}_word.mp3]"
+    word_audio_ref = f"[sound:{safe}_{book_id}_word.mp3]"
     sent_audio_ref = f"[sound:{safe}_{book_id}_sent.mp3]"
     word_id = f"{display}_{book_id}"
 
@@ -827,7 +829,7 @@ def sync(
                 ac.update_note_fields(old_nid, {
                     "WordId": lemma_id,
                     "Word": lemma,
-                    "WordAudio": f"[sound:{safe}_word.mp3]",
+                    "WordAudio": f"[sound:{safe}_{book_id}_word.mp3]",
                 })
                 repaired += 1
                 if verbose:
