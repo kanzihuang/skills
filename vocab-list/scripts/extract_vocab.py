@@ -15,7 +15,7 @@ Usage
     # Exclude top-1000 most frequent words (too basic):
     python3 extract_vocab.py --exclude-basic 1000 < book.txt
 
-    # Only keep words in Google 10K rank range 3001-10000 (mid-frequency):
+    # Only keep words in COCA frequency rank range 3001-10000 (mid-frequency):
     python3 extract_vocab.py --basic-range 3001-10000 < book.txt
 
     # Combine: exclude top-3000 AND only keep ranks 3001-10000:
@@ -45,7 +45,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from lib import load_coca, lemmatize, load_basic_words  # noqa: E402
+from lib import load_coca, lemmatize, load_freq_ranked  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ def main() -> None:
         sys.exit(1)
 
     # Parse --exclude-basic N  (exclude top-N most frequent words)
-    # Parse --basic-range MIN-MAX  (keep only words in this Google 10K rank range)
+    # Parse --basic-range MIN-MAX  (keep only words in this COCA frequency rank range)
     exclude_basic = 0
     basic_min = 0       # 0 = no lower bound
     basic_max = 0       # 0 = no upper bound
@@ -145,15 +145,15 @@ def main() -> None:
     basic_excluded = 0
     basic_out_of_range = 0
     if exclude_basic > 0 or basic_max > 0:
-        all_10k = load_basic_words(10000)  # ordered list, rank 1 = most frequent
+        all_freq = load_freq_ranked()         # ordered list, rank 1 = most frequent
         if exclude_basic > 0:
-            basic_set = set(all_10k[:exclude_basic])  # top-N
+            basic_set = set(all_freq[:exclude_basic])  # top-N
             basic_excluded = len(set(coca_words) & basic_set)
             coca_words = [w for w in coca_words if w not in basic_set]
         if basic_min > 0 or basic_max > 0:
             lo = max(basic_min, 1)
-            hi = min(basic_max, len(all_10k)) if basic_max else len(all_10k)
-            in_range = set(all_10k[lo-1:hi])  # ranks lo..hi
+            hi = min(basic_max, len(all_freq)) if basic_max else len(all_freq)
+            in_range = set(all_freq[lo-1:hi])  # ranks lo..hi
             before = len(coca_words)
             coca_words = [w for w in coca_words if w in in_range]
             basic_out_of_range = before - len(coca_words)

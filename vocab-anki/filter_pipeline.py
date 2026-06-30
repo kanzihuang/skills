@@ -59,8 +59,13 @@ def pick_rep(forms: list[str]) -> str:
     return best or forms[0].lower()
 
 sys.path.insert(0, os.path.dirname(__file__))
+# Also add repo root to sys.path so we can import lib/
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from utils import lemmatize_word
-from coca_lookup import load_coca, in_coca
+from lib.coca import load_coca, in_coca
 from ankiconnect import AnkiConnect, AnkiConnectError
 
 

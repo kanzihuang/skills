@@ -47,8 +47,8 @@
 | `ankiconnect.py` | AnkiConnect JSON-RPC 客户端 |
 | `filter_pipeline.py` | 合并过滤流水线：lemmatize → Anki 去重 → COCA 检查 |
 | `utils.py` | 共享工具：lemmatize_word, edge_tts_bytes/file, safe_filename |
-| `coca_lookup.py` | COCA 20000 高频词查询 |
-| `coca_20000.txt` | COCA 20000 词表数据（17,640 个唯一 lemma） |
+| `lib/coca.py` | COCA 词频查询（三层策略：set 查找 + lemminflect + 后缀剥离） |
+| `lib/data/coca_freq.txt` | COCA 词频数据（18,964 词，频率排序） |
 
 ## 许可证
 

@@ -28,7 +28,7 @@ Python:  机械工作 —— 词形提取、屈折还原、COCA 过滤、去重
 
 **依赖：**
 - `weread-skills` — 书籍搜索（获取 bookId、书名、作者）
-- `lib/` — 共享库：`lib/lemmatize.py`（屈折还原引擎）、`lib/coca.py`（COCA 查找）、`lib/data/coca_20000.txt`（词频数据）
+- `lib/` — 共享库：`lib/lemmatize.py`（屈折还原引擎）、`lib/coca.py`（COCA 查找）、`lib/data/coca_freq.txt`（词频数据）
 - Python 包：`lemminflect`
 
 ## 前置条件
@@ -91,10 +91,10 @@ python3 scripts/extract_vocab.py --clean < /tmp/<book>.txt > /tmp/<book>_clean.t
 # 基础提取
 python3 scripts/extract_vocab.py < /tmp/<book>_clean.txt
 
-# 排除 Google 10K 前 N 个最基础词汇（如 --exclude-basic 2000）
+# 排除 COCA 频率排名 前 N 个最基础词汇（如 --exclude-basic 2000）
 python3 scripts/extract_vocab.py --exclude-basic 2000 < /tmp/<book>_clean.txt
 
-# 只保留 Google 10K 排名范围内的中频词汇（如 3001-10000）
+# 只保留 COCA 频率排名 排名范围内的中频词汇（如 3001-10000）
 python3 scripts/extract_vocab.py --basic-range 3001-10000 < /tmp/<book>_clean.txt
 
 # 组合使用：排除 top 3000，并限制在 3001-10000 范围
@@ -106,14 +106,14 @@ python3 scripts/extract_vocab.py --exclude-basic 3000 --basic-range 3001-10000 <
 | 参数 | 说明 |
 |------|------|
 | `--clean` | 去除常见页眉页脚（esl-bits 等教育站点的导航文本） |
-| `--exclude-basic N` | 排除 Google 10K 中前 N 个最频繁的基础词 |
-| `--basic-range M-N` | 只保留 Google 10K 排名在 M–N 范围内的词汇 |
+| `--exclude-basic N` | 排除 COCA 频率排名 中前 N 个最频繁的基础词 |
+| `--basic-range M-N` | 只保留 COCA 频率排名 排名在 M–N 范围内的词汇 |
 
 脚本内部流程：
 1. 提取所有 2+ 字母的英文单词 → 小写 → 去重排序
 2. 对每个不在 COCA 中的单词做屈折还原（IRREG 优先 → 规则模式 → COCA 验证）
 3. COCA 过滤 + 词形去重
-4. （可选）Google 10K 频率范围过滤
+4. （可选）COCA 频率排名 频率范围过滤
 5. 输出统计 + `[COCA]` 词表 + `[EXCLUDED]` 排除词表
 
 **重要：** 脚本使用 repo 根目录的 `lib/` 共享库，运行时工作目录应为 skill 目录。

@@ -257,7 +257,8 @@ wc -c /tmp/<book>-full.txt
 **翻译对应规则**：**`translation_cn` 必须只翻译截断后的最终 `sentence`**，不得翻译截断前的完整原文。若截断后句子缺少某部分内容，翻译也必须同步省略。
 
 **源文本获取失败时：**
-- curl 直链 + WebSearch/WebFetch 均无法获取 → 回退到回忆模式，Step 4 汇总中标明「源文本不可用，例句未校验」
+- curl 直链 + WebSearch/WebFetch 均无法获取 → **该批次所有单词跳过，不生成卡片**。Step 4 汇总中标明 `源文本不可用，N 个单词未生成`
+- **禁止回退到词典例句**。词典例句脱离书中语境，对阅读理解没有帮助。卡片的价值在于"这个词在这本书的这个句子里是这个意思"，没有源文本就没有卡片
 
 **完成后进入 Step 3**——句子已从源文本提取并截断至最终长度。Claude 基于截断后的 sentence 生成 IPA + 释义 + 翻译。
 
@@ -275,8 +276,9 @@ wc -c /tmp/<book>-full.txt
 | `translation_cn` | 整句的中文翻译（遵循翻译原则） | `我于是对丛林中的冒险深深思索起来。` |
 
 **例句规则（不变）：**
-- 必须是书中真实句子，不是词典通用例句
-- 如果对该书不够熟悉，无法回忆真实句子 → 如实告知用户，并提供词典例句作为替代
+- 必须是书中真实句子，不是词典通用例句。句子来源只有一条路径：3.0c 源文本机械匹配
+- **禁止凭记忆编造特定书的句子**——即使 Claude 认为自己"记得"某本书里的某句话，实际准确率极低（stroke 案例：自信地编造了 "He took a stroke with the oar"，该句在《老人与海》中根本不存在）。源文本没有 → 该词不生成卡片
+- **禁止使用词典例句替代**——词典例句脱离书中语境，对阅读理解没有帮助
 - 句子中出现的生词形式可能不同于原形（如 `straying` vs `stray`），用 `<b>` 包裹书中实际出现的词形。**`<b>` 必须包裹句中完整的表面词形，绝不能包裹原形后拼接剩余字母**——例如句中写的是 `considerably`，就写 `<b>considerably</b>`，**禁止**写 `<b>considerable</b>ly`（原形 `considerable` + 后缀 `ly`）。同理，句中写的是 `devoted`，就写 `<b>devoted</b>`，**禁止**写 `<b>devote</b>d`——脚本内置的 `resolve_lemma()` 会自行将 `word` 还原为原形用于 WordId 和卡片正面展示，**绝不可以在 `<b>` 或 `word` 字段中手动将表面词形替换为原形**。`word` 字段必须与 `<b>` 包裹的文本一致
 - **`<b>` 目标词校验**：句子中 `<b>` 包裹的词必须是当前卡片的生词。若同一句中还出现了本牌组其他生词（如 `baobabs`），**绝不能**把 `<b>` 标到别的词上——生成后逐词确认 `<b>…</b>` 内的文本与 `word` 字段一致
 - 例句应简洁：1-2 句，通常 ≤150 字符。**禁止**使用整段对话或长段落——仅提取目标词所在的核心句及其紧邻上下文，让学习者在 3 秒内定位到生词
@@ -358,7 +360,7 @@ wc -c /tmp/<book>-full.txt
 **注意**：第一批之前仍需 `rm -f + touch + Read limit=3` 初始化文件。后续批次只需 Read + Edit/Write。
 
 - **不再使用 SubAgent**：SubAgent 启动慢（权限确认、模型初始化），常误触发 WebSearch 浪费额度，多个 agent 的协调开销远超串行生成的实际耗时
-- **句子来源**：所有书的例句均通过 Step 3.0 从源文本机械提取，不再依赖 Claude 回忆。源文本不可用时回退到回忆模式，并在 Step 4 汇总中标明
+- **句子来源**：所有例句均通过 Step 3.0 从源文本机械提取。源文本不可用 → 跳过该批次所有单词，Step 4 汇总中标明
 
 **性能说明：**
 - **分批写入是关键性能优化**：每批 ~15-20 词，单批 thinking ~10-15s + 写入 ~2s，总耗时 30-60s（vs 单次思考 2-3 分钟无输出）
@@ -432,7 +434,7 @@ fi
 - **新增排除**：本轮 COCA 检查中新发现不在表中的词（**原形** + 原因）。使用 `excluded[].word`（已是原形）
 - **音频状态**：Step 3.5 结果（如 `word✓ 64/64, sent✓ 62/64`）
 - **本次新增**：将同步的单词列表（仅单词**原形**，不展示样卡）。使用 `words[].lemma` 字段展示；若未提供 `lemma` 则从 filter_pipeline.py `--json-out` 的 `in_coca` 数组按 `rep` → `lemma` 反查
-- **源文本校验状态**：已通过源文本校验的单词数 / 总数。回退到回忆模式的单词标 `⚠️`
+- **源文本校验状态**：已通过源文本校验的单词数 / 总数。源文本不可用致跳过的单词数；源文本中未匹配到单个词的标 `⚠️`
 - **lemma 覆写数量**：本轮 Claude 显式覆写了几个 lemma（`lemmatize_word` 结果被纠正）
 - Anki 已有的词仅一句话带过数量，不列出
 
@@ -525,7 +527,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 |------|------|
 | 没有划线 | 分两种情况：(1) Step 1d 报错退出（stderr 含 `ERROR:`）→ API 响应无效，检查 `$WEREAD_API_KEY` 拼写、bookId 是否正确，重试；(2) Step 1d 正常输出 `SUMMARY: 0 highlights` → 确实没有划线，提示用户在微信读书中标记生词后再试 |
 | 划线全是整句 | 提示："划线看起来是完整句子而非生词。仍然可以生成牌组，是否继续？" |
-| 源文本不可用 | curl 直链 + WebSearch/WebFetch 均无法获取书中文本 → 回退到回忆模式，Step 4 汇总中标明「例句未校验」；若回忆也不确定，使用词典例句替代 |
+| 源文本不可用 | curl 直链 + WebSearch/WebFetch 均无法获取书中文本 → **该批次所有单词跳过**，Step 4 汇总中标明 `源文本不可用，N 个单词未生成`。禁止回退到词典例句 |
 | 超过 50 个单词 | Claude 直接生成全部内容 + 并发音频（8 线程），一次写入 JSON |
 | 脚本运行失败 | 检查依赖安装、网络连接，打印错误信息 |
 | 音频生成失败 | Edge TTS 不可用时自动跳过音频，生成纯文本卡片 |
@@ -550,8 +552,8 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 | `sync_anki.py` | 增量同步到 Anki — 含 `resolve_lemma()` 自动原形还原 + spaCy 句子级校验 | JSON + AnkiConnect | 直接添加卡片到 Anki |
 | `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
 | `filter_pipeline.py` | 合并过滤流水线 — 标点/大小写清理 → lemmatize → Anki 去重 → COCA 检查。自动剥离句边界标点（`vexed.`→`vexed`）并归一化非全大写词为小写（`Clad`→`clad`）。透传章节信息（`chapterUid` + `chapterTitle`）供 Step 3.0 章节优先匹配 | WeRead API JSON (stdin) | 过滤结果 (stdout) + 结构化 JSON (--json-out，含 `chapters` 字段) |
-| `coca_lookup.py` | COCA 20000 高频词查询 — 直接 set 查找 + lemminflect（仅接受原形严格短于输入词的映射，如 `pondered`→`ponder`；同长映射如 `abode`→`abide` 被拒，避免名词误映射到无关动词）+ 后缀剥离兜底做派生归一（`indulgently`→`indulgent`） | 单词 → set 查找 + lemminflect + 后缀剥离 | 是否在 COCA 前 20000 词中 |
-| `coca_20000.txt` | COCA 20000 词表数据 | — | 17,640 个唯一 lemma |
+| `lib/coca.py` | COCA 词频查询 — 三层策略：直接 set 查找 + lemminflect（仅接受原形严格短于输入词的映射，如 `pondered`→`ponder`；同长映射如 `abode`→`abide` 被拒，避免名词误映射到无关动词）+ 后缀剥离兜底做派生归一（`indulgently`→`indulgent`） | 单词 → set 查找 + lemminflect + 后缀剥离 | 是否在 COCA 频率表中 |
+| `lib/data/coca_freq.txt` | COCA 词频数据（18,964 词，频率排序） | — | 单一数据源，同时服务 set 查找和频率分级 |
 
 ## 设计原则
 
@@ -559,6 +561,29 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **源文本检索替代回忆**：例句不再依赖 Claude 记忆生成，改为从网上拉取书中实际文本后机械匹配。Claude 的知识工作从「回忆句子+翻译+IPA」收窄为「翻译+IPA」，消除最易出错的环节
 - **curl 优先于 WebFetch**：源文本拉取优先用 `curl -sL` 直链下载纯文本文件（Internet Archive、Project Gutenberg 等公版书站）。WebFetch 有严格引用字数限制（~125 字符/条），不适用于全书文本拉取，仅用作 curl 失败时的逐章兜底方案
 - **章节优先匹配**：filter_pipeline.py 透传 WeRead 的 `chapterUid`/`chapterTitle` 到 JSON 输出，Step 3.0 优先在单词所属章节范围内搜索句子，避免同名异义词匹配到书中其他位置（如 `fair` 在"公平的"和"集市"两个义项间不会串章）。章节边界不确定时回退到全文本搜索
+- **源文本格式兼容**：DOCX、PDF、HTML 均可作为源文本。纯文本提取后做机械匹配。常见源：thephilosopher.net 的 DOCX、archive.org 的纯文本、QQ 阅读等
+- **表面词形严格匹配**：搜索时用 `\bword\w*\b` 会误匹配不同词（如 `lung` 搜索匹配到 `lunged`，这是 `lunge` 的过去式而非 `lung`）。必须验证匹配到的词与目标词形一致（大小写不敏感），不一致时排除
+
+## 案例：老人与海牌组重建
+
+2026-06-30 检测发现《老人与海》牌组 **245/327（75%）的例句是 Claude 回忆编造的**。句子风格正确、主题匹配、语法通顺——但源文本中不存在。典型：
+
+| 编造句 | 问题 |
+|--------|------|
+| `He took a stroke with the oar.` | 书中唯一出现是 `strokes`（金枪鱼尾巴拍击），与船桨无关 |
+| `He did not understand the behaviour of the shark.` | 英式拼写 `behaviour`，书中是美式 `behavior` |
+| `He heard the boom of the breaking mast.` | 书中桅杆从未断裂 |
+
+**修复流程**：
+1. 从 thephilosopher.net 下载 DOCX（133K 单词）→ Python 提取纯文本
+2. 245 个单词逐词在源文本中搜索 → 提取所在完整句子
+3. 164 句无需截断，75 句 >150 字符按 3.0e 规则截断，6 个词形变体手动定位
+4. 批量更新 Anki Sentence/Word/TranslationCN + 重新生成 SentenceAudio（327 条 TTS）
+
+**关键教训**：
+- 回忆模式下 Claude 的句子"看起来对"但实际错误率高得惊人
+- 源文本机械匹配是唯一可靠的句子来源
+- 源文本不可得 → 不生成卡片，这个硬规则必须执行
 - **过滤前置**：Anki 去重和 COCA 频次检查在生成内容**之前**完成，避免浪费 Claude 精力。Anki 去重先于 COCA：已在牌组中的词不受 COCA 频次变化影响
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
 - **音频命名空间**：文件名含 `bookId`（`{lemma}_{bookId}_word/sent.mp3`），防止异读词和不同书例句在全局媒体库中冲突
