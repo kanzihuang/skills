@@ -471,8 +471,9 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 1. Step 3.5 (`--prefetch`): 并发生成全部音频 → 保存到临时目录 + manifest.json → 打印 `AUDIO_DIR=<path>`
 2. Step 4 (`--audio-dir <dir>`): 从目录加载预生成音频 → 连 AnkiConnect → 查已有卡片 → 上传媒体 → 添加新卡片
 3. 对每个词调用 `lemmatize_word()` 还原为原形 → 用原形构建 WordId、卡片词、音频文件名
-4. **单词音频**：Edge TTS 默认发音（IPA 仅用于卡片显示）；IPA 缺失时跳过单词音频
-5. **例句音频**：Edge TTS 朗读
+4. **音频命名**：`{lemma}_{bookId}_word.mp3` / `{lemma}_{bookId}_sent.mp3`——加入 `bookId` 命名空间，防止不同牌组的同名单词（异读词 `wound`、不同书的不同例句）在 Anki 全局 `collection.media` 中互相覆盖
+5. **单词音频**：Edge TTS 默认发音（IPA 仅用于卡片显示）；IPA 缺失时跳过单词音频
+6. **例句音频**：Edge TTS 朗读
 6. **已有卡片完全不动**，保留复习进度和调度数据
 7. **更新 meta manifest 卡片**：将本次 `excluded` 单词写入 Sentence 字段的 JSON manifest（`WordId = __META__{bookId}`），卡片暂停（不参与复习），下次同步优先读取
 8. **触发 AnkiWeb 同步**：卡片添加完成后自动触发 `sync` 操作，将新卡片同步到 AnkiWeb。此操作为 fire-and-forget——成功响应仅表示 Anki 已接受请求，不代表 AnkiWeb 已收到数据。若 Anki 弹出冲突解决对话框，同步可能静默排队。使用 `--no-ankiweb-sync` 跳过此步骤
@@ -560,6 +561,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **章节优先匹配**：filter_pipeline.py 透传 WeRead 的 `chapterUid`/`chapterTitle` 到 JSON 输出，Step 3.0 优先在单词所属章节范围内搜索句子，避免同名异义词匹配到书中其他位置（如 `fair` 在"公平的"和"集市"两个义项间不会串章）。章节边界不确定时回退到全文本搜索
 - **过滤前置**：Anki 去重和 COCA 频次检查在生成内容**之前**完成，避免浪费 Claude 精力。Anki 去重先于 COCA：已在牌组中的词不受 COCA 频次变化影响
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
+- **音频命名空间**：文件名含 `bookId`（`{lemma}_{bookId}_word/sent.mp3`），防止异读词和不同书例句在全局媒体库中冲突
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
 - **原形还原（spaCy + lemminflect 双层）**：`resolve_lemma()` 用 lemminflect + IRREG 字典做基础还原；`_process_one_word()` 中 **spaCy 读原句**判断 `-ed`/`-ing` 词的实际词性——若为形容词则阻止还原。Claude 显式设置的 `lemma` 无条件信任。零手动维护
   - 两层均使用 `len(lemma) < len(word)` 作为准入条件：同长映射（`abode` n.→`abide` v.）被拒，避免跨词性误判。不同长映射正常通过（`crammed`→`cram`、`went`→`go`）。同长不规则变化（`ran`→`run`、`sat`→`sit`）同为已知限制，但这些词属基础词汇，实际划线中极少出现
