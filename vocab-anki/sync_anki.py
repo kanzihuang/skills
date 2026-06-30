@@ -113,7 +113,6 @@ def parse_args() -> argparse.Namespace:
 
 
 # Words lemminflect can't distinguish as derivational adjectives.
-_DERIVATIONAL_ADJ_BLOCKLIST: set[str] = set()
 _SPACY_NLP = None  # cached spaCy model
 
 
@@ -148,68 +147,6 @@ def _spacy_lemma(word: str, sentence: str) -> str | None:
     except Exception:
         pass
     return None
-
-
-def _load_derivational_adjectives() -> set[str]:
-    """Load known derivational adjectives from shared data file."""
-    global _DERIVATIONAL_ADJ_BLOCKLIST
-    if _DERIVATIONAL_ADJ_BLOCKLIST:
-        return _DERIVATIONAL_ADJ_BLOCKLIST
-    try:
-        from pathlib import Path
-        path = (
-            Path(__file__).resolve().parent.parent
-            / "lib" / "data" / "derivational_adjectives.txt"
-        )
-        if path.exists():
-            with open(path) as f:
-                _DERIVATIONAL_ADJ_BLOCKLIST = {line.strip().lower() for line in f if line.strip()}
-    except Exception:
-        pass
-    return _DERIVATIONAL_ADJ_BLOCKLIST
-
-
-def _is_derivational_adj(word: str) -> bool:
-    """Check if a word is likely a derivational adjective.
-
-    Uses a comprehensive adjective list (loaded from shared data) and
-    lemminflect's ADJ lemmatizer.  For -ing forms lemminflect is
-    reliable; for -ed forms we rely on the adjective list because
-    lemminflect can't distinguish past participles from true
-    adjectives (it flags both *attached* and *wicked* the same way).
-    """
-    w = word.lower()
-    blocklist = _load_derivational_adjectives()
-    if w in blocklist:
-        return True
-    if not (w.endswith("ing") or w.endswith("ed")):
-        return False
-    try:
-        from lemminflect import getLemma
-
-        adj = getLemma(word, "ADJ")
-        verb = getLemma(word, "VERB")
-        adj_unchanged = adj and all(a == word for a in adj)
-        verb_changes = verb and any(v != word for v in verb)
-        # For -ed: only trust lemminflect if the word is ALSO
-        # in the adjective list (prevents false positives like
-        # attached→attach being blocked).
-        if w.endswith("ed"):
-            return False
-        # For -ing: lemminflect is reliable
-        return adj_unchanged and verb_changes
-    except ImportError:
-        return False
-    try:
-        from lemminflect import getLemma
-
-        adj = getLemma(word, "ADJ")
-        verb = getLemma(word, "VERB")
-        adj_unchanged = adj and all(a == word for a in adj)
-        verb_changes = verb and any(v != word for v in verb)
-        return adj_unchanged and verb_changes
-    except ImportError:
-        return False
 
 
 def resolve_lemma(word: str, json_lemma: str) -> str:
@@ -282,16 +219,16 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
                     return cand
                 break
 
-    # 3. Auto-correct inflectional forms (unless derivational adjective).
+    # 3. Auto-correct inflectional forms.
     #    Apply COCA gate: only reduce if the word is NOT already in COCA,
     #    OR the reduced form is also a valid COCA entry.  This prevents
-    #    false reductions like sacred→sacre, tremendous→tremendou where
-    #    lemminflect hallucinates a non-existent verb base.
-    if not _is_derivational_adj(word):
-        reduced = lemmatize_word(word)
-        if reduced != w:
-            if w not in _coca or reduced in _coca:
-                return reduced
+    #    false reductions like sacred→sacre where lemminflect hallucinates.
+    #    (spaCy safety net in _process_one_word catches any remaining
+    #    derivational adjective mis-reductions.)
+    reduced = lemmatize_word(word)
+    if reduced != w:
+        if w not in _coca or reduced in _coca:
+            return reduced
 
     # 4. lemmatize_word couldn't reduce — try lib's IRREG dict
     try:
