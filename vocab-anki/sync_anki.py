@@ -149,9 +149,9 @@ def _load_cmudict() -> dict[str, list[list[str]]]:
 
 # ARPAbet → IPA phoneme map
 _ARPABET_TO_IPA = {
-    "AA": "ɑ",  "AE": "æ",  "AH": "ʌ",  "AO": "ɔ",  "AW": "aʊ",
-    "AY": "aɪ", "EH": "e",  "ER": "ɜr", "EY": "eɪ", "IH": "ɪ",
-    "IY": "i",  "OW": "oʊ", "OY": "ɔɪ", "UH": "ʊ",  "UW": "u",
+    "AA": "ɑː", "AE": "æ",  "AH": "ʌ",  "AO": "ɔː", "AW": "aʊ",
+    "AY": "aɪ", "EH": "e",  "ER": "ɜːr","EY": "eɪ", "IH": "ɪ",
+    "IY": "iː", "OW": "oʊ", "OY": "ɔɪ", "UH": "ʊ",  "UW": "uː",
     "B": "b",   "CH": "tʃ", "D": "d",   "DH": "ð",  "F": "f",
     "G": "ɡ",   "HH": "h",  "JH": "dʒ","K": "k",   "L": "l",
     "M": "m",   "N": "n",   "NG": "ŋ",  "P": "p",   "R": "r",
@@ -1179,6 +1179,71 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# ARPAbet → IPA conversion gold-standard tests
+# ---------------------------------------------------------------------------
+
+
+def _test_arpabet_to_ipa() -> None:
+    """Verify ARPAbet→IPA mapping against known-correct gold standards.
+
+    Never remove or weaken a test case — the mapping is the single source
+    of truth for all card IPA generation.
+    """
+    failures = 0
+
+    def check(word: str, expected: str) -> None:
+        nonlocal failures
+        got = _cmu_ipa(word)
+        if got != expected:
+            failures += 1
+            print(f"  FAIL: {word} → {got} (expected {expected})", file=sys.stderr)
+
+    # ── Vowel length distinctions (tense vs lax) ──
+    #   Monosyllabic: no stress mark (standard IPA convention)
+    check("feed", "/fiːd/")          # IY → iː
+    check("fed", "/fed/")            # EH → e
+    check("fit", "/fɪt/")            # IH → ɪ
+    check("food", "/fuːd/")          # UW → uː
+    check("foot", "/fʊt/")           # UH → ʊ
+    check("fast", "/fæst/")          # AE → æ
+    check("father", "/fˈɑːðɜːr/")   # AA → ɑː, 2-syll → stress
+    check("law", "/lɔː/")            # AO → ɔː, unambiguous in cmudict
+    check("cup", "/kʌp/")            # AH → ʌ
+    check("bird", "/bɜːrd/")         # ER → ɜːr
+
+    # ── Diphthongs ──
+    check("day", "/deɪ/")            # EY → eɪ
+    check("go", "/ɡoʊ/")             # OW → oʊ
+    check("my", "/maɪ/")             # AY → aɪ
+    check("now", "/naʊ/")            # AW → aʊ
+    check("boy", "/bɔɪ/")            # OY → ɔɪ
+
+    # ── Consonants ──
+    check("thin", "/θɪn/")           # TH → θ
+    check("this", "/ðɪs/")           # DH → ð
+    check("ship", "/ʃɪp/")           # SH → ʃ
+    check("chip", "/tʃɪp/")          # CH → tʃ
+    check("judge", "/dʒʌdʒ/")        # JH → dʒ
+    check("sing", "/sɪŋ/")           # NG → ŋ
+    check("measure", "/mˈeʒɜːr/")   # ZH → ʒ, 2-syll → stress
+    check("yes", "/jes/")            # Y → j
+
+    # ── Multi-syllable stress ──
+    check("hunting", "/hˈʌntɪŋ/")
+    check("accomplished", "/ʌkˈɑːmplɪʃt/")
+    check("distinguished", "/dɪstˈɪŋɡwɪʃt/")
+    check("beautiful", "/bjˈuːtʌfʌl/")
+    check("blundering", "/blˈʌndɜːrɪŋ/")
+    check("comfortable", "/kˈʌmfɜːrtʌbʌl/")
+
+    if failures:
+        print(f"\n  {failures} ARPAbet→IPA test(s) FAILED", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print(f"  ARPAbet→IPA: all {23+5} tests passed ✓")
 
 
 if __name__ == "__main__":
