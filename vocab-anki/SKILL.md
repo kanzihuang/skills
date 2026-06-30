@@ -270,7 +270,7 @@ wc -c /tmp/<book>-full.txt
 | `word` | 书中出现的**表面词形**——`<b>` 包裹什么就写什么。**绝不**填原形 | `blundering`（不是 `blunder`），`conceited`（不是 `conceit`），`pondered`（不是 `ponder`）|
 | `lemma` | **派生形容词时必填，常规屈折变化可留空**。`sync_anki.py` 三层防护：(1) Claude 显式设置的 `lemma` **无条件信任**——填了就以此为准；(2) 若留空，`resolve_lemma()` 用 lemminflect + IRREG 字典自动还原；(3) **spaCy 读原句校验**——对 `-ed`/`-ing` 词，若判定为形容词则阻止还原。因此：派生形容词（`blundering`、`accomplished`、`distinguished` 等）→ 填 `lemma`；常规屈折（`attached`→`attach`、`burning`→`burn`）→ 留空让脚本处理 | `pondered`→留空（自动 `ponder`）；`accomplished`(adj)→`"accomplished"`；`blundering`(adj)→`"blundering"` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I felt awkward and <b>blundering</b>.` |
-| `ipa` | 对应 **lemma（卡片展示词）**的 IPA 音标，**不是**对应 `word`（表面词形）| `lemma=blundering`→`/ˈblʌndərɪŋ/`；`lemma=ponder`→`/ˈpɒndər/` |
+| `ipa` | 对应 **lemma** 的 IPA 音标。**cmudict 自动生成，Claude 仅在多发音词时用作投票参考**。未登录词时 Claude 提供兜底 | 单发音词留空；异读词填正确发音如 `/riːd/`（非 `/red/`） |
 | `definition_cn` | **按句中实际用法释义**，不按原形常见义项，也不自动选择最常见的词典义。特别注意多义词的含义选择：同一个词在不同句子中可能是完全不同的意思。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）；`thriftily` 在 "he must be treated thriftily" 中→"有节制地，有所保留地"（**不写**"节俭地"）|
 | `translation_cn` | 整句的中文翻译（遵循翻译原则） | `我于是对丛林中的冒险深深思索起来。` |
 
@@ -293,11 +293,12 @@ wc -c /tmp/<book>-full.txt
 - **多义词语境陷阱（common sense trap）**：英文中大量词汇有多个义项，不要自动选择最常见或最熟悉的义项。回到原文判断该词在此句中具体表达什么意思。例如 `thriftily` 在 "he must be treated thriftily" 中意为"有节制地，有所保留地"（sparingly, with restraint），而非"节俭地"（frugally, economically）——节俭适用于钱物，不适用于对人的"对待"。每次遇到不确定的词，先用中文问自己"这句话里这个词到底在说什么"，再选译义。若多个义项在中文中都说得通，优先选最能体现原文动作/状态特征的那个
 
 **IPA 规则：**
-- **IPA 必须对应 lemma（卡片展示词）**——卡片正面显示的是原形，音标应与卡片展示词一致。`lemma=blundering`→`/ˈblʌndərɪŋ/`；`lemma=ponder`→`/ˈpɒndər/`
-- **必须为每个单词提供 IPA**——Claude 可从训练数据直接输出音标，无需外部 API
+- **IPA 必须对应 lemma（卡片展示词）**——卡片正面显示的是原形，音标应与卡片展示词一致
+- **IPA 由 cmudict（CMU Pronouncing Dictionary，134K 词）自动生成**——`sync_anki.py` 内置 ARPAbet→IPA 转换。Claude 不再需要凭记忆生成 IPA
+- **多发音词（heteronym）**：cmudict 提供候选发音（如 `read` 的 `/red/` 和 `/riːd/`），Claude 的 `ipa` 字段用作投票选出正确发音。若 Claude 未填 IPA，取 cmudict 第一候选
+- **未登录词**：cmudict 查不到的词退回 Claude 的 `ipa` 字段
 - 单词音频由 Edge TTS 默认发音生成（不使用 SSML `<phoneme>`——`edge_tts.Communicate` 内部对输入做 `escape()` 后再用 `mkssml()` 包一层 `<speak>`，外部 SSML 会被二次转义导致 TTS 朗读 XML 源码）
 - IPA 缺失时跳过单词音频生成，卡片仍正常创建（例句音频正常生成）
-- 对同形异音词（heteronym，如 `intimate` 形容词 /ˈɪntɪmət/ vs 动词 /ˈɪntɪmeɪt/），必须根据释义填入正确 IPA
 
 **执行策略：分批写入，禁止一次性思考全部单词**
 
