@@ -113,7 +113,76 @@ def parse_args() -> argparse.Namespace:
 
 
 # Words lemminflect can't distinguish as derivational adjectives.
-_SPACY_NLP = None  # cached spaCy model
+_SPACY_NLP = None   # cached spaCy model
+_CMUDICT: dict[str, list[list[str]]] | None = None  # cached cmudict
+
+
+def _load_cmudict() -> dict[str, list[list[str]]]:
+    """Load CMU Pronouncing Dictionary (cached)."""
+    global _CMUDICT
+    if _CMUDICT is not None:
+        return _CMUDICT
+    _CMUDICT = {}
+    try:
+        from pathlib import Path
+        path = (
+            Path(__file__).resolve().parent.parent
+            / "lib" / "data" / "cmudict.dict"
+        )
+        if not path.exists():
+            return _CMUDICT
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith(";;;"):
+                    continue
+                parts = line.split()
+                word = parts[0].lower().rstrip(")").split("(")[0]
+                phones = parts[1:]
+                if word not in _CMUDICT:
+                    _CMUDICT[word] = []
+                _CMUDICT[word].append(phones)
+    except Exception:
+        pass
+    return _CMUDICT
+
+
+# ARPAbet → IPA phoneme map
+_ARPABET_TO_IPA = {
+    "AA": "ɑ",  "AE": "æ",  "AH": "ʌ",  "AO": "ɔ",  "AW": "aʊ",
+    "AY": "aɪ", "EH": "e",  "ER": "ɜr", "EY": "eɪ", "IH": "ɪ",
+    "IY": "i",  "OW": "oʊ", "OY": "ɔɪ", "UH": "ʊ",  "UW": "u",
+    "B": "b",   "CH": "tʃ", "D": "d",   "DH": "ð",  "F": "f",
+    "G": "ɡ",   "HH": "h",  "JH": "dʒ","K": "k",   "L": "l",
+    "M": "m",   "N": "n",   "NG": "ŋ",  "P": "p",   "R": "r",
+    "S": "s",   "SH": "ʃ",  "T": "t",   "TH": "θ",  "V": "v",
+    "W": "w",   "Y": "j",   "Z": "z",   "ZH": "ʒ",
+}
+
+
+def _cmu_ipa(word: str) -> str | None:
+    """Look up IPA for *word* in cmudict.  Returns None if not found."""
+    cmu = _load_cmudict()
+    w = word.lower()
+    if w not in cmu:
+        return None
+    phones = cmu[w][0]  # first (most common) pronunciation
+    # Count stressed vowels → monosyllabic words get no stress mark
+    vowel_count = sum(1 for p in phones if any(c.isdigit() for c in p))
+    result: list[str] = []
+    for p in phones:
+        stress = ""
+        if p[-1].isdigit():
+            if p[-1] == "1" and vowel_count > 1:
+                stress = "ˈ"
+            elif p[-1] == "2" and vowel_count > 1:
+                stress = "ˌ"
+            p = p[:-1]
+        ipa = _ARPABET_TO_IPA.get(p, p.lower())
+        if stress:
+            result.append(stress)
+        result.append(ipa)
+    return "/" + "".join(result) + "/"
 
 
 def _get_spacy():
@@ -271,7 +340,11 @@ def _process_one_word(
                 lemma = wl
 
     safe = safe_filename(lemma)
-    ipa = w.get("ipa", "")
+
+    # IPA: cmudict (deterministic) preferred, Claude fallback for OOV
+    cmu_ipa = _cmu_ipa(lemma)
+    ipa = cmu_ipa if cmu_ipa else w.get("ipa", "")
+
     audio_uploads: list[tuple[str, bytes]] = []
 
     if not no_audio:
