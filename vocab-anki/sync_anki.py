@@ -235,8 +235,10 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
     w = word.lower()
     jl = json_lemma.strip().lower() if json_lemma else ""
 
-    # 1. Explicit override: lemma differs from surface form → trust Claude
-    if jl and jl != w:
+    # 1. Explicit override: Claude set lemma → trust it unconditionally.
+    #    The quality checklist ensures Claude sets it correctly for
+    #    derivational adjectives (blundering, accomplished, etc.).
+    if jl:
         return jl
 
     # 2. Regular -est/-er/-ier/-iest patterns (before lemmatize_word,
@@ -463,7 +465,18 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
 
         # --- Soft warnings (stderr only, do not block sync) ---
 
-        # 5. IPA format sanity check
+        # 5. IPA matches lemma (not surface form): e.g. lemma=hunt
+        #    but IPA=/ˈhʌntɪŋ/ (for hunting).
+        json_lemma2 = w.get("lemma", "").strip()
+        resolved = resolve_lemma(word, json_lemma2)
+        if ipa and resolved != word.lower() and "/ɪŋ/" in ipa and not resolved.endswith("ing"):
+            print(
+                f"  [WARN] [{word}] IPA contains /ɪŋ/ but lemma '{resolved}' "
+                f"does not end in -ing (surface form: '{word}')",
+                file=sys.stderr,
+            )
+
+        # 6. IPA format sanity check
         ipa = w.get("ipa", "")
         if ipa:
             ipa_clean = ipa.strip()
@@ -773,6 +786,26 @@ def sync(
 
     if repaired:
         print(f"  Repaired: {repaired} card(s) (surface-form WordId → lemma)")
+
+    # 5b. Detect duplicate WordIds within the batch itself (e.g. fed + feeding
+    #     both lemmatize to feed).  Keep the first occurrence, warn about rest.
+    seen_ids: set[str] = set()
+    deduped_new: list[dict] = []
+    intra_dupes = 0
+    for w in new_words:
+        jl2 = w.get("lemma", "").strip()
+        lm = resolve_lemma(w["word"], jl2)
+        wid = f"{lm}_{book_id}"
+        if wid in seen_ids:
+            intra_dupes += 1
+            if verbose:
+                print(f"  SKIP {w['word']} (duplicate WordId in batch: {wid})")
+        else:
+            seen_ids.add(wid)
+            deduped_new.append(w)
+    if intra_dupes:
+        print(f"  Intra-batch duplicates removed: {intra_dupes}")
+    new_words = deduped_new
 
     print(f"\n  New words to add: {len(new_words)}")
     print(f"  Already in deck: {len(skipped_words)}")
