@@ -124,38 +124,46 @@ IRREG.update({
 # Derivational adjective detection (prevents cross-POS lemmatization)
 # ============================================================================
 
-# Known derivational adjectives — loaded from shared data file.
-# These are words lemminflect mis-analyses as verb participles but which
-# are actually adjectives (e.g. blundering, conceited, distinguished).
-_ADJ_CACHE: set[str] | None = None
-_ADJ_PATH = Path(__file__).resolve().parent / "data" / "derivational_adjectives.txt"
+_SPACY = None  # cached spaCy model
 
 
-def _load_derivational_adjectives() -> set[str]:
-    """Load known derivational adjectives from shared data file (cached)."""
-    global _ADJ_CACHE
-    if _ADJ_CACHE is None:
-        _ADJ_CACHE = set()
-        if _ADJ_PATH.exists():
-            with open(_ADJ_PATH, encoding="utf-8") as fh:
-                for line in fh:
-                    w = line.strip().lower()
-                    if w:
-                        _ADJ_CACHE.add(w)
-    return _ADJ_CACHE
+def _get_spacy():
+    """Load spaCy (cached)."""
+    global _SPACY
+    if _SPACY is None:
+        try:
+            import spacy
+            _SPACY = spacy.load("en_core_web_sm")
+        except Exception:
+            pass
+    return _SPACY
 
 
-def _is_derivational_adj(w: str) -> bool:
+def _spacy_is_adj(word: str, sentence: str) -> bool:
+    """Use spaCy to check if a word is an adjective in sentence context."""
+    nlp = _get_spacy()
+    if nlp is None:
+        return False
+    try:
+        doc = nlp(sentence)
+        for token in doc:
+            if token.text.lower() == word.lower():
+                return token.pos_ == "ADJ"
+    except Exception:
+        pass
+    return False
+
+
+def _is_derivational_adj(w: str, sentence: str = "") -> bool:
     """Check whether an -ing/-ed word is more likely a derivational adjective.
 
-    For -ing forms: uses lemminflect (ADJ unchanged + VERB changed).
-    For -ed forms: checks the shared adjective list (lemminflect is too
-    broad for past participles — it can't distinguish *attached* v. from
-    *wicked* adj.).
+    If *sentence* is provided, uses spaCy's POS tagger (context-aware,
+    most accurate).  Otherwise falls back to lemminflect for -ing forms
+    only (-ed is too unreliable without context).
     """
-    if w in _load_derivational_adjectives():
-        return True
-    if not (w.endswith("ing") or w.endswith("ed")):
+    if sentence:
+        return _spacy_is_adj(w, sentence)
+    if not w.endswith("ing"):
         return False
     try:
         from lemminflect import getLemma  # noqa: F811
@@ -165,9 +173,6 @@ def _is_derivational_adj(w: str) -> bool:
     verb = getLemma(w, "VERB")
     adj_unchanged = adj and all(a == w for a in adj)
     verb_changes = verb and any(v != w for v in verb)
-    # For -ed: only trust lemminflect if word is also in the adj list
-    if w.endswith("ed"):
-        return False
     return adj_unchanged and verb_changes
 
 
@@ -175,11 +180,11 @@ def _is_derivational_adj(w: str) -> bool:
 # Regular inflectional pattern helpers (internal)
 # ============================================================================
 
-def _try_ing(w: str, coca_set: set[str]) -> list[str]:
+def _try_ing(w: str, coca_set: set[str], sentence: str = "") -> list[str]:
     """-ing forms: walking->walk, making->make, running->run, sitting->sit."""
     if not w.endswith("ing") or len(w) <= 4:
         return []
-    if _is_derivational_adj(w):
+    if _is_derivational_adj(w, sentence):
         return []
     base = w[:-3]  # walk, mak, runn, sitt
     results: list[str] = []
@@ -197,11 +202,11 @@ def _try_ing(w: str, coca_set: set[str]) -> list[str]:
     return results
 
 
-def _try_ed(w: str, coca_set: set[str]) -> list[str]:
+def _try_ed(w: str, coca_set: set[str], sentence: str = "") -> list[str]:
     """-ed forms: walked->walk, loved->love, stopped->stop, cried->cry."""
     if not w.endswith("ed") or len(w) <= 3:
         return []
-    if _is_derivational_adj(w):
+    if _is_derivational_adj(w, sentence):
         return []
     results: list[str] = []
     # -ied -> -y (cried->cry)
@@ -296,19 +301,17 @@ def _try_est(w: str, coca_set: set[str]) -> list[str]:
 # Public API
 # ============================================================================
 
-def lemmatize(word: str, coca_set: set[str]) -> str:
+def lemmatize(word: str, coca_set: set[str], sentence: str = "") -> str:
     """Comprehensive inflectional lemmatization with COCA validation.
 
-    Strategy
-    --------
-    1. If *word* is already in COCA -> return it unchanged.
-    2. Try IRREG dict -> if result is in COCA, use it (absolute priority).
-    3. Try regular inflectional patterns -> pick the shortest COCA-valid result.
-    4. Otherwise return the original word.
+    Args:
+        word: The surface form to lemmatize.
+        coca_set: COCA 20000 lemma set for validation.
+        sentence: Optional sentence context for spaCy POS disambiguation.
 
-    *No cross-POS conversion*: derivational adjectives like *blundering*
-    stay as-is because the -ing -> VERB path is only taken when the
-    resulting lemma is in COCA and no competing analysis blocks it.
+    *No cross-POS conversion*: derivational adjectives stay as-is.
+    When *sentence* is provided, spaCy's POS tagger is used to detect
+    them; otherwise lemminflect handles -ing forms.
     """
     w = word.lower()
 
@@ -324,8 +327,8 @@ def lemmatize(word: str, coca_set: set[str]) -> str:
 
     # 3. Regular patterns (result must be in COCA)
     reg_candidates: list[str] = []
-    reg_candidates.extend(_try_ing(w, coca_set))
-    reg_candidates.extend(_try_ed(w, coca_set))
+    reg_candidates.extend(_try_ing(w, coca_set, sentence))
+    reg_candidates.extend(_try_ed(w, coca_set, sentence))
     reg_candidates.extend(_try_s_es(w, coca_set))
     reg_candidates.extend(_try_er(w, coca_set))
     reg_candidates.extend(_try_est(w, coca_set))
