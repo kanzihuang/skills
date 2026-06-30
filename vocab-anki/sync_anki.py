@@ -395,11 +395,13 @@ def _process_one_word(
             if tts:
                 audio_uploads.append((f"{safe}_word.mp3", tts))
 
-        # Sentence audio: Edge TTS on cleaned sentence
+        # Sentence audio: Edge TTS on cleaned sentence.
+        #   Include book_id in filename — different books have different
+        #   sentences for the same lemma (e.g. "beautiful" in two books).
         clean = re.sub(r"<[^>]+>", "", w["sentence"])
         sent_tts = edge_tts_bytes(clean)
         if sent_tts:
-            audio_uploads.append((f"{safe}_sent.mp3", sent_tts))
+            audio_uploads.append((f"{safe}_{book_id}_sent.mp3", sent_tts))
 
     note = build_note_entry(w, ipa, book_id, lemma=lemma)
     return note, audio_uploads, ipa
@@ -422,7 +424,7 @@ def build_note_entry(
     display = (lemma or word_data["word"]).strip().lower()
     safe = safe_filename(display)
     word_audio_ref = f"[sound:{safe}_word.mp3]"
-    sent_audio_ref = f"[sound:{safe}_sent.mp3]"
+    sent_audio_ref = f"[sound:{safe}_{book_id}_sent.mp3]"
     word_id = f"{display}_{book_id}"
 
     return {
