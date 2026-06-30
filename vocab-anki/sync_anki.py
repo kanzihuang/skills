@@ -43,7 +43,6 @@ from utils import (
 
 MODEL_NAME = "Vocabulary Card (WeRead)"
 WORD_TIMEOUT = 30  # default seconds per word (audio generation)
-META_WORD_PREFIX = "__META__"  # WordId prefix for per-book meta manifest cards
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -654,116 +653,6 @@ def _upload_media_direct(
     return copied
 
 
-# ---------------------------------------------------------------------------
-# Meta manifest card (one per book, suspended, stores excluded words)
-# ---------------------------------------------------------------------------
-
-META_MANIFEST_VERSION = 2
-
-
-def _build_meta_word_id(book_id: str) -> str:
-    return f"{META_WORD_PREFIX}{book_id}"
-
-
-def _build_meta_note(deck_name: str, book_id: str, manifest_json: str) -> dict:
-    """Build an Anki note for the meta manifest card."""
-    return {
-        "deckName": deck_name,
-        "modelName": MODEL_NAME,
-        "fields": {
-            "WordId": _build_meta_word_id(book_id),
-            "Word": META_WORD_PREFIX,
-            "Sentence": manifest_json,
-            "IPA": "",
-            "DefinitionCN": "系统元数据 — 已排除单词记录",
-            "TranslationCN": "此卡片已暂停，不参与每日复习",
-            "WordAudio": "",
-            "SentenceAudio": "",
-        },
-        "tags": ["weread", "meta"],
-    }
-
-
-def _read_meta_manifest(ac: AnkiConnect, deck_name: str, book_id: str) -> dict | None:
-    """Read the meta manifest for a book from Anki. Returns None if not found."""
-    meta_word_id = _build_meta_word_id(book_id)
-    note_ids = ac.find_notes_by_field(deck_name, "WordId", meta_word_id)
-    if not note_ids:
-        return None
-
-    try:
-        info = ac.notes_info(note_ids[:1])
-        if not info:
-            return None
-        sentence = info[0].get("fields", {}).get("Sentence", {}).get("value", "")
-        if not sentence:
-            return None
-        manifest = json.loads(sentence)
-        if manifest.get("type") != "vocab-anki-meta":
-            return None
-        return manifest
-    except (json.JSONDecodeError, KeyError):
-        return None
-
-
-def _write_meta_manifest(
-    ac: AnkiConnect,
-    deck_name: str,
-    book_id: str,
-    book_title: str,
-    excluded: list[dict],
-) -> dict | None:
-    """Create or update the meta manifest card. Returns the manifest dict.
-
-    Suspends the card so it never appears in reviews.
-    """
-    meta_word_id = _build_meta_word_id(book_id)
-    existing_ids = ac.find_notes_by_field(deck_name, "WordId", meta_word_id)
-
-    # Merge with existing manifest if present
-    existing_excluded: set[str] = set()
-    if existing_ids:
-        old = _read_meta_manifest(ac, deck_name, book_id)
-        if old:
-            existing_excluded = set(old.get("excluded", []))
-
-    # Merge: union of existing + new words
-    merged = existing_excluded | {entry["word"] for entry in excluded}
-
-    manifest = {
-        "type": "vocab-anki-meta",
-        "version": META_MANIFEST_VERSION,
-        "book_title": book_title,
-        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "excluded": sorted(merged),
-    }
-
-    manifest_json = json.dumps(manifest, ensure_ascii=False)
-
-    if existing_ids:
-        # Update existing meta note (Sentence field is the canonical storage)
-        ac.update_note_fields(
-            existing_ids[0],
-            {"Sentence": manifest_json, "IPA": "", "WordAudio": "", "SentenceAudio": ""},
-        )
-    else:
-        # Create new meta note
-        note = _build_meta_note(deck_name, book_id, manifest_json)
-        result = ac.add_notes([note])
-        if result and result[0]:
-            existing_ids = [result[0]]
-        else:
-            return manifest  # created but couldn't get note ID
-
-    # Suspend the meta card
-    if existing_ids:
-        card_ids = ac.get_cards_of_notes([existing_ids[0]])
-        if card_ids:
-            ac.suspend_cards(card_ids)
-
-    return manifest
-
-
 def _repair_audio(
     ac: AnkiConnect, lemma: str, sentence: str, book_id: str
 ) -> None:
@@ -810,15 +699,7 @@ def sync(
         print(f'  Deck: "{deck_name}"')
         print(f"  Model: {MODEL_NAME}")
 
-        # 3. Read meta manifest for previously excluded words
-        meta_manifest = _read_meta_manifest(ac, deck_name, book_id)
-        prev_excluded: set[str] = set()
-        if meta_manifest:
-            prev_excluded = set(meta_manifest.get("excluded", []))
-            if prev_excluded:
-                print(f"  Meta manifest: {len(prev_excluded)} previously excluded words")
-
-        # 4. Get existing WordId map from target deck
+        # 3. Get existing WordId map from target deck
         print(f"\nQuerying existing cards in deck...")
         existing = ac.get_word_id_map(deck_name)
         print(f"  Found {len(existing)} existing cards")
@@ -893,14 +774,6 @@ def sync(
     print(f"  Already in deck: {len(skipped_words)}")
 
     if not new_words:
-        # Still write meta manifest if there are newly excluded words (sync mode only)
-        excluded_input = data.get("excluded", [])
-        if ac and excluded_input:
-            try:
-                _write_meta_manifest(ac, deck_name, book_id, book_title, excluded_input)
-            except Exception as e:
-                if verbose:
-                    print(f"  (meta manifest skipped: {e})")
         print("\nDeck is up to date — nothing to add.")
         return {
             "added": 0,
@@ -908,8 +781,6 @@ def sync(
             "audio_uploaded": 0,
             "words_added": [],
             "words_skipped": [w["word"] for w in skipped_words],
-            "prev_excluded": len(prev_excluded),
-            "excluded": len(excluded_input),
         }
 
     if dry_run:
@@ -1127,16 +998,7 @@ def sync(
                     "error": errmsg,
                 }
 
-    # 9. Write meta manifest (cumulative excluded words record)
-    excluded_input = data.get("excluded", [])
-    if ac and excluded_input:
-        try:
-            _write_meta_manifest(ac, deck_name, book_id, book_title, excluded_input)
-        except Exception as e:
-            if verbose:
-                print(f"  (meta manifest skipped: {e})")
-
-    # 10. Trigger AnkiWeb sync (fire-and-forget)
+    # 9. Trigger AnkiWeb sync (fire-and-forget)
     ankiweb_synced = False
     if ac and not no_ankiweb_sync and not dry_run:
         try:
@@ -1152,10 +1014,8 @@ def sync(
     print(f"  New cards added:  {added_count}")
     print(f"  Already in deck:  {len(skipped_words)}")
     print(f"  Media uploaded:   {audio_count}")
-    if prev_excluded:
-        print(f"  Prev. excluded:   {len(prev_excluded)} word(s)")
-    if excluded_input:
-        print(f"  Excluded (COCA):  {len(excluded_input)} word(s) → meta card")
+    if data.get("excluded"):
+        print(f"  Excluded (COCA):  {len(data.get('excluded', []))} word(s)")
     if failed_words:
         print(f"  Failed:           {len(failed_words)} word(s)")
         print(f"     ({', '.join(failed_words)})")
@@ -1168,8 +1028,6 @@ def sync(
         "words_added": [w["word"] for w in new_words[:added_count]],
         "words_skipped": [w["word"] for w in skipped_words],
         "failed_words": failed_words,
-        "prev_excluded": len(prev_excluded),
-        "excluded": len(data.get("excluded", [])),
         "ankiweb_synced": ankiweb_synced,
     }
 

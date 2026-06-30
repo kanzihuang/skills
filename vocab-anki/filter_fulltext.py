@@ -67,7 +67,7 @@ def query_anki_existing(ac, book_id: str) -> set[str]:
         lemmas: set[str] = set()
         for note in info:
             word_id = note.get("fields", {}).get("WordId", {}).get("value", "")
-            if word_id and "_" in word_id and not word_id.startswith("__META__"):
+            if word_id and "_" in word_id:
                 lemma = word_id.rsplit("_", 1)[0]
                 lemmas.add(lemma.lower())
         return lemmas
@@ -79,31 +79,7 @@ def query_anki_existing(ac, book_id: str) -> set[str]:
         return set()
 
 
-def query_meta_excluded(ac, book_id: str) -> set[str]:
-    """Read meta manifest card for previously excluded words."""
-    AnkiConnectError = _get_anki_connect()[1]
-    try:
-        meta_word_id = f"__META__{book_id}"
-        note_ids = ac.find_notes_by_field("", "WordId", meta_word_id)
-        if not note_ids:
-            return set()
-        info = ac.notes_info(note_ids[:1])
-        if not info:
-            return set()
-        sentence_field = info[0].get("fields", {}).get("Sentence", {}).get("value", "")
-        if not sentence_field:
-            return set()
-        manifest = json.loads(sentence_field)
-        if manifest.get("type") != "vocab-anki-meta":
-            return set()
-        return {word.lower() for word in manifest.get("excluded", [])}
-    except AnkiConnectError as e:
-        print(f"WARNING: AnkiConnect query failed for meta manifest: {e}", file=sys.stderr)
-    except (json.JSONDecodeError, KeyError) as e:
-        print(f"WARNING: Failed to parse meta manifest JSON: {e}", file=sys.stderr)
-    except Exception as e:
-        print(f"WARNING: Unexpected error querying meta manifest: {e}", file=sys.stderr)
-    return set()
+
 
 
 
@@ -409,7 +385,6 @@ def main() -> None:
 
     # -- Anki dedup -----------------------------------------------------------
     anki_cards: set[str] = set()
-    meta_excluded: set[str] = set()
     if anki_book_id:
         AnkiConnect, _AnkiConnectError = _get_anki_connect()
         try:
@@ -420,7 +395,6 @@ def main() -> None:
                 anki_cards = ac.query_anki_all_lemmas()
             else:
                 # Same-book dedup only
-                meta_excluded = query_meta_excluded(ac, anki_book_id)
                 anki_cards = query_anki_existing(ac, anki_book_id)
         except Exception as e:
             print(f"WARNING: AnkiConnect unreachable, skipping Anki dedup: {e}",
@@ -437,12 +411,11 @@ def main() -> None:
                 return True
         return False
 
-    anki_all_handled = anki_cards | meta_excluded
-    if anki_all_handled:
+    if anki_cards:
         n_before = len(passed)
         passed = [
             (lemma, rep, forms) for lemma, rep, forms in passed
-            if not _lemma_handled(lemma, forms, anki_all_handled)
+            if not _lemma_handled(lemma, forms, anki_cards)
         ]
         n_anki_filtered = n_before - len(passed)
     else:

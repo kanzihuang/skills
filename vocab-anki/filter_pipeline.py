@@ -86,7 +86,7 @@ def query_anki_existing(ac: AnkiConnect, book_id: str) -> set[str]:
         lemmas = set()
         for note in info:
             word_id = note.get("fields", {}).get("WordId", {}).get("value", "")
-            if word_id and "_" in word_id and not word_id.startswith("__META__"):
+            if word_id and "_" in word_id:
                 lemma = word_id.rsplit("_", 1)[0]
                 lemmas.add(lemma.lower())
         return lemmas
@@ -99,40 +99,7 @@ def query_anki_existing(ac: AnkiConnect, book_id: str) -> set[str]:
         return set()
 
 
-def query_meta_excluded(ac: AnkiConnect, book_id: str) -> set[str]:
-    """Read meta manifest card for previously excluded words from Sentence field JSON.
 
-    The 'Excluded' field was never a real note-type field in 'Vocabulary Card (WeRead)';
-    AnkiConnect silently drops writes to non-existent fields. The actual excluded words
-    live in the Sentence field as a JSON manifest under the 'excluded' key.
-    """
-    try:
-        meta_word_id = f"__META__{book_id}"
-        note_ids = ac.find_notes_by_field("", "WordId", meta_word_id)
-        if not note_ids:
-            return set()
-
-        info = ac.notes_info(note_ids[:1])
-        if not info:
-            return set()
-
-        sentence_field = info[0].get("fields", {}).get("Sentence", {}).get("value", "")
-        if not sentence_field:
-            return set()
-
-        manifest = json.loads(sentence_field)
-        if manifest.get("type") != "vocab-anki-meta":
-            return set()
-
-        excluded_value = manifest.get("excluded", [])
-        return {word.lower() for word in excluded_value}
-    except AnkiConnectError as e:
-        print(f"WARNING: AnkiConnect query failed for meta manifest: {e}", file=sys.stderr)
-    except (json.JSONDecodeError, KeyError) as e:
-        print(f"WARNING: Failed to parse meta manifest JSON: {e}", file=sys.stderr)
-    except Exception as e:
-        print(f"WARNING: Unexpected error querying meta manifest: {e}", file=sys.stderr)
-    return set()
 
 
 def main():
@@ -215,12 +182,8 @@ def main():
     # Step 1e: Anki dedup (if book_id provided)
     ac = AnkiConnect() if anki_book_id else None
     anki_cards: set[str] = set()        # lemmas with actual Anki word cards
-    meta_excluded: set[str] = set()     # lemmas previously excluded (from meta manifest)
-    anki_all_handled: set[str] = set()  # union of both — used for dedup
     if ac and anki_book_id:
-        meta_excluded = query_meta_excluded(ac, anki_book_id)
         anki_cards = query_anki_existing(ac, anki_book_id)
-        anki_all_handled = anki_cards | meta_excluded
 
     def _lemma_handled(lemma: str, forms: list[str], handled: set[str]) -> bool:
         """Return True if lemma or any surface form is already in Anki."""
@@ -234,13 +197,9 @@ def main():
 
     lemmas_after_anki = [
         l for l in all_lemmas
-        if not _lemma_handled(l, lemma_map[l], anki_all_handled)
+        if not _lemma_handled(l, lemma_map[l], anki_cards)
     ]
     n_anki_cards = sum(1 for l in all_lemmas if _lemma_handled(l, lemma_map[l], anki_cards))
-    n_meta = sum(1 for l in all_lemmas
-                 if not _lemma_handled(l, lemma_map[l], anki_cards)
-                 and _lemma_handled(l, lemma_map[l], meta_excluded))
-    n_anki_total = n_anki_cards + n_meta
 
     # Step 1f: COCA check
     coca_set = load_coca()
@@ -253,17 +212,14 @@ def main():
         if ok:
             passed.append((lemma, rep, forms))
         else:
-            reason = "不在 COCA 20000 中"
-            if meta_excluded and lemma.lower() in meta_excluded:
-                reason = "历史排除 (meta manifest)"
-            rejected.append((lemma, rep, reason))
+            rejected.append((lemma, rep, "不在 COCA 20000 中"))
 
     n_coca_excluded = len(rejected)
     n_final = len(passed)
 
     # --- stdout output (human-readable, for Claude to parse) ---
     print(f"SUMMARY: {n_highlights} highlights → {n_lemmas} lemmas → "
-          f"{n_anki_cards} in Anki, {n_meta} excluded → "
+          f"{n_anki_cards} in Anki → "
           f"{n_coca_excluded} new COCA excluded → {n_final} final")
     print("---IN_COCA---")
     for lemma, rep, forms in passed:
@@ -272,19 +228,12 @@ def main():
     for lemma, rep, reason in rejected:
         print(f"{lemma}\t{rep}\t{reason}")
 
-    # Print Anki-skipped words for reference (split by source)
-    if anki_all_handled:
+    # Print Anki-skipped words for reference
+    if anki_cards:
         anki_skipped_cards = [l for l in all_lemmas if l.lower() in anki_cards]
-        anki_skipped_meta = [l for l in all_lemmas if l.lower() in meta_excluded and l.lower() not in anki_cards]
         if anki_skipped_cards:
             print("---ANKI_SKIPPED---")
             for lemma in sorted(anki_skipped_cards):
-                forms = lemma_map[lemma]
-                rep = pick_rep(forms)
-                print(f"{lemma}\t{rep}\t{','.join(forms)}")
-        if anki_skipped_meta:
-            print("---META_EXCLUDED---")
-            for lemma in sorted(anki_skipped_meta):
                 forms = lemma_map[lemma]
                 rep = pick_rep(forms)
                 print(f"{lemma}\t{rep}\t{','.join(forms)}")
@@ -296,7 +245,6 @@ def main():
                 "highlights": n_highlights,
                 "lemmas": n_lemmas,
                 "in_anki": n_anki_cards,
-                "meta_excluded": n_meta,
                 "coca_excluded": n_coca_excluded,
                 "final": n_final,
             },
@@ -315,11 +263,11 @@ def main():
                 for lemma, rep, reason in rejected
             ],
         }
-        if anki_all_handled:
+        if anki_cards:
             anki_skipped_json = []
             for l in sorted(anki_cards):
-                if l.startswith("__") or l not in lemma_map:
-                    continue  # skip meta entries + stale excluded words no longer in highlights
+                if l not in lemma_map:
+                    continue  # stale words no longer in highlights
                 anki_skipped_json.append({
                     "lemma": l,
                     "rep": pick_rep(lemma_map[l]),
@@ -327,18 +275,6 @@ def main():
                 })
             if anki_skipped_json:
                 json_out["anki_skipped"] = anki_skipped_json
-        if meta_excluded:
-            meta_excluded_json = []
-            for l in sorted(meta_excluded):
-                if l not in lemma_map:
-                    continue  # stale meta entries no longer in current highlights
-                meta_excluded_json.append({
-                    "lemma": l,
-                    "rep": pick_rep(lemma_map[l]),
-                    "forms": lemma_map[l],
-                })
-            if meta_excluded_json:
-                json_out["meta_excluded"] = meta_excluded_json
         with open(json_out_path, "w", encoding="utf-8") as f:
             json.dump(json_out, f, ensure_ascii=False, indent=2)
 
