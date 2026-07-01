@@ -137,11 +137,11 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
   -H "Authorization: Bearer $WEREAD_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"api_name":"/book/bookmarklist","bookId":"<bookId>","skill_version":"1.0.3"}' | \
-<skill_dir>/.venv/bin/python3 <skill_dir>/filter_pipeline.py --anki <bookId> --book-id <bookId> --json-out /tmp/vocab-anki-filtered-<bookId>.json
+<skill_dir>/.venv/bin/python3 <skill_dir>/filter_pipeline.py --anki-dedup same-book --book-id <bookId> --json-out /tmp/vocab-anki-filtered-<bookId>.json
 ```
 
-- `--anki <bookId>`：启用 Anki 去重（查已有卡片）；若 Step 0b 确认全库 0 张 Vocabulary Card 笔记，可省略此 flag 跳过 Anki 查询
-- `--book-id <bookId>`：bookId 标识，传递至脚本用于 WordId 构建
+- `--anki-dedup same-book`：启用同书 Anki 去重（查已有卡片）；若 Step 0b 确认全库 0 张 Vocabulary Card 笔记，可省略此 flag 跳过 Anki 查询
+- `--book-id <bookId>`：bookId 标识，用于 WordId 构建 + 同书去重目标
 - `--json-out <path>`：将过滤结果写入结构化 JSON 文件，供 Step 3 Claude 直接读取填充 `excluded` 数组，避免手动转录
 
 输出分为四段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表、`---ANKI_SKIPPED---` 表（Anki 已有卡片，仅当存在时出现）。同时写入对应的结构化 JSON 到 `--json-out` 路径。
@@ -192,7 +192,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 字段：
 |------|------|---------|
 | COCA 词频范围 | 无限制（全部 COCA 20000） | 用户未指定范围，或表述模糊（如 "中频词"） |
 | 章节范围 | 全部章节 | 用户未指定，或表述模糊 |
-| Anki 去重范围 | **必须提问确认** | 用户未明确说明时显式提问；提及 "所有牌组"/"全局" → 全库去重；提及 "仅本书"/"同书" → 仅同书 |
+| Anki 去重范围 | **必须提问确认** | 用户未明确说明时显式提问；提及 "所有牌组"/"全局" → `--anki-dedup all-decks`；提及 "仅本书"/"同书" → `--anki-dedup same-book` |
 
 **COCA 范围意图解析：**
 
@@ -272,7 +272,7 @@ cat /tmp/<safe_title>-full.txt | \
   --basic-range 3001-10000 \
   --chapter-range "1-5,7,10-12" \
   --chapter-titles '<chapters_json>' \
-  --anki <bookId> --book-id <bookId> \
+  --anki-dedup same-book --book-id <bookId> \
   --json-out /tmp/vocab-anki-filtered-<bookId>.json
 ```
 
@@ -280,9 +280,8 @@ cat /tmp/<safe_title>-full.txt | \
 - `--basic-range M-N`：COCA 频率排名范围。省略表示不限制。
 - `--chapter-range RANGE`：用户选择的章节。省略表示全部。
 - `--chapter-titles JSON`：WeRead API `/book/chapterinfo` 返回的 `chapters[]` 中 **level=2 的章节**序列化为 JSON 字符串（注意 shell 转义）。
-- `--anki <bookId>`：启用 Anki 去重。若 Step 0b 确认全库 0 张卡片可省略。
-- `--book-id <bookId>`：用于 WordId 构建
-- `--anki-all-decks`：仅在用户明确要求全库去重时添加。
+- `--anki-dedup same-book|all-decks`：Anki 去重模式。`same-book` 仅同书去重（需 `--book-id`），`all-decks` 全库去重。省略表示不去重。
+- `--book-id <bookId>`：用于 WordId 构建 + 同书去重目标
 - `--json-out <path>`：输出结构化 JSON。
 
 **脚本内流水线：**

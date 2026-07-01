@@ -5,7 +5,7 @@ Reads WeRead bookmarklist API JSON from stdin, processes everything in-process,
 and outputs final filtered results.
 
 Usage:
-    curl ... | python filter_pipeline.py [--anki <bookId>] [--book-id <bookId>] [--json-out <path>]
+    curl ... | python filter_pipeline.py [--anki-dedup same-book] [--book-id <bookId>] [--json-out <path>]
 
 Output sections:
     SUMMARY: X highlights → Y lemmas → A in Anki → B excluded → C final
@@ -104,14 +104,18 @@ def query_anki_existing(ac: AnkiConnect, book_id: str) -> set[str]:
 
 def main():
     # Parse args
-    anki_book_id: Optional[str] = None
+    anki_dedup: str = ""               # "" | "same-book"
     book_id: Optional[str] = None
     json_out_path: Optional[str] = None
     args = sys.argv[1:]
     i = 0
     while i < len(args):
-        if args[i] == "--anki" and i + 1 < len(args):
-            anki_book_id = args[i + 1]
+        if args[i] == "--anki-dedup" and i + 1 < len(args):
+            anki_dedup = args[i + 1]
+            if anki_dedup != "same-book":
+                print(f"ERROR: filter_pipeline only supports --anki-dedup same-book, got '{anki_dedup}'",
+                      file=sys.stderr)
+                sys.exit(1)
             i += 2
         elif args[i] == "--book-id" and i + 1 < len(args):
             book_id = args[i + 1]
@@ -179,11 +183,19 @@ def main():
     n_highlights = len(marks)
     n_lemmas = len(all_lemmas)
 
-    # Step 1e: Anki dedup (if book_id provided)
-    ac = AnkiConnect() if anki_book_id else None
+    # Step 1e: Anki dedup
     anki_cards: set[str] = set()        # lemmas with actual Anki word cards
-    if ac and anki_book_id:
-        anki_cards = query_anki_existing(ac, anki_book_id)
+    if anki_dedup:
+        if not book_id:
+            print("WARNING: --anki-dedup same-book requires --book-id, skipping Anki dedup",
+                  file=sys.stderr)
+        else:
+            try:
+                ac = AnkiConnect()
+                anki_cards = query_anki_existing(ac, book_id)
+            except Exception as e:
+                print(f"WARNING: AnkiConnect unreachable, skipping Anki dedup: {e}",
+                      file=sys.stderr)
 
     def _lemma_handled(lemma: str, forms: list[str], handled: set[str]) -> bool:
         """Return True if lemma or any surface form is already in Anki."""

@@ -18,11 +18,15 @@ Usage
         --chapter-titles '[{"chapterUid":1,"title":"Chapter 1"},...]' \
         --chapter-range "1-5,7" --json-out /tmp/out.json
 
-    # Full pipeline with Anki dedup
+    # Full pipeline with Anki dedup (new --anki-dedup flag)
     cat book.txt | python filter_fulltext.py \
         --basic-range 3001-10000 --chapter-range "1-5" \
-        --chapter-titles '<json>' --anki <bookId> --book-id <bookId> \
+        --chapter-titles '<json>' --anki-dedup same-book --book-id <bookId> \
         --json-out /tmp/out.json
+
+    # Cross-deck dedup
+    cat book.txt | python filter_fulltext.py \
+        --anki-dedup all-decks --book-id <bookId> --json-out /tmp/out.json
 """
 
 from __future__ import annotations
@@ -228,10 +232,9 @@ def main() -> None:
     basic_max: int = 0
     chapter_range_str: Optional[str] = None
     chapter_titles_json: Optional[str] = None
-    anki_book_id: Optional[str] = None
     book_id: Optional[str] = None
     json_out_path: Optional[str] = None
-    anki_all_decks: bool = False
+    anki_dedup: str = ""               # "" | "same-book" | "all-decks"
 
     args = sys.argv[1:]
     i = 0
@@ -248,8 +251,12 @@ def main() -> None:
         elif args[i] == "--chapter-titles" and i + 1 < len(args):
             chapter_titles_json = args[i + 1]
             i += 2
-        elif args[i] == "--anki" and i + 1 < len(args):
-            anki_book_id = args[i + 1]
+        elif args[i] == "--anki-dedup" and i + 1 < len(args):
+            anki_dedup = args[i + 1]
+            if anki_dedup not in ("same-book", "all-decks"):
+                print(f"ERROR: --anki-dedup must be 'same-book' or 'all-decks', got '{anki_dedup}'",
+                      file=sys.stderr)
+                sys.exit(1)
             i += 2
         elif args[i] == "--book-id" and i + 1 < len(args):
             book_id = args[i + 1]
@@ -257,9 +264,6 @@ def main() -> None:
         elif args[i] == "--json-out" and i + 1 < len(args):
             json_out_path = args[i + 1]
             i += 2
-        elif args[i] == "--anki-all-decks":
-            anki_all_decks = True
-            i += 1
         else:
             i += 1
 
@@ -388,17 +392,19 @@ def main() -> None:
 
     # -- Anki dedup -----------------------------------------------------------
     anki_cards: set[str] = set()
-    if anki_book_id:
+    if anki_dedup:
         AnkiConnect, _AnkiConnectError = _get_anki_connect()
         try:
             ac = AnkiConnect()
 
-            if anki_all_decks:
-                # Cross-deck dedup: all lemmas from all vocab-anki decks
+            if anki_dedup == "all-decks":
                 anki_cards = ac.query_anki_all_lemmas()
             else:
-                # Same-book dedup only
-                anki_cards = query_anki_existing(ac, anki_book_id)
+                if not book_id:
+                    print("WARNING: --anki-dedup same-book requires --book-id, skipping Anki dedup",
+                          file=sys.stderr)
+                else:
+                    anki_cards = query_anki_existing(ac, book_id)
         except Exception as e:
             print(f"WARNING: AnkiConnect unreachable, skipping Anki dedup: {e}",
                   file=sys.stderr)
