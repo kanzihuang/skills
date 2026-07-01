@@ -44,6 +44,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 | `ankiconnect.py` | AnkiConnect JSON-RPC client library |
 | `filter_pipeline.py` | Combined filter pipeline (Step 1d+1e+1f merged): clean punctuation/case → lemmatize → Anki dedup → COCA check in a single Python invocation. Strips sentence-boundary punctuation (`vexed.`→`vexed`) and normalizes case (`Clad`→`clad`) before processing — eliminates Claude round-trip data transfer, ~0.5s vs previous ~33s. Anki dedup checks surface forms first then lemmas — prevents re-processing words whose surface form already exists as a card (e.g. `blundering` card with WordId `blundering_{bookId}` won't be missed when pipeline lemmatizes to `blunder` and looks for `blunder_{bookId}`) |
 | `coca_freq.txt` | COCA word-form frequency list (18,964 entries, frequency-ranked). Single data source for both `load_coca()` set lookup and `load_freq_ranked()` frequency-tier filtering. Frequency lookup via `lib/coca.py` with three-tier strategy: direct set → lemminflect → suffix stripping |
+| `scripts/match_sentences.py` | Step 3.0 mechanical sentence matching — reads `filter_fulltext.py` JSON output + source text, extracts one sentence per word with `<b>` tagging. Enforces SKILL.md 3.0e truncation rules (never cut from start, never produce fragments). Replaces Claude manual recall with mechanical matching |
 
 **Dependencies:** `weread-skills` (for highlight data via WeRead API), Python packages: `edge-tts`, `lemminflect`
 
