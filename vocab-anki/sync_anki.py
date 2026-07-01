@@ -236,27 +236,6 @@ def _get_spacy():
     return _SPACY_NLP
 
 
-def _spacy_lemma(word: str, sentence: str) -> str | None:
-    """Use spaCy to lemmatize a word in sentence context.
-
-    spaCy's POS tagger uses context to decide whether an -ed/-ing word
-    is an adjective (keep surface form) or verb (reduce to stem).
-    Returns the corrected lemma, or None if spaCy is unavailable.
-    """
-    nlp = _get_spacy()
-    if nlp is None:
-        return None
-    w = word.lower()
-    try:
-        doc = nlp(sentence)
-        for token in doc:
-            if token.text.lower() == w:
-                return token.lemma_.lower()
-    except Exception:
-        pass
-    return None
-
-
 def resolve_lemma(word: str, json_lemma: str) -> str:
     """Resolve the canonical lemma for a word.
 
@@ -363,6 +342,35 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
     return jl or w
 
 
+def _has_be_to_pattern(doc, vbn_idx: int) -> bool:
+    """Check if the VBN at vbn_idx is part of a "be VBN to <verb>" pattern.
+
+    "be astonished to see", "be surprised to hear" etc. — emotional
+    adjectives with to-infinitive complement.  spaCy's small model often
+    tags these as VERB/VBN rather than ADJ, but the structural pattern
+    (form of "be" before, "to" + verb after) is a reliable adjective signal.
+    """
+    # Check preceding tokens: a form of "be" within 3 tokens before
+    be_forms = {"am", "is", "are", "was", "were", "be", "been", "being"}
+    has_be = False
+    for i in range(max(0, vbn_idx - 3), vbn_idx):
+        if doc[i].text.lower() in be_forms:
+            has_be = True
+            break
+    if not has_be:
+        return False
+
+    # Check following tokens: "to" within 2 tokens after, followed by verb
+    for i in range(vbn_idx + 1, min(vbn_idx + 3, len(doc))):
+        if doc[i].text.lower() == "to" and i + 1 < len(doc):
+            if doc[i + 1].pos_ == "VERB":
+                return True
+            # Also catch adverbs between "to" and verb: "to properly see"
+            if i + 2 < len(doc) and doc[i + 2].pos_ == "VERB":
+                return True
+    return False
+
+
 def _process_one_word(
     w: dict,
     book_id: str,
@@ -378,17 +386,49 @@ def _process_one_word(
     json_lemma = w.get("lemma", "").strip()
     lemma = resolve_lemma(word, json_lemma)
 
-    # Safety net: for -ed/-ing words, verify with spaCy's sentence-context
-    # lemmatizer.  If spaCy says the word is an adjective (surface form),
-    # override the mechanical reduction.  This prevents crossing like
-    # distinguished→distinguish, wicked→wick.
+    # Safety net: for -ed/-ing words that resolve_lemma reduced away from
+    # the surface form, verify with spaCy's sentence-context parse.
+    #
+    # Three signals that the surface form is a derivational adjective
+    # (keep it) rather than a verb inflection (reduce to stem):
+    #
+    #   1. Dependency-based: the word has an adjectival grammatical function
+    #      (acomp/oprd/attr/amod).  This encodes "be/seem + adjective"
+    #      structurally and is more reliable than POS tags alone.
+    #      — catches: surprised (acomp), disappointed (oprd), distinguished (amod)
+    #
+    #   2. Lemma-based: spaCy returns the surface form as its own lemma
+    #      (belt & suspenders for signal 1; also catches conj like embarrassed).
+    #      — catches: embarrassed (conj, but lemma=embarrassed)
+    #
+    #   3. be-to pattern: "be VBN to <verb>" — syntactic hallmark of emotional
+    #      adjectives.  Needed because spaCy sometimes misparses this as ROOT
+    #      (passive) instead of acomp, e.g. "be astonished to see".
+    #      — catches: astonished (ROOT, but be-to pattern matches)
     wl = word.lower()
     if lemma != wl and wl.endswith(("ed", "ing")):
         sent = w.get("sentence", "")
         if sent:
-            spacy_result = _spacy_lemma(word, sent)
-            if spacy_result and spacy_result == wl:
-                lemma = wl
+            nlp = _get_spacy()
+            if nlp is not None:
+                try:
+                    doc = nlp(sent)
+                    for token in doc:
+                        if token.text.lower() == wl:
+                            # Signal 1: adjectival dependency relation
+                            if token.dep_ in ("acomp", "oprd", "attr", "amod"):
+                                lemma = wl
+                                break
+                            # Signal 2: spaCy lemma == surface form
+                            if token.lemma_.lower() == wl:
+                                lemma = wl
+                                break
+                            # Signal 3: be VBN to <verb> structural pattern
+                            if token.tag_ == "VBN" and _has_be_to_pattern(doc, token.i):
+                                lemma = wl
+                                break
+                except Exception:
+                    pass
 
     safe = safe_filename(lemma)
 

@@ -13,6 +13,8 @@ Historical LLM errors covered:
   - IPA with Chinese characters
   - Function-word endings: truncation cutting at prepositions/conjunctions
     (e.g. "...the red of the blood from" ending with "from")
+  - Emotional adj misclassified as passive verb (SKILL.md rule fix):
+    "be astonished to see" → adj, not v. (be + adj + to-infinitive pattern)
 """
 
 import re
@@ -323,3 +325,26 @@ def test_sentence_ending_with_content_word_passes():
     w3 = make_word(word="aboard", sentence="They hoisted her <b>aboard</b>.")
     errors3 = _validate_word_entries([w3])
     assert not has_error(errors3, "aboard", "function word")
+
+
+# ── Emotional adjective with to-infinitive (SKILL.md passive-voice rule fix) ──
+
+def test_emotional_adjective_to_infinitive_valid():
+    """be X-ed to <verb> → emotional adjective, NOT passive voice.
+
+    Historical: Claude classified 'astonished' as verb (v. 使惊讶) because
+    the old rule said 'was/were X-ed → passive voice' with no exception for
+    the 'be + emotional adj + to-infinitive' pattern. Fix: SKILL.md updated
+    to recognize this pattern as adjective usage.
+
+    Regression: validator must accept lemma='astonished' (same as surface form)
+    when the sentence shows emotional-adjective usage.
+    """
+    w = make_word(
+        word="astonished", lemma="astonished",
+        sentence='And your friends will be properly <b>astonished</b> to see you laughing!',
+        definition_cn="adj. 惊讶的，吃惊的",
+    )
+    errors = _validate_word_entries([w])
+    assert not has_error(errors, "astonished", "suspicious"), \
+        f"Emotional adj with to-infinitive should pass\nErrors: {errors}"

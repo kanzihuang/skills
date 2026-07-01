@@ -187,3 +187,103 @@ def test_no_hardcoded_comparatives(coca_set):
     # The CONTRACTIONS dict should NOT contain comparative entries
     assert "better" not in lem_module._CONTRACTIONS
     assert "worse" not in lem_module._CONTRACTIONS
+
+
+# ── sync_anki safety net: -ed/-ing adjective detection ──
+
+def test_spacy_dep_based_adjective_detection():
+    """Dependency relations (acomp/oprd/attr/amod) identify adjectives
+    more reliably than POS tags.  Historical bug: "astonished" in
+    "be astonished to see" was classified as VERB (ROOT) by spaCy,
+    causing lemmatization to "astonish".  The safety net now uses
+    three signals: dep-based, lemma-based, and be-to pattern.
+    """
+    import spacy
+    nlp = spacy.load("en_core_web_sm")
+
+    # Cases that must be kept as-is (adjective)
+    adj_cases = [
+        # (label, sentence, word)
+        # dep-based: acomp
+        ("surprised", "I was surprised to hear the news", "surprised"),
+        # dep-based: oprd
+        ("disappointed", "she seemed disappointed to find it empty", "disappointed"),
+        # dep-based: amod
+        ("distinguished", "a distinguished fisherman", "distinguished"),
+        # lemma-based: conj but lemma stays
+        ("embarrassed", "the little prince replied, thoroughly embarrassed", "embarrassed"),
+        # be-to pattern: ROOT misparse
+        ("astonished", "your friends will be properly astonished to see you laughing", "astonished"),
+    ]
+
+    adj_deps = {"acomp", "oprd", "attr", "amod"}
+    be_forms = {"am", "is", "are", "was", "were", "be", "been", "being"}
+
+    for label, sent, word in adj_cases:
+        doc = nlp(sent)
+        found = False
+        for token in doc:
+            if token.text.lower() == word:
+                wl = word.lower()
+                # Signal 1: dependency-based
+                dep_adj = token.dep_ in adj_deps
+                # Signal 2: lemma == surface form
+                lemma_adj = token.lemma_.lower() == wl
+                # Signal 3: be-to pattern
+                be_to = False
+                if token.tag_ == "VBN":
+                    has_be = any(
+                        doc[i].text.lower() in be_forms
+                        for i in range(max(0, token.i - 3), token.i)
+                    )
+                    has_to_v = any(
+                        doc[i].text.lower() == "to" and i + 1 < len(doc) and doc[i + 1].pos_ == "VERB"
+                        for i in range(token.i + 1, min(token.i + 3, len(doc)))
+                    )
+                    be_to = has_be and has_to_v
+
+                is_adj = dep_adj or lemma_adj or be_to
+                assert is_adj, (
+                    f"{label}: should be adjective\n"
+                    f"  dep={token.dep_} (adj={dep_adj}), "
+                    f"  lemma={token.lemma_} (match={lemma_adj}), "
+                    f"  be_to={be_to}"
+                )
+                found = True
+                break
+        assert found, f"{label}: word '{word}' not found in sentence"
+
+    # Cases that should still reduce (verb/passive — unambiguous)
+    reduce_cases = [
+        ("attached", "The file was attached to the email", "attached"),
+        ("broken", "The window was broken by the storm", "broken"),
+        ("locked", "The door was locked from inside", "locked"),
+    ]
+
+    for label, sent, word in reduce_cases:
+        doc = nlp(sent)
+        for token in doc:
+            if token.text.lower() == word:
+                wl = word.lower()
+                dep_adj = token.dep_ in adj_deps
+                lemma_adj = token.lemma_.lower() == wl
+                be_to = False
+                if token.tag_ == "VBN":
+                    has_be = any(
+                        doc[i].text.lower() in be_forms
+                        for i in range(max(0, token.i - 3), token.i)
+                    )
+                    has_to_v = any(
+                        doc[i].text.lower() == "to" and i + 1 < len(doc) and doc[i + 1].pos_ == "VERB"
+                        for i in range(token.i + 1, min(token.i + 3, len(doc)))
+                    )
+                    be_to = has_be and has_to_v
+
+                should_reduce = not (dep_adj or lemma_adj or be_to)
+                assert should_reduce, (
+                    f"{label}: should reduce (passive)\n"
+                    f"  dep={token.dep_} (adj={dep_adj}), "
+                    f"  lemma={token.lemma_} (match={lemma_adj}), "
+                    f"  be_to={be_to}"
+                )
+                break

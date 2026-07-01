@@ -559,7 +559,11 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
 1. **lemma 正确性**：脑中过一遍 `lemmatize_word(word)` 的返回结果。结果词性与句中实际用法一致（屈折变化）→ `lemma` **留空**，脚本自动还原；不一致（派生 adj 被当屈折）→ 必须显式覆写 `lemma`。例如 `blundering`(adj)→lemmatize→`blunder`(v) 词性不对，覆写 `lemma: "blundering"`；`distinguished`(adj)→lemmatize→`distinguish`(v) 词性不对，覆写 `lemma: "distinguished"`；`pondered`(v)→lemmatize→`ponder`(v) 正确，`lemma` 留空。**绝不在 `lemma` 字段中填写与 `word` 相同的表面词形**——留空让脚本处理，填表面词形反而阻止自动还原
 2. **IPA 对应性**：每个 IPA 是否对应 `lemma`（卡片展示词）的正确发音？异读词（如 `intimate`）必须根据释义选择 `/ˈɪntɪmət/`(adj) 或 `/ˈɪntɪmeɪt/`(v)
 3. **释义词性对齐**：`definition_cn` 是否反映了句中实际用法的词性？`blundering` adj→"笨拙的"（非"犯大错"）；`conceited` adj→"自负的"（非"自负"）
-   - **被动语态检查**：句中 `was/were X-ed` 或 `has been X-ed` 结构 → `X-ed` 是**动词过去分词**（被动语态），**不是**形容词。即使词典把 `X-ed` 列为形容词，在 `was X-ed by…` 结构中它仍是动词。例如 `His back was <b>bent</b> with the weight` → `bent` 是 `bend` 的过去分词（v. 被压弯），不应标为 `adj. 弯曲的`。正确标注：`v. 弯曲（bend 的过去分词）`。仅当 `X-ed` 直接修饰名词且无 `by` 短语时才标记为形容词（如 `a <b>distinguished</b> fisherman`）
+   - **被动语态 vs 形容词检查**：`-ed` 分词在句中可以是动词过去分词（被动语态）或形容词（情感/状态）。判断标准分三层：
+     1. **`by` + 施事者** → 被动语态，动词。例：`His back was <b>bent</b> with the weight` → `bent` 是 `bend` 的过去分词，`v. 被压弯`（**不标** `adj. 弯曲的`）
+     2. **`be X-ed to <verb>`** → 形容词。情感形容词 + to-infinitive 是英语中固定模式，无施事者。例：`your friends will be properly <b>astonished</b> to see you laughing` → `adj. 惊讶的，吃惊的`（**不标** `v. 使惊讶`）。同类：`surprised to hear`、`delighted to learn`、`disappointed to find`
+     3. **`be X-ed` 无施事者、无 to-infinitive** → 酌情判断：描述情感/状态（`He was <b>embarrassed</b>.` → adj），或描述动作结果（`The window was <b>broken</b>.` → v.）。若有后续从句说明原因（`that…`、`because…`），通常为形容词
+     4. **X-ed 直接修饰名词** → 形容词（如 `a <b>distinguished</b> fisherman`）
 4. **word 字段一致**：`word` 是否 = `<b>` 包裹的文本 = 句中出现的形式？
 5. **语义情境对齐（多义词义项验证）**：对每个词，重读 sentence 中的上下文，确认 `definition_cn` 和 `translation_cn` 选择了该词在此句中的正确义项，而非其最常见词典义。执行以下验证：
    - **代入验证法**：将 `definition_cn`（去除"的/地/了"等标记）代入原英文句替换原词，看代入后的概念是否通顺合理。若替换后句子意思不通或产生逻辑矛盾，说明义项选错。例如 "he must be treated thriftily" → "节俭地对待他" 不通（对人不能"节俭"），说明应换义项
