@@ -53,16 +53,17 @@ def test_lemmatize_word_strictly_shorter():
 
 
 def test_pipeline_gating_note():
-    """Downstream COCA gating catches lemmatize_word's mistakes.
+    """Downstream COCA gating for lemmatize_word's edge cases.
 
-    lemmatize_word('sacred') → 'sacre' (incorrect)
-    But sync_anki.resolve_lemma('sacred', '') uses COCA gating → stays 'sacred'
-    And lib.lemmatize.lemmatize('sacred', coca_set) → 'sacred' (in COCA)
+    lib.lemmatize.lemmatize('sacred', coca) → 'sacred' (in COCA, VERB→sacre rejected)
+    lib.lemmatize.lemmatize('tremendous', coca) → 'tremendous' (in COCA)
     """
-    # This test documents the pipeline behavior, not a bug
-    from sync_anki import resolve_lemma
-    assert resolve_lemma("sacred", "") == "sacred"
-    assert resolve_lemma("tremendous", "") == "tremendous"
+    import sys; sys.path.insert(0, '../lib')
+    from lib.coca import load_coca
+    from lib.lemmatize import lemmatize as lib_lemmatize
+    coca = load_coca()
+    assert lib_lemmatize("sacred", coca) == "sacred"
+    assert lib_lemmatize("tremendous", coca) == "tremendous"
 
 
 @pytest.mark.parametrize(

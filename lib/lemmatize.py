@@ -7,7 +7,7 @@ boundaries.
 Public API
 ----------
 lemmatize(word, coca_set) -> str
-    Comprehensive lemmatization (IRREG + regular patterns, COCA-validated).
+    Comprehensive lemmatization (lemminflect + COCA validation + regular patterns).
     Used by vocab-list for full-book vocabulary extraction.
 
 lemmatize_conservative(word) -> str
@@ -17,107 +17,42 @@ lemmatize_conservative(word) -> str
 
 from __future__ import annotations
 
-from pathlib import Path
 
 # ============================================================================
-# IRREGULAR FORM DICTIONARY (inflected -> base lemma)
+# Tiny special-case lookup (text-cleaning artifacts + blocked comparatives)
 # ============================================================================
+# lemminflect handles virtually everything, but two narrow cases need
+# explicit overrides:
+#
+# 1. Contractions without apostrophes (text-cleaning artifacts)
+#    "dont"→"do", "isnt"→"be" — lemminflect expects "don't", "isn't".
+#
+# 2. Irregular comparatives/superlatives that happen to be in COCA
+#    (blocked by the VERB-only COCA guard in _try_lemminflect).
+#    e.g. better→good, best→good, further→far.
+#
+# Everything else is delegated to lemminflect — 236-hand-entry IRREG dict
+# eliminated.
 
-IRREG: dict[str, str] = {
-    # ── "be" ──
-    "am": "be", "'m": "be", "is": "be", "'s": "be", "are": "be", "'re": "be",
-    "was": "be", "were": "be", "been": "be", "being": "be",
-    # ── "have" ──
-    "has": "have", "had": "have", "having": "have",
-    # ── "do" ──
-    "does": "do", "did": "do", "doing": "do",
-    # ── "go" ──
-    "goes": "go", "went": "go", "gone": "go", "going": "go",
-    # ── "say" ──
-    "says": "say", "said": "say",
-
-    # -- Irregular past -> base --
-    "arose": "arise", "awoke": "awake", "bore": "bear",
-    "beat": "beat", "became": "become", "began": "begin",
-    "bent": "bend", "bit": "bite", "bled": "bleed", "blew": "blow",
-    "broke": "break", "brought": "bring", "built": "build", "burnt": "burn",
-    "bought": "buy", "caught": "catch", "chose": "choose", "came": "come",
-    "crept": "creep", "dealt": "deal", "dug": "dig",
-    "drew": "draw", "drank": "drink", "drove": "drive",
-    "ate": "eat", "fell": "fall", "fed": "feed", "felt": "feel",
-    "fought": "fight", "found": "find", "fled": "flee", "flew": "fly",
-    "forgot": "forget", "forgave": "forgive", "forsook": "forsake",
-    "froze": "freeze", "got": "get", "gave": "give",
-    "grew": "grow", "hung": "hang", "heard": "hear",
-    "hid": "hide", "held": "hold",
-    "kept": "keep", "knelt": "kneel", "knew": "know", "laid": "lay",
-    "led": "lead", "left": "leave", "lent": "lend",
-    "lit": "light", "lost": "lose", "made": "make",
-    "meant": "mean", "met": "meet", "paid": "pay",
-    "rode": "ride", "rang": "ring", "rose": "rise", "ran": "run",
-    "saw": "see", "sought": "seek", "sold": "sell", "sent": "send",
-    "shook": "shake", "shone": "shine", "shot": "shoot",
-    "sang": "sing", "sank": "sink", "sat": "sit",
-    "slept": "sleep", "slid": "slide", "spoke": "speak", "sped": "speed",
-    "spent": "spend", "spun": "spin", "sprang": "spring", "stood": "stand",
-    "stole": "steal", "stuck": "stick", "struck": "strike", "swore": "swear",
-    "swept": "sweep", "swam": "swim", "swung": "swing", "took": "take",
-    "taught": "teach", "tore": "tear", "told": "tell", "thought": "think",
-    "threw": "throw", "understood": "understand", "woke": "wake",
-    "wore": "wear", "wept": "weep", "won": "win", "wound": "wind",
-    "wrote": "write", "overcame": "overcome", "withdrew": "withdraw",
-    "mistook": "mistake", "forbade": "forbid",
-
-    # -- Past participles (different from past) --
-    "borne": "bear", "beaten": "beat", "begun": "begin",
-    "bitten": "bite", "blown": "blow", "broken": "break", "chosen": "choose",
-    "done": "do", "drawn": "draw", "drunk": "drink", "driven": "drive",
-    "eaten": "eat", "fallen": "fall", "flown": "fly", "forgotten": "forget",
-    "forgiven": "forgive", "forsaken": "forsake", "frozen": "freeze",
-    "given": "give", "grown": "grow", "hidden": "hide", "known": "know",
-    "lain": "lie", "ridden": "ride", "rung": "ring", "risen": "rise",
-    "seen": "see", "shaken": "shake", "sung": "sing", "sunk": "sink",
-    "spoken": "speak", "sprung": "spring", "stolen": "steal",
-    "stridden": "stride", "sworn": "swear", "swum": "swim", "taken": "take",
-    "torn": "tear", "thrown": "throw", "woken": "wake", "worn": "wear",
-    "withdrawn": "withdraw", "written": "write",
-
-    # -- Gerunds with spelling changes --
-    "dying": "die", "lying": "lie", "tying": "tie",
-
-    # -- Contractions (without apostrophe, as they appear in cleaned text) --
-    "cant": "can", "cannot": "can", "wont": "will", "dont": "do",
+_SPECIAL: dict[str, str] = {
+    # ── Contractions without apostrophes ──
+    "cant": "can", "cannot": "can",
+    "wont": "will",
+    "dont": "do", "didnt": "do", "doesnt": "do",
     "isnt": "be", "arent": "be", "wasnt": "be", "werent": "be",
     "hasnt": "have", "havent": "have", "hadnt": "have",
-    "couldnt": "can", "wouldnt": "will", "shouldnt": "shall", "mustnt": "must",
-    "didnt": "do", "doesnt": "do",
+    "couldnt": "can", "wouldnt": "will", "shouldnt": "shall",
+    "mustnt": "must",
 
-    # -- Irregular noun plurals --
-    "men": "man", "women": "woman", "children": "child",
-    "feet": "foot", "teeth": "tooth", "geese": "goose",
-    "mice": "mouse", "lice": "louse", "oxen": "ox",
-    "phenomena": "phenomenon", "crises": "crisis",
-
-    # -- Irregular comparatives / superlatives --
+    # ── Irregular comparatives/superlatives in COCA ──
     "better": "good", "best": "good",
     "worse": "bad", "worst": "bad",
     "more": "much", "most": "much",
     "less": "little", "least": "little",
-    "further": "far", "furthest": "far", "farther": "far", "farthest": "far",
+    "further": "far", "furthest": "far",
+    "farther": "far", "farthest": "far",
     "elder": "old", "eldest": "old",
 }
-
-# Additional learnt / poetic / archaic forms
-IRREG.update({
-    "leant": "lean", "leapt": "leap", "learnt": "learn",
-    "spelt": "spell", "smelt": "smell", "dwelt": "dwell",
-    "dreamt": "dream", "meant": "mean", "burnt": "burn",
-    "cost": "cost", "cut": "cut", "hit": "hit", "hurt": "hurt",
-    "let": "let", "put": "put", "set": "set", "shut": "shut",
-    "spread": "spread", "split": "split", "thrust": "thrust",
-    "bet": "bet", "burst": "burst", "cast": "cast",
-    "read": "read", "shed": "shed", "wed": "wed",
-})
 
 
 # ============================================================================
@@ -166,7 +101,7 @@ def _is_derivational_adj(w: str, sentence: str = "") -> bool:
     if not w.endswith("ing"):
         return False
     try:
-        from lemminflect import getLemma  # noqa: F811
+        from lemminflect import getLemma
     except ImportError:
         return False
     adj = getLemma(w, "ADJ")
@@ -174,6 +109,54 @@ def _is_derivational_adj(w: str, sentence: str = "") -> bool:
     adj_unchanged = adj and all(a == w for a in adj)
     verb_changes = verb and any(v != w for v in verb)
     return adj_unchanged and verb_changes
+
+
+# ============================================================================
+# lemminflect-based lemmatization (replaces hand-maintained IRREG dict)
+# ============================================================================
+
+def _try_lemminflect(w: str, coca_set: set[str]) -> list[str]:
+    """Query lemminflect for lemmas across VERB/NOUN/ADJ/ADV.
+
+    If *w* is already in COCA, only the VERB channel is consulted
+    (most reliable for inflectional reduction).  Other POS channels
+    can produce false positives for canonical words (beer→bee,
+    sacred→sac).
+
+    If *w* is NOT in COCA, all POS channels are tried in priority
+    order (VERB > NOUN > ADJ > ADV).
+
+    lemminflect handles ALL irregular forms — 236-hand-entry IRREG
+    dict eliminated.
+    """
+    try:
+        from lemminflect import getLemma
+    except ImportError:
+        return []
+
+    # Only trust VERB channel when word is already canonical.
+    if w in coca_set:
+        lemmas = getLemma(w, "VERB")
+        if lemmas:
+            for lemma in lemmas:
+                cand = lemma.lower()
+                if cand != w and cand in coca_set:
+                    return [cand]
+        return []
+
+    # Word NOT in COCA — try all POS channels
+    for upos in ("VERB", "NOUN", "ADJ", "ADV"):
+        lemmas = getLemma(w, upos)
+        if not lemmas:
+            continue
+        for lemma in lemmas:
+            cand = lemma.lower()
+            if cand == w:
+                continue
+            if cand in coca_set:
+                return [cand]
+
+    return []
 
 
 # ============================================================================
@@ -256,44 +239,52 @@ def _try_s_es(w: str, coca_set: set[str]) -> list[str]:
 
 
 def _try_er(w: str, coca_set: set[str]) -> list[str]:
-    """Comparative -er: bigger->big, smaller->small, happier->happy."""
+    """Comparative -er: bigger->big, smaller->small, happier->happy.
+
+    Requires stem length ≥ 3 to prevent false positives like beer→be.
+    """
     if not w.endswith("er") or len(w) <= 3:
         return []
     results: list[str] = []
     if w.endswith("ier") and len(w) > 4:
         cand = w[:-3] + "y"
-        if cand in coca_set:
+        if cand in coca_set and len(cand) >= 3:
             results.append(cand)
     base = w[:-2]
-    if base in coca_set:
-        results.append(base)
-    if (base + "e") in coca_set:
-        results.append(base + "e")
-    if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "aeiouy":
-        single = base[:-1]
-        if single in coca_set:
-            results.append(single)
+    if len(base) >= 3:  # guard: stem must be ≥3 chars (be→beer rejected)
+        if base in coca_set:
+            results.append(base)
+        if (base + "e") in coca_set:
+            results.append(base + "e")
+        if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "aeiouy":
+            single = base[:-1]
+            if single in coca_set:
+                results.append(single)
     return results
 
 
 def _try_est(w: str, coca_set: set[str]) -> list[str]:
-    """Superlative -est: biggest->big, smallest->small, happiest->happy."""
+    """Superlative -est: biggest->big, smallest->small, happiest->happy.
+
+    Requires stem length ≥ 3 to prevent false positives.
+    """
     if not w.endswith("est") or len(w) <= 4:
         return []
     results: list[str] = []
     if w.endswith("iest") and len(w) > 5:
         cand = w[:-4] + "y"
-        if cand in coca_set:
+        if cand in coca_set and len(cand) >= 3:
             results.append(cand)
     base = w[:-3]
-    if base in coca_set:
-        results.append(base)
-    if (base + "e") in coca_set:
-        results.append(base + "e")
-    if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "aeiouy":
-        single = base[:-1]
-        if single in coca_set:
-            results.append(single)
+    if len(base) >= 3:  # guard: stem must be ≥3 chars
+        if base in coca_set:
+            results.append(base)
+        if (base + "e") in coca_set:
+            results.append(base + "e")
+        if len(base) >= 3 and base[-1] == base[-2] and base[-1] not in "aeiouy":
+            single = base[:-1]
+            if single in coca_set:
+                results.append(single)
     return results
 
 
@@ -309,29 +300,55 @@ def lemmatize(word: str, coca_set: set[str], sentence: str = "") -> str:
         coca_set: COCA 20000 lemma set for validation.
         sentence: Optional sentence context for spaCy POS disambiguation.
 
+    Strategy (in order):
+    1. Contractions (text-cleaning artifacts)
+    2. lemminflect — handles ALL irregular + regular inflections
+       (replaces 236-entry hand-maintained IRREG dict)
+    3. COCA check — if word is already a canonical lemma
+    4. Regular inflection patterns (_try_ing, _try_ed, etc.)
+
     *No cross-POS conversion*: derivational adjectives stay as-is.
-    When *sentence* is provided, spaCy's POS tagger is used to detect
-    them; otherwise lemminflect handles -ing forms.
     """
     w = word.lower()
 
-    # 1. Already in COCA -- keep as-is (no unnecessary lemmatisation)
-    if w in coca_set:
-        return w
-
-    # 2. IRREG check (highest priority)
-    if w in IRREG:
-        lemma = IRREG[w]
+    # 1. Contractions (text-cleaning artifacts: "dont"→"do", "isnt"→"be")
+    if w in _SPECIAL:
+        lemma = _SPECIAL[w]
         if lemma in coca_set:
             return lemma
 
-    # 3. Regular patterns (result must be in COCA)
+    # 2. lemminflect — comprehensive inflection handling
+    #    Covers: irregular verbs (went→go, ran→run, bound→bind),
+    #    irregular plurals (men→man, feet→foot),
+    #    irregular comparatives (better→good, worse→bad),
+    #    and regular inflections (walked→walk, cats→cat).
+    #    Runs BEFORE COCA check so that words like "running"
+    #    (in COCA as gerund) still reduce to "run".
+    candidates = _try_lemminflect(w, coca_set)
+    if candidates:
+        return min(candidates, key=lambda x: (len(x), x))
+
+    # 3. Superlative/comparative patterns — run BEFORE COCA check
+    #    because words like "closest", "fastest" are in COCA but still
+    #    should reduce to "close", "fast".  _try_est/_try_er have
+    #    built-in COCA validation + minimum stem-length guard (≥3).
+    est_candidates = _try_est(w, coca_set)
+    if est_candidates:
+        return min(est_candidates, key=lambda x: (len(x), x))
+    er_candidates = _try_er(w, coca_set)
+    if er_candidates:
+        return min(er_candidates, key=lambda x: (len(x), x))
+
+    # 4. Already in COCA — keep as-is (canonical lemma, no reduction needed)
+    if w in coca_set:
+        return w
+
+    # 5. Other regular patterns — handle edge cases lemminflect misses
+    #    (e.g. doubled consonants: crammed→cram, forsaken→forsake)
     reg_candidates: list[str] = []
     reg_candidates.extend(_try_ing(w, coca_set, sentence))
     reg_candidates.extend(_try_ed(w, coca_set, sentence))
     reg_candidates.extend(_try_s_es(w, coca_set))
-    reg_candidates.extend(_try_er(w, coca_set))
-    reg_candidates.extend(_try_est(w, coca_set))
 
     # Possessive -'s
     if w.endswith("'s") and len(w) > 3:
@@ -340,11 +357,9 @@ def lemmatize(word: str, coca_set: set[str], sentence: str = "") -> str:
             reg_candidates.append(cand)
 
     if reg_candidates:
-        # Prefer shortest valid candidate (inflectional reduction)
-        best = min(reg_candidates, key=lambda x: (len(x), x))
-        return best
+        return min(reg_candidates, key=lambda x: (len(x), x))
 
-    # 4. No lemmatisation possible
+    # 5. No lemmatisation possible
     return w
 
 

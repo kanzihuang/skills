@@ -338,12 +338,24 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
         if w not in _coca or reduced in _coca:
             return reduced
 
-    # 4. lemmatize_word couldn't reduce — try lib's IRREG dict
+    # 4. lemmatize_word couldn't reduce — try lemminflect with COCA gating
     try:
-        from lib.lemmatize import IRREG  # type: ignore[import-not-found]
+        from lemminflect import getLemma
 
-        if w in IRREG:
-            return IRREG[w]
+        for upos in ("VERB", "NOUN"):
+            lemmas = getLemma(w, upos)
+            if lemmas:
+                for lemma in lemmas:
+                    cand = lemma.lower()
+                    if cand == w:
+                        continue
+                    # COCA gate: accept if word not in COCA AND lemma in COCA
+                    if w not in _coca and cand in _coca:
+                        return cand
+                    # Also accept if word IS in COCA but lemma is shorter
+                    # and also in COCA (handles running→run, etc.)
+                    if w in _coca and cand in _coca and len(cand) < len(w):
+                        return cand
     except ImportError:
         pass
 
