@@ -450,8 +450,11 @@ Anki 卡片各字段之间存在数据依赖——修改一个字段时，依赖
 
 | 修改的字段 | 必须同步更新的依赖字段 | 不需要更新的 |
 |-----------|---------------------|------------|
-| `word` / `lemma` | `ipa`（音标对应新词形）、单词音频（重新生成并上传）、`definition_cn`（词形变了释义可能需调整） | `sentence`（句子是锚点，`word` 必须 = `<b>` 内文本，改 `word` 不改句子） |
-| `sentence` | 例句音频（重新生成并上传）、`translation_cn`（翻译必须匹配新例句）、`word`（必须 = 新句中 `<b>` 内文本） | — |
+| `lemma` | `ipa`（音标对应新 lemma）、单词音频（重新生成，TTS 读新 lemma）、`definition_cn`（释义需与新词形匹配） | `sentence`、`word`（`word` = `<b>` 文本不变，但卡片展示的是 lemma） |
+| `word` | 同 `lemma`（`word` 变化通常意味着表面词形修正，需检查 lemma 是否也需更新） | `sentence` |
+| `sentence` | 例句音频（重新生成）、`translation_cn`（翻译匹配新句）、`word`（= 新句 `<b>` 内文本）、`definition_cn`（新句可能改变词义） | — |
+
+> **`word` vs `lemma`**：`word` 字段存储 `<b>` 中的表面词形（仅用于校验），卡片正面展示的是 **lemma**。改 `lemma` 不改 `word` 是常见操作（如派生形容词 `blundering` 设 `lemma: "blundering"` 阻止还原），此时 `word` 不变但 IPA、音频、释义都需更新。
 
 **执行流程**：
 1. 修改源 JSON 中的 `word`/`lemma` 或 `sentence` 字段
