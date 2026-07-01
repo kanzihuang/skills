@@ -9,7 +9,7 @@ Provides:
 """
 
 from .coca import load_coca, in_coca, load_freq_ranked
-from .lemmatize import lemmatize, lemmatize_conservative
+from .lemmatize import lemmatize, lemmatize_conservative, build_spacy_map
 
 __all__ = [
     "load_coca",
@@ -17,4 +17,5 @@ __all__ = [
     "load_freq_ranked",
     "lemmatize",
     "lemmatize_conservative",
+    "build_spacy_map",
 ]

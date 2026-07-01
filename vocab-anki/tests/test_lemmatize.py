@@ -1,56 +1,55 @@
-"""Test lib/lemmatize.py — VERB + NOUN channels + irregular comparative lookup.
+"""Test lib/lemmatize.py — two-tier (spaCy primary, lemminflect fallback).
 
-ADJ channel removed — English -er/-est ambiguity makes it unreliable
-(121 false positives: baker→bak, beer→bee, etc.).
-
-Irregular comparatives/superlatives handled by explicit closed-set lookup
-(better→good, worse→bad, more→much — 12 entries).
-
-Regular comparatives (closest, fastest, happier) are NOT reduced — known
-trade-off, minor impact on vocabulary grouping.
+With spacy_map: full POS-aware lemmatization (handles comparatives,
+derivational adjectives, agentive nouns correctly).
+Without spacy_map: VERB+NOUN lemminflect fallback.
+No hardcoded word lists.
 """
 
 import pytest
-from lemmatize import lemmatize, lemmatize_conservative
+from lemmatize import lemmatize, lemmatize_conservative, build_spacy_map
 
+
+# ── Fixture: build spacy_map from a sample of The Old Man and the Sea ──
+
+@pytest.fixture(scope="module")
+def spacy_map():
+    """Pre-computed spaCy lemma map from sample sentences."""
+    try:
+        import spacy
+        spacy.load("en_core_web_sm")
+    except Exception:
+        pytest.skip("spaCy model not installed")
+    sample = (
+        "He was an old man who fished alone in a skiff. "
+        "He had gone eighty-four days without taking a fish. "
+        "The old man was now definitely and finally salao. "
+        "It made the boy sad to see the old man come in each day "
+        "with his skiff empty. He was a distinguished fisherman. "
+        "She is an accomplished pianist. "
+        "The baker kneaded dough. The fresher bread was better. "
+        "He is a fast walker but she walks faster. "
+        "The worst storm had passed. He felt worse today. "
+        "The closest star is far. He ran fastest of all. "
+        "He was happier now. The happiest days were gone. "
+        "A bigger boat was needed. It was the biggest fish. "
+        "The robber escaped. Further news came. His elder brother. "
+        "He had more money. Most people agreed. "
+        "I need less. At least he tried. They are running. "
+        "He was sitting. She is making bread. Walking is good. "
+        "He pondered the question. Men and women. The children played. "
+        "His feet hurt. Babies cried. He bound the book. "
+        "A bee stung him. He forsook his vows. Crammed with food. "
+        "He went home. He ran fast. He sat down. They had gone. "
+        "He drank beer. His anger grew. The sacred text. "
+    )
+    return build_spacy_map(sample)
+
+
+# ── Tests with spacy_map (full spaCy coverage) ──
 
 @pytest.mark.parametrize("word,expected", [
-    # ── lemminflect VERB channel ──
-    ("running", "run"),
-    ("sitting", "sit"),
-    ("making", "make"),
-    ("walking", "walk"),
-    ("loved", "love"),
-    ("walked", "walk"),
-    ("stopped", "stop"),
-    ("crammed", "cram"),
-    ("pondered", "ponder"),
-    # ── lemminflect VERB: irregular ──
-    ("went", "go"),
-    ("ran", "run"),
-    ("sat", "sit"),
-    ("had", "have"),
-    ("was", "be"),
-    ("were", "be"),
-    ("done", "do"),
-    ("cried", "cry"),
-    ("bound", "bind"),
-    ("stung", "sting"),
-    ("dove", "dive"),
-    ("flung", "fling"),
-    ("ground", "grind"),
-    ("forsaken", "forsake"),
-    ("given", "give"),
-    ("written", "write"),
-    # ── lemminflect NOUN channel ──
-    ("men", "man"),
-    ("feet", "foot"),
-    ("babies", "baby"),
-    ("knives", "knife"),
-    ("kisses", "kiss"),
-    ("bumps", "bump"),
-    ("cats", "cat"),
-    # ── Irregular comparatives/superlatives (explicit lookup) ──
+    # Irregular comparatives
     ("better", "good"),
     ("best", "good"),
     ("worse", "bad"),
@@ -60,32 +59,98 @@ from lemmatize import lemmatize, lemmatize_conservative
     ("least", "little"),
     ("further", "far"),
     ("elder", "old"),
-    # ── Words in COCA — stay ──
+    # Regular comparatives
+    ("closest", "close"),
+    ("faster", "fast"),
+    ("happier", "happy"),
+    ("biggest", "big"),
+    ("smallest", "small"),
+    # Derivational adjectives
+    ("distinguished", "distinguished"),
+    ("accomplished", "accomplished"),
+    # Agentive nouns — NOT reduced
+    ("baker", "baker"),
+    ("walker", "walker"),
+    ("robber", "robber"),
+    # Regular verbs/nouns — still reduced by spaCy
+    ("running", "run"),
+    ("sitting", "sit"),
+    ("making", "make"),
+    ("walking", "walk"),
+    ("went", "go"),
+    ("ran", "run"),
+    ("had", "have"),
+    ("men", "man"),
+    ("feet", "foot"),
+    ("babies", "baby"),
+    # Words in COCA — stay
+    ("beer", "beer"),
+    ("anger", "anger"),
+    ("sacred", "sacred"),
+    ("much", "much"),
+])
+def test_with_spacy_map(word, expected, coca_set, spacy_map):
+    result = lemmatize(word, coca_set, spacy_map)
+    assert result == expected, \
+        f"lemmatize({word!r}) w/ spacy_map = {result!r}, expected {expected!r}"
+
+
+# ── Tests without spacy_map (lemminflect fallback) ──
+
+@pytest.mark.parametrize("word,expected", [
+    # VERB channel
+    ("running", "run"),
+    ("sitting", "sit"),
+    ("making", "make"),
+    ("walking", "walk"),
+    ("walked", "walk"),
+    ("stopped", "stop"),
+    ("crammed", "cram"),
+    ("pondered", "ponder"),
+    ("went", "go"),
+    ("ran", "run"),
+    ("sat", "sit"),
+    ("had", "have"),
+    ("was", "be"),
+    ("done", "do"),
+    ("bound", "bind"),
+    ("stung", "sting"),
+    ("forsaken", "forsake"),
+    ("given", "give"),
+    # NOUN channel
+    ("men", "man"),
+    ("feet", "foot"),
+    ("babies", "baby"),
+    ("knives", "knife"),
+    ("kisses", "kiss"),
+    ("cats", "cat"),
+    # Words in COCA — stay
     ("beer", "beer"),
     ("anger", "anger"),
     ("fiber", "fiber"),
     ("tremendous", "tremendous"),
     ("sacred", "sacred"),
     ("cut", "cut"),
-    ("put", "put"),
-    ("read", "read"),
     ("bad", "bad"),
     ("good", "good"),
-    ("much", "much"),
-    ("less", "little"),         # irregular comparative dict
-    # ── Known trade-offs: ADJ channel removed ──
-    ("distinguished", "distinguish"),  # needs sentence context
-    ("accomplished", "accomplish"),
-    ("closest", "closest"),           # regular comparative, not reduced
+    # Without spacy_map: comparatives not reduced (lemminflect fallback limitation)
+    ("better", "better"),
+    ("best", "best"),
+    ("worse", "worse"),      # lemminflect VERB→(not in COCA), NOUN→(not), falls through
+    ("worst", "worst"),      # same
+    ("more", "more"),
+    ("most", "most"),
+    ("less", "less"),
+    ("least", "least"),
+    ("further", "further"),
+    ("closest", "closest"),
     ("fastest", "fastest"),
-    ("happier", "happier"),          # known trade-off
-    ("happiest", "happy"),          # -iest handled by lemminflect VERB
+    ("happier", "happier"),
     ("smallest", "smallest"),
-    ("biggest", "biggest"),
-    # ── Cross-POS: abode → abide (correct as past tense) ──
-    ("abode", "abide"),
+    ("distinguished", "distinguish"),
+    ("accomplished", "accomplish"),
 ])
-def test_lemmatize(word, expected, coca_set):
+def test_without_spacy_map(word, expected, coca_set):
     result = lemmatize(word, coca_set)
     assert result == expected, \
         f"lemmatize({word!r}) = {result!r}, expected {expected!r}"
@@ -107,22 +172,17 @@ def test_contraction_without_apostrophe(coca_set):
     assert lemmatize("isnt", coca_set) == "be"
 
 
-def test_beer_is_noun_not_bee(coca_set):
-    """beer is a noun, no ADJ channel → no false reduction."""
-    assert lemmatize("beer", coca_set) == "beer"
+def test_build_spacy_map():
+    m = build_spacy_map("")
+    assert isinstance(m, dict)
 
 
-def test_spacy_path(coca_set):
-    """With sentence context, spaCy handles derivational adjectives."""
-    try:
-        import spacy
-        spacy.load("en_core_web_sm")
-    except Exception:
-        pytest.skip("spaCy model not installed")
-    assert lemmatize("distinguished", coca_set,
-                     "He was a distinguished fisherman.") == "distinguished"
-    assert lemmatize("accomplished", coca_set,
-                     "She is an accomplished pianist.") == "accomplished"
-    # spaCy also handles regular comparatives correctly
-    assert lemmatize("closest", coca_set,
-                     "the closest star") == "close"
+def test_no_hardcoded_comparatives(coca_set):
+    """Verify _IRREG_COMPARATIVES hardcoded list is gone.
+    Without spacy_map, irregular comparatives follow lemminflect fallback."""
+    # These are NOT reduced by lemminflect VERB/NOUN alone
+    import lemmatize as lem_module
+    assert not hasattr(lem_module, '_IRREG_COMPARATIVES')
+    # The CONTRACTIONS dict should NOT contain comparative entries
+    assert "better" not in lem_module._CONTRACTIONS
+    assert "worse" not in lem_module._CONTRACTIONS

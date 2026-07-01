@@ -10,6 +10,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _LIB_ROOT = _PROJECT_ROOT.parent / "lib"
 sys.path.insert(0, str(_PROJECT_ROOT))
 sys.path.insert(0, str(_LIB_ROOT))
+sys.path.insert(0, str(_PROJECT_ROOT.parent / "vocab-anki"))
 
 
 @pytest.fixture(scope="session")
@@ -31,6 +32,6 @@ def coca_ranked():
 @pytest.fixture(scope="session")
 def cmudict():
     """Load CMU pronunciation dictionary."""
-    import sync_anki
+    from sync_anki import _load_cmudict
 
-    return sync_anki._load_cmudict()
+    return _load_cmudict()

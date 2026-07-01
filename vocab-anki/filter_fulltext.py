@@ -42,7 +42,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from lib.coca import load_coca, load_freq_ranked, in_coca             # noqa: E402
-from lib.lemmatize import lemmatize                                 # noqa: E402
+from lib.lemmatize import lemmatize, build_spacy_map               # noqa: E402
 
 
 # ── Anki dedup helpers ──────────────────────────────────────────────────────
@@ -271,6 +271,9 @@ def main() -> None:
 
     coca_set = load_coca()
 
+    # Build spaCy lemma map from full text (run once, POS-aware)
+    spacy_map = build_spacy_map(text)
+
     # -- chapter segmentation (if requested) ----------------------------------
     # lemma_forms:  lemma → set of surface forms found in text
     # lemma_chapters: lemma → set of (chapter_index, chapter_title) tuples
@@ -316,7 +319,7 @@ def main() -> None:
                     ch_text = text[start:end]
                     ch_words = set(re.findall(r"[a-zA-Z]{2,}", ch_text.lower()))
                     for w in ch_words:
-                        lemma = lemmatize(w, coca_set)
+                        lemma = lemmatize(w, coca_set, spacy_map)
                         if lemma not in lemma_forms:
                             lemma_forms[lemma] = set()
                             lemma_chapters[lemma] = set()
@@ -331,7 +334,7 @@ def main() -> None:
     if not lemma_forms:
         all_words = set(re.findall(r"[a-zA-Z]{2,}", text.lower()))
         for w in all_words:
-            lemma = lemmatize(w, coca_set)
+            lemma = lemmatize(w, coca_set, spacy_map)
             if lemma not in lemma_forms:
                 lemma_forms[lemma] = set()
                 lemma_chapters[lemma] = set()
