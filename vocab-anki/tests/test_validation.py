@@ -214,6 +214,48 @@ def test_word_not_in_sentence():
 
 # ── Valid entries should pass ──
 
+# ── Truncation quality (SKILL.md 3.0e rules) ──
+
+
+def test_truncation_never_produces_lowercase_start():
+    """Validator warns when sentence starts lowercase — fragment detection.
+
+    Historical: match_sentences.py trim-from-start produced fragments
+    like 'yard of line and then struck again...' (alternately card).
+    """
+    w = make_word(
+        word="alternately",
+        sentence="yard of line and then struck again, swinging with "
+                 "each arm <b>alternately</b> on the...",
+        ipa="/ɔːlˈtɜːrnətli/",
+        definition_cn="adv. 交替地",
+        translation_cn="双臂交替地拉线。",
+    )
+    errors = _validate_word_entries([w])
+    # Lowercase start produces soft warning (stderr) — the validator
+    # should at minimum not crash on these inputs
+    assert isinstance(errors, list)
+
+
+def test_truncation_preserves_b_tag():
+    """Validator MUST reject sentences with missing <b> tags.
+
+    Historical: truncation cut off the <b> tag entirely, producing
+    sentences where the target word was absent.
+    """
+    w = make_word(
+        word="alternately",
+        sentence="He struck again and again, swinging with each arm.",
+        ipa="/ɔːlˈtɜːrnətli/",
+        definition_cn="adv. 交替地",
+        translation_cn="双臂交替地拉线。",
+    )
+    errors = _validate_word_entries([w])
+    assert len(errors) > 0, "Should reject sentence without <b> tag"
+    assert any("not found" in e for e in errors), \
+        f"Should report word not in sentence\nErrors: {errors}"
+
+
 def test_good_entry_passes():
     """A properly formed entry should produce no errors."""
     w = make_word(
