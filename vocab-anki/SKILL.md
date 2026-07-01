@@ -456,6 +456,15 @@ Anki 卡片各字段之间存在数据依赖——修改一个字段时，依赖
 
 > **`word` vs `lemma`**：`word` 字段存储 `<b>` 中的表面词形（仅用于校验），卡片正面展示的是 **lemma**。改 `lemma` 不改 `word` 是常见操作（如派生形容词 `blundering` 设 `lemma: "blundering"` 阻止还原），此时 `word` 不变但 IPA、音频、释义都需更新。
 
+**`definition_cn` / `translation_cn` 更新判断**：
+
+| 变更 | definition_cn 是否需要更新 | 判断依据 |
+|------|--------------------------|---------|
+| 修复截断（句子变短，同语境） | 否 | 词义在句中未变 |
+| 换到不同句子 | **检查** | 同一词在新句中可能是不同义项 |
+| 修正 `word`/`lemma`（如 `heal`→`healer`） | **必须** | 词变了，释义对应不同词 |
+| 拼写/大小写修正 | 否 | 词没变 |
+
 **执行流程**：
 1. 修改源 JSON 中的 `word`/`lemma` 或 `sentence` 字段
 2. 重新运行 `sync_anki.py --prefetch` 生成新音频（被修改词的新音频覆盖旧文件）
@@ -463,6 +472,17 @@ Anki 卡片各字段之间存在数据依赖——修改一个字段时，依赖
 4. 若是修复已在 Anki 中的单张卡片：用 AnkiConnect API 直接更新 `fields`（含 SentenceAudio/WordAudio），并调用 `storeMediaFile` 上传新媒体
 
 **历史教训**：`alternately` 等 20 张卡片例句截断修复时只更新了 `Sentence` 字段，例句音频仍播放旧截断句，用户发现后才补传——此后作为硬性规则。
+
+**同步后审计（Step 4 完成后必做）**：逐张检查 Anki 卡片，重点查三类问题：
+
+1. **Word ≠ `<b>` 文本且不是合法原形还原**：`affect` + `<b>affects</b>` ✅（合理屈折），但 `heal` + `<b>healer</b>` ❌（`healer` 是独立名词不是屈折形式）、`rob` + `<b>robber</b>` ❌（同理）。判断标准：若 `<b>` 词在 COCA 中作为独立词条且词性与 Word 不同，则不应还原为 Word。
+2. **Word 被截断**：`lavend`/`silv`/`weath`/`nause`/`sev`/`jag`/`unarm`/`trouser`——原形不完整，需修正为完整词形。
+3. **Word 大小写异常**：`Amen`/`Champion`/`Dick`/`Mike`/`Virgin` 等专有名词或句首大写泄漏到 Word 字段——应统一为小写（非专有名词时）。
+
+审计命令：
+```bash
+curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"query":"deck:\"牌组名\""}}' | python3 -c "..."  # 拉取所有卡片，比对 Word 与 <b> 文本
+```
 
 **翻译原则：**
 
