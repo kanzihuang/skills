@@ -420,11 +420,37 @@ wc -c /tmp/<book>-full.txt
 - curl 直链 + WebSearch/WebFetch 均无法获取 → **该批次所有单词跳过，不生成卡片**。Step 4 汇总中标明 `源文本不可用，N 个单词未生成`
 - **禁止回退到词典例句**。词典例句脱离书中语境，对阅读理解没有帮助。卡片的价值在于"这个词在这本书的这个句子里是这个意思"，没有源文本就没有卡片
 
-**完成后进入 Step 3**——句子已从源文本提取并截断至最终长度。Claude 基于截断后的 sentence 生成 IPA + 释义 + 翻译。
+**完成后进入 Step 3.0f**——句子已从源文本提取并截断至最终长度，下一步机械翻译。
+
+### Step 3.0f: DeepL 机械翻译（替代 Claude 翻译）
+
+> **核心改进**：翻译从 Claude 知识工作改为 DeepL API 机械翻译。彻底消除三个问题：
+> 1. Claude 翻译幻觉（凭空添加原文没有的内容）
+> 2. 截断后翻译未同步更新（保留已裁掉内容）
+> 3. 批量翻译时 Claude 注意力衰减导致对齐错误
+>
+> DeepL 输入什么翻译什么——截断后的短句不会带上已裁掉的内容，天然杜绝 alternately 模式。
+
+**前置条件**：`DEEPL_API_KEY` 环境变量（免费 key 从 https://www.deepl.com/pro-api 获取，500,000 字符/月）。
+
+```bash
+# 若 DEEPL_API_KEY 未设置 → 跳过此步，翻译仍由 Claude 在 Step 3 完成
+if [ -n "$DEEPL_API_KEY" ]; then
+    <skill_dir>/.venv/bin/python3 <skill_dir>/scripts/translate_deepl.py /tmp/vocab-anki-input-<bookId>.json
+fi
+```
+
+脚本行为：
+- 读 JSON 中所有 `sentence`，剥离 `<b>` 标签后发送 DeepL（`target_lang=ZH`）
+- 每批 50 句，遇批次失败逐句重试
+- 翻译写回 `translation_cn` 字段
+- 打印字符用量（对照 500,000/月配额）
+
+**完成后进入 Step 3**——句子已提取并截断，翻译已由 DeepL 完成。Claude 工作收窄为：IPA + 释义 + 翻译质量抽查。
 
 ### Step 3: 生成内容（Claude 知识工作，范围收窄）
 
-仅对 Step 1 筛出的 C 个单词生成内容。句子已在 Step 3.0 从源文本提取，此步骤聚焦 IPA、释义、翻译。对每个单词提供：
+仅对 Step 1 筛出的 C 个单词生成内容。句子已在 Step 3.0 从源文本提取并截断，翻译已在 Step 3.0f 由 DeepL 完成（若 API key 未设置则由 Claude 在此步骤完成）。此步骤聚焦 IPA、释义、翻译质量抽查。对每个单词提供：
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
@@ -433,7 +459,7 @@ wc -c /tmp/<book>-full.txt
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I felt awkward and <b>blundering</b>.` |
 | `ipa` | 对应 **lemma** 的 IPA 音标。**cmudict 自动生成，Claude 仅在多发音词时用作投票参考**。未登录词时 Claude 提供兜底 | 单发音词留空；异读词填正确发音如 `/riːd/`（非 `/red/`） |
 | `definition_cn` | **按句中实际用法释义**，不按原形常见义项，也不自动选择最常见的词典义。特别注意多义词的含义选择：同一个词在不同句子中可能是完全不同的意思。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）；`thriftily` 在 "he must be treated thriftily" 中→"有节制地，有所保留地"（**不写**"节俭地"）|
-| `translation_cn` | 整句的中文翻译（遵循翻译原则） | `我于是对丛林中的冒险深深思索起来。` |
+| `translation_cn` | 整句的中文翻译。优先使用 Step 3.0f DeepL 翻译（若可用）；否则 Claude 生成（遵循翻译原则）。DeepL 翻译需抽查：通读 3-5 句确认语义正确、与截断后句子对齐 | `我于是对丛林中的冒险深深思索起来。` |
 
 **例句规则（不变）：**
 - 必须是书中真实句子，不是词典通用例句。句子来源只有一条路径：3.0c 源文本机械匹配
