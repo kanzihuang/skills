@@ -23,7 +23,9 @@ def split_sentences(text: str) -> list[str]:
     text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
 
     # Split on sentence-ending punctuation followed by space and capital
-    sentences = re.split(r'(?<=[.!?"])\s+(?=[A-Z"\'""])', text)
+    # or opening quote.  “=“, ‘=' are curly quotes common
+    # in books; without them, dialogue after a period isn't split.
+    sentences = re.split(r'(?<=[.!?"”])\s+(?=[A-Z"“‘\'""])', text)
     return [s.strip() for s in sentences if s.strip()]
 
 

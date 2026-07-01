@@ -554,15 +554,18 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                 errors.append(f"[{word}] missing '{field}'")
 
         # 4.5 lemma sanity: if explicitly set AND differs from both the
-        #     surface word AND lemmatize_word(word) → almost certainly a
-        #     mistake (e.g. beautiful→beautifully).  The correct pattern
-        #     is to leave *lemma* empty for regular inflection and only
-        #     set it for derivational-adjective overrides (lemma == word).
+        #     surface word AND lemmatize_word(word) → suspicious.
+        #     False positives: same-length irregulars (dig→dug, wear→wore)
+        #     where lemmatize_word can't reduce due to the length gate.
+        #     These are valid overrides that go TO a shorter-or-equal form.
+        #     True positives (beautiful→beautifully) go TO a longer form.
         json_lemma = w.get("lemma", "").strip()
         if json_lemma:
             resolved = resolve_lemma(word, "")
             machine = lemmatize_word(word)
-            if json_lemma.lower() != word.lower() and json_lemma.lower() != machine.lower():
+            if (json_lemma.lower() != word.lower()
+                    and json_lemma.lower() != machine.lower()
+                    and len(json_lemma) > len(word)):  # longer = true error
                 errors.append(
                     f"[{word}] suspicious lemma '{json_lemma}': differs from both "
                     f"surface form '{word}' and lemmatize_word() result '{machine}'. "

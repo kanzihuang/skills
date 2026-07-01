@@ -25,6 +25,7 @@ _skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _skill_dir not in sys.path:
     sys.path.insert(0, _skill_dir)
 
+from sync_anki import resolve_lemma
 from utils import lemmatize_word
 
 ANKICONNECT = "http://localhost:8765"
@@ -79,14 +80,17 @@ def audit_deck(deck_name: str) -> dict:
         b_text = m.group(1)
 
         # Core check: is Word a legitimate lemma for the surface form?
-        # Valid if Word == lemmatize_word(b_text)  (mechanical reduction)
-        # OR Word == b_text  (explicit adj override, e.g. blundering→blundering)
+        # Uses resolve_lemma() which trusts explicit Claude overrides
+        # for documented lemmatize_word limitations (same-length irregulars,
+        # derivational adjectives).
+        expected = resolve_lemma(b_text, word)  # word as explicit override
         mechanical = lemmatize_word(b_text)
-        if word.lower() != mechanical.lower() and word.lower() != b_text.lower():
+        if word.lower() != expected.lower() and word.lower() != b_text.lower():
             lemma_mismatches.append({
                 "word": word,
                 "b_text": b_text,
                 "lemmatized": mechanical,
+                "expected": expected,
                 "sentence": sentence[:120],
             })
 
