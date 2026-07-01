@@ -1,17 +1,17 @@
 ---
 name: vocab-list
 description: >
-  输出英文原版书全量 COCA 20000 单词表。对全文单词做屈折还原（拒绝跨词性转换）、
-  COCA 20000 过滤、词形去重，生成干净的词汇列表。当用户说"输出《书名》单词表"、
+  输出英文原版书全量 BNC/COCA 25000 单词表。对全文单词做屈折还原（拒绝跨词性转换）、
+  BNC/COCA 25000 词族过滤、词形去重，生成干净的词汇列表。当用户说"输出《书名》单词表"、
   "导出《书名》全量词汇"、"生成《书名》词汇表"、"这本书的单词表"、
-  "vocabulary list for <book>"、"word list"、"COCA 单词表"时触发。
+  "vocabulary list for <book>"、"word list"、"单词表"时触发。
   整合 weread-skills 搜索书籍元数据，Claude 负责获取全文，Python 脚本负责
   词形还原和 COCA 过滤。
 ---
 
 # vocab-list — 英文书全量单词表
 
-从英文原版书提取全量单词，屈折还原后过滤 COCA 20000 高频词表，输出干净的词形去重列表。
+从英文原版书提取全量单词，屈折还原后过滤 BNC/COCA 25000 词族表，输出干净的词形去重列表。
 
 ## 架构
 
@@ -28,7 +28,7 @@ Python:  机械工作 —— 词形提取、屈折还原、COCA 过滤、去重
 
 **依赖：**
 - `weread-skills` — 书籍搜索（获取 bookId、书名、作者）
-- `lib/` — 共享库：`lib/lemmatize.py`（屈折还原引擎）、`lib/coca.py`（COCA 查找）、`lib/data/coca_freq.txt`（词频数据）
+- `lib/` — 共享库：`lib/lemmatize.py`（屈折还原引擎）、`lib/coca.py`（BNC/COCA 词族查找，Nation 2017）、`lib/data/bnc_coca/basewrd1-25.txt`（词族数据）
 - Python 包：`lemminflect`
 
 ## 前置条件
@@ -111,7 +111,7 @@ python3 scripts/extract_vocab.py --exclude-basic 3000 --basic-range 3001-10000 <
 
 脚本内部流程：
 1. 提取所有 2+ 字母的英文单词 → 小写 → 去重排序
-2. 对每个不在 COCA 中的单词做屈折还原（IRREG 优先 → 规则模式 → COCA 验证）
+2. 对每个不在 BNC/COCA 词族中的单词做屈折还原
 3. COCA 过滤 + 词形去重
 4. （可选）COCA 频率排名 频率范围过滤
 5. 输出统计 + `[COCA]` 词表 + `[EXCLUDED]` 排除词表
@@ -123,13 +123,13 @@ python3 scripts/extract_vocab.py --exclude-basic 3000 --basic-range 3001-10000 <
 按以下格式输出：
 
 ```
-## 《书名》(作者) — COCA 20000 单词表
+## 《书名》(作者) — BNC/COCA 25000 单词表
 
 **处理统计：**
 - 原始词例 (token): ~XX,XXX
 - 原始去重单词: X,XXX
 - 屈折还原后: X,XXX  
-- **COCA 20000 词表: X,XXX**
+- **BNC/COCA 25000 词表: X,XXX**
 - 排除词: XXX
 
 ### COCA 单词表（按字母排列）
@@ -138,7 +138,7 @@ python3 scripts/extract_vocab.py --exclude-basic 3000 --basic-range 3001-10000 <
 
 ### 排除词表
 
-不在 COCA 20000 中的单词（专有名词、低频词等）。
+不在 BNC/COCA 25000 中的单词（专有名词、低频词等）。
 
 ### 处理说明
 
@@ -151,7 +151,7 @@ python3 scripts/extract_vocab.py --exclude-basic 3000 --basic-range 3001-10000 <
 
 1. **Claude + Python 分离**：Claude 做搜索、下载、展示；Python 做机械的词形处理
 2. **拒绝跨词性转换**：只做屈折还原（inflectional），不做派生还原（derivational）。`blundering` adj. 保留，不强制还原为 `blunder` v.
-3. **COCA 验证一切**：所有还原结果必须在 COCA 20000 中，避免产生无效词形
+3. **COCA 验证一切**：所有还原结果必须在 BNC/COCA 25000 中，避免产生无效词形
 4. **IRREG 绝对优先**：不规则形式优先于规则模式匹配，避免 `has→ha` 等错误
 5. **单词本身在 COCA 中则保持原样**：COCA 中的高频屈折形式（如 `abandoned`）不强制还原
 6. **共享 lib/ 库**：词形还原 + COCA 查找逻辑在 `lib/` 中，供 `vocab-list`、`vocab-anki` 等 Skill 共用
@@ -172,8 +172,8 @@ python3 scripts/extract_vocab.py --exclude-basic 3000 --basic-range 3001-10000 <
 
 ```
 =================================================================
-THE LITTLE PRINCE — FULL COCA 20000 WORD LIST
-(inflectional lemmatization · 拒绝跨词性转换 · COCA 20000 · deduplicated)
+THE LITTLE PRINCE — FULL BNC/COCA 25000 WORD LIST
+(inflectional lemmatization · 拒绝跨词性转换 · BNC/COCA 25000 · deduplicated)
 Total: 1595 words
 =================================================================
 

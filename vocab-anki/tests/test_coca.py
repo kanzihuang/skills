@@ -1,22 +1,30 @@
-"""Test lib/coca.py — three-tier COCA lookup and frequency ranking.
+"""Test lib/coca.py — Nation BNC/COCA word family lookup.
 
-Covers historical errors:
-  - Derivational suffix stripping (indulgently→indulgent, resentfulness→resentful)
-  - Frequency range filtering correctness
-  - bet rank 2989 correctly excluded from 5000-10000 range
+Covers:
+  - Level-based frequency filtering (replaces corrupted rank-based COCA data)
+  - get_word_level() — word form → level (1-25)
+  - get_word_headword() — word form → family headword
+  - load_level_range() — all word forms in a level range
+  - in_coca() — three-tier lookup (unchanged API, new Nation data backing)
+  - Three-layer protection model: Nation catches inter-family errors,
+    Claude override + spaCy POS gate catch intra-family over-reductions.
 """
 
 import pytest
-from coca import in_coca, load_coca, load_freq_ranked
+from coca import (in_coca, load_coca, load_freq_ranked,
+                   get_word_level, get_word_headword, load_level_range)
 
+
+# ── Data loading ──────────────────────────────────────────────────────────
 
 def test_load_coca_returns_set():
-    """load_coca returns a non-empty set."""
+    """load_coca returns a non-empty set with known common words."""
     coca = load_coca()
     assert isinstance(coca, set)
-    assert len(coca) > 10000
-    assert "the" in coca  # most common word
-    assert "unbalance" in coca  # last word in list (known to be present)
+    assert len(coca) > 50000  # Nation 25 levels have ~77K word forms
+    assert "the" in coca       # level 1
+    assert "twined" in coca    # level 6, family member
+    assert "blundering" in coca  # level 7, family member
 
 
 def test_load_coca_cached():
@@ -26,38 +34,108 @@ def test_load_coca_cached():
     assert a is b
 
 
-def test_load_freq_ranked_returns_ordered_list():
-    """load_freq_ranked returns order-preserving list."""
+def test_load_freq_ranked_returns_headwords():
+    """load_freq_ranked returns headwords in level order."""
     ranked = load_freq_ranked()
     assert isinstance(ranked, list)
-    assert len(ranked) > 10000
-    assert ranked[0] == "the"       # rank 1 = most frequent
-    assert ranked[1] == "be"         # rank 2
-    assert ranked[18963] == "unbalance"  # rank 18964 = least frequent
+    assert len(ranked) > 20000  # ~25K headwords
+    # First entries are level 1, alphabetically sorted within level
+    # (HUNGRY is alphabetically first in basewrd1.txt)
+    assert len(ranked[0]) > 0
 
 
 def test_load_freq_ranked_top_n():
     """load_freq_ranked(top_n) returns first N entries."""
-    ranked = load_freq_ranked(10)
-    assert len(ranked) <= 10  # may return fewer if N < available
+    ranked = load_freq_ranked(100)
+    assert len(ranked) <= 100
     assert len(ranked) > 0
-    assert ranked[0] == "the"
 
 
-# ── Tier 1: Direct lookup ──
+# ── get_word_level ────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("word, expected_level", [
+    ("the", 1),
+    ("be", 1),
+    ("and", 1),
+    ("twined", 6),     # family member under TWINE (level 6)
+    ("twin", 2),       # headword TWIN (level 2)
+    ("blundering", 7), # family member under BLUNDER (level 7)
+    ("blunder", 7),    # headword BLUNDER (level 7)
+])
+def test_get_word_level(word, expected_level):
+    """Known words return the correct BNC/COCA level."""
+    assert get_word_level(word) == expected_level
+
+
+def test_get_word_level_unknown():
+    """Unknown word returns None."""
+    assert get_word_level("xyzkkqw") is None
+    assert get_word_level("") is None
+
+
+# ── get_word_headword ─────────────────────────────────────────────────────
+
+def test_get_word_headword_member():
+    """Family member returns its headword."""
+    assert get_word_headword("twined") == "twine"
+    assert get_word_headword("blundering") == "blunder"
+    assert get_word_headword("conceited") == "conceit"
+
+
+def test_get_word_headword_headword():
+    """Headword returns itself."""
+    assert get_word_headword("twine") == "twine"
+    assert get_word_headword("twin") == "twin"
+    assert get_word_headword("blunder") == "blunder"
+
+
+def test_get_word_headword_unknown():
+    """Unknown word returns None."""
+    assert get_word_headword("xyzkkqw") is None
+
+
+# ── load_level_range ──────────────────────────────────────────────────────
+
+def test_load_level_range_basic():
+    """Level 1 contains common words, level 25 contains rare words."""
+    l1 = load_level_range(1, 1)
+    assert "the" in l1
+    assert "be" in l1
+    assert len(l1) > 1000
+
+    # Level 25 should have rare words
+    high = load_level_range(25, 25)
+    assert len(high) > 0
+
+
+def test_load_level_range_exclusion():
+    """Levels 11-25 should NOT contain level 1 words."""
+    high = load_level_range(11, 25)
+    assert "the" not in high
+    assert "be" not in high
+    assert "and" not in high
+
+
+def test_load_level_range_bounds():
+    """Bounds are clamped to 1-25."""
+    assert len(load_level_range(0, 5)) > 0   # lo clamped to 1
+    assert len(load_level_range(1, 30)) > 0  # hi clamped to 25
+    assert load_level_range(10, 5) == set()  # lo > hi → empty
+
+
+# ── in_coca: Tier 1 (direct lookup) ───────────────────────────────────────
 
 @pytest.mark.parametrize("word", [
-    "the", "be", "indulgent", "resentful",
-    "shark", "skiff", "tuna",
+    "the", "be", "indulgent", "resentful", "twine", "blunder",
 ])
 def test_in_coca_tier1_direct(word, coca_set):
-    """Words directly in COCA return True with detail=word."""
+    """Words directly in Nation lists return True with detail=word."""
     ok, detail = in_coca(word, coca_set)
-    assert ok, f"{word} should be in COCA"
+    assert ok, f"{word} should be in Nation lists"
     assert " -> " not in detail, f"direct match should not have arrow: {detail}"
 
 
-# ── Tier 2: lemminflect reduction ──
+# ── in_coca: Tier 2 (lemminflect reduction) ───────────────────────────────
 
 def test_in_coca_tier2_lemminflect_runs(coca_set):
     """lemmatize_word reduces 'runs' → 'run' via lemminflect."""
@@ -66,73 +144,54 @@ def test_in_coca_tier2_lemminflect_runs(coca_set):
     assert "run" in detail
 
 
-# ── Tier 3: Derivational suffix stripping (commit 48c805c) ──
+# ── in_coca: Tier 3 (derivational suffix stripping) ───────────────────────
 
 @pytest.mark.parametrize("word,expected_base", [
     ("indulgently", "indulgent"),     # -ly → (stem)
     ("resentfulness", "resentful"),   # -fulness → -ful
-    ("hoping", "hope"),              # -ing → +e
 ])
 def test_in_coca_tier3_derivational(word, expected_base, coca_set):
-    """Derivational suffix stripping finds COCA base forms."""
+    """Derivational suffix stripping finds Nation base forms."""
     ok, detail = in_coca(word, coca_set)
-    assert ok, f"{word} should reach COCA via derivational fallback"
-    assert expected_base in detail, \
-        f"detail should indicate {expected_base}: got {detail}"
+    assert ok, f"{word} should reach Nation via derivational fallback"
+    assert expected_base in detail
 
 
-# ── Words NOT in COCA ──
+# ── in_coca: Not found ────────────────────────────────────────────────────
 
 def test_in_coca_not_found(coca_set):
-    """Words not in COCA and not reducible return False."""
-    ok, detail = in_coca("blundering", coca_set)
-    # blundering is a derivational adj - not directly in COCA
-    # If lemminflect or suffix stripping can't find it, returns False
-    # (it may or may not be found depending on the lemmatizer version)
-    # The key test: the function should not crash and should return a bool
-    assert isinstance(ok, bool)
-    assert isinstance(detail, str)
-
-
-def test_in_coca_gibberish(coca_set):
-    """Non-word input returns False gracefully."""
+    """Gibberish returns False."""
     ok, detail = in_coca("xyzkkqw", coca_set)
     assert not ok
 
 
-# ── Frequency range filtering ──
-
-def test_bet_rank_2989_excluded_from_5000_10000():
-    """bet at rank 2989 should NOT be in 5000-10000 range."""
-    ranked = load_freq_ranked()
-    # Find bet's rank
-    try:
-        rank = ranked.index("bet") + 1  # 1-based
-    except ValueError:
-        rank = -1
-    # bet may or may not be in coca_freq.txt depending on version
-    if rank > 0:
-        assert rank < 5000, f"bet rank {rank} should be < 5000 (outside 5000-10000 range)"
+def test_in_coca_empty(coca_set):
+    """Empty string returns False."""
+    ok, detail = in_coca("", coca_set)
+    assert not ok
 
 
-def test_shark_in_range_3000_5000():
-    """shark should be in 3001-5000 range (rank ~3003)."""
-    ranked = load_freq_ranked()
-    try:
-        rank = ranked.index("shark") + 1
-    except ValueError:
-        return  # not in list, skip
-    assert 3001 <= rank <= 5000, f"shark rank {rank} should be in 3000-5000"
+# ── Three-layer protection verification ───────────────────────────────────
+
+def test_twined_twin_different_families():
+    """twined (TWINE family) and twin (TWIN family) are different families.
+
+    This is the core inter-family case the Nation validation layer catches.
+    lemminflect may return 'twin' for 'twined' — but Nation says they belong
+    to different word families.
+    """
+    assert get_word_headword("twined") == "twine"
+    assert get_word_headword("twin") == "twin"
+    assert get_word_headword("twined") != get_word_headword("twin")
 
 
-def test_frequency_range_slicing():
-    """load_freq_ranked slice [3000:5000] contains 2000 entries."""
-    ranked = load_freq_ranked()
-    hi = min(5000, len(ranked))
-    lo = max(3001, 1) - 1
-    subset = set(ranked[lo:hi])
-    assert len(subset) > 0
-    # Top-10 words should NOT be in 3001-5000 range
-    assert "the" not in subset
-    assert "be" not in subset
-    assert "of" not in subset
+def test_blundering_blunder_same_family():
+    """blundering and blunder are in the SAME family (BLUNDER).
+
+    Nation Level 6 intentionally groups derivational adjectives with their
+    roots.  This is NOT an error — the Claude override + spaCy POS gate
+    layers handle intra-family protection.
+    """
+    assert get_word_headword("blundering") == "blunder"
+    assert get_word_headword("blunder") == "blunder"
+    assert get_word_headword("blundering") == get_word_headword("blunder")

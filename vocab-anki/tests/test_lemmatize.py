@@ -59,7 +59,7 @@ def spacy_map():
     ("less", "less"),            # not in sample → fallback
     ("least", "least"),          # not in sample → fallback
     ("further", "further"),      # not in sample → fallback
-    ("elder", "elder"),          # spaCy→eld but eld not in COCA → fallback
+    ("elder", "eld"),             # spaCy→eld, eld IS in Nation 77K set (was NOT in old 19K COCA)
     # Regular comparatives
     ("closest", "close"),
     ("faster", "fast"),

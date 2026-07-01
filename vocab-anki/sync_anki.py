@@ -278,7 +278,7 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
     # -est/-iest suffixes are reliable (superlatives, near-zero false
     # positives).  -er/-ier can match nouns (beer, anger, fiber) so we
     # only apply those when the word is NOT already in COCA.
-    if w not in _coca or w.endswith("est") or w.endswith("iest"):
+    if w not in _coca or w.endswith("est") or w.endswith("iest") or w.endswith("ier"):
         for sfx, slen in [("iest", 4), ("est", 3), ("ier", 3), ("er", 2)]:
             if w.endswith(sfx) and len(w) > slen + 1:
                 stem = w[:-slen]
@@ -312,12 +312,17 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
     #    false reductions like sacred→sacre where lemminflect hallucinates.
     #    (spaCy safety net in _process_one_word catches any remaining
     #    derivational adjective mis-reductions.)
+    #    Note: step 3 no longer returns early — it sets *reduced* and
+    #    falls through to Nation validation at step 5.
     reduced = lemmatize_word(word)
-    if reduced != w:
-        if w not in _coca or reduced in _coca:
-            return reduced
+    if reduced != w and (w not in _coca or reduced in _coca):
+        pass  # keep reduced, fall through to validation
+    else:
+        reduced = w  # reset: no valid reduction found
 
-    # 4. lemmatize_word couldn't reduce — try lemminflect with COCA gating
+    # 4. lemmatize_word couldn't reduce — try lemminflect with COCA gating.
+    #    Instead of returning directly, update *reduced* and fall through
+    #    to the Nation validation at step 5.
     try:
         from lemminflect import getLemma
 
@@ -328,17 +333,57 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
                     cand = lemma.lower()
                     if cand == w:
                         continue
-                    # COCA gate: accept if word not in COCA AND lemma in COCA
+                    # Path 1: word NOT in COCA → reduce if lemma IS in COCA
                     if w not in _coca and cand in _coca:
-                        return cand
-                    # Also accept if word IS in COCA but lemma is shorter
-                    # and also in COCA (handles running→run, etc.)
-                    if w in _coca and cand in _coca and len(cand) < len(w):
-                        return cand
+                        reduced = cand
+                        break
+                    # Path 2: both in COCA — accept the reduction.
+                    # For VERB: accept regardless of length (had→have is
+                    # longer); Nation validation at step 5 catches
+                    # cross-family false positives (abode n.→abide v.).
+                    # For NOUN: require shorter lemma (cats→cat safe;
+                    # same-length risks: abode→abide, ran→run).
+                    if w in _coca and cand in _coca:
+                        if upos == "VERB" or len(cand) < len(w):
+                            reduced = cand
+                            break
+                if reduced != w:
+                    break
     except ImportError:
         pass
 
-    # 5. Keep as-is
+    # 5. Nation word family cross-validation:
+    #    If the reduced lemma belongs to a DIFFERENT word family than
+    #    the original word, it's a cross-family misreduction
+    #    (e.g. twined→twin, but Nation says twined belongs to twine).
+    #    Note: this does NOT catch intra-family reductions like
+    #    blundering→blunder — Claude override + spaCy POS gate
+    #    handle those.
+    #    If the reduced lemma belongs to a DIFFERENT word family than
+    #    the original word, it's a cross-family misreduction
+    #    (e.g. twined→twin, but Nation says twined belongs to twine).
+    #    Note: this does NOT catch intra-family reductions like
+    #    blundering→blunder — Claude override + spaCy POS gate
+    #    handle those.
+    if reduced != w:
+        try:
+            from lib.coca import get_word_headword
+            nation_head = get_word_headword(w)
+            if nation_head:
+                lemma_head = get_word_headword(reduced)
+                if lemma_head and nation_head != lemma_head:
+                    print(f"  [WARN] [{word}] lemmatize→{reduced} "
+                          f"(Nation: {lemma_head} family) but Nation says "
+                          f"'{w}' → {nation_head} family. "
+                          f"Keeping original form.",
+                          file=sys.stderr)
+                    return w
+        except ImportError:
+            pass
+
+    # Fall through: return reduced form (if valid), or keep original
+    if reduced != w:
+        return reduced
     return jl or w
 
 

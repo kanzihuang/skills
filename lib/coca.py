@@ -1,33 +1,115 @@
-"""COCA frequency lookup.
+"""BNC/COCA word family frequency lookup (Nation, 2017).
 
-Shared library for word frequency operations using a single COCA word-form
-frequency list.
+Replaces the corrupted word-form frequency file with Paul Nation's
+academically validated BNC/COCA word family lists (25 levels of 1000
+word families each, Bauer & Nation Level 6 affix criteria).
 
-Provides three public functions:
-    load_coca() -> set[str]              -- load the COCA word set for membership checks
-    in_coca(word, coca_set) -> tuple[bool, str]  -- three-tier lookup
-    load_freq_ranked(top_n) -> list[str]  -- load top-N words by frequency rank
+Data format (Range program):
+    HEADWORD FREQ
+    \\tMEMBER FREQ
+    \\tMEMBER FREQ
+
+Provides:
+    load_coca() -> set[str]              -- all word forms in Nation lists
+    in_coca(word, set) -> (bool, str)    -- three-tier lookup
+    load_freq_ranked(top_n) -> list[str] -- headwords in level order
+    get_word_level(word) -> int | None   -- level 1-25
+    get_word_headword(word) -> str | None -- family headword
+    load_level_range(lo, hi) -> set[str] -- all word forms in levels lo-hi
+
+Reference:
+    Nation, I.S.P. (2017). The BNC/COCA Level 6 word family lists
+    (Version 1.0.0) [Data file]. Available from
+    http://www.victoria.ac.nz/lals/staff/paul-nation.aspx
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
-_DATA_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "data", "coca_freq.txt"
+_DATA_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "bnc_coca"
 )
+
+_NUM_LEVELS = 25  # basewrd1.txt through basewrd25.txt
 
 # ---------------------------------------------------------------------------
 # Caches
 # ---------------------------------------------------------------------------
 
-_coca_cache: Optional[set[str]] = None
-_freq_cache: Optional[list[str]] = None
+_nation_set_cache: Optional[set[str]] = None       # all word forms (levels 1-25)
+_nation_level_cache: Optional[dict[str, int]] = None  # word → level (1-25)
+_nation_headword_cache: Optional[dict[str, str]] = None  # word → headword
+_nation_headwords_cache: Optional[list[str]] = None   # headwords in level order
+
+
+# ---------------------------------------------------------------------------
+# Internal: data loading
+# ---------------------------------------------------------------------------
+
+def _load_nation_data() -> None:
+    """Load all 25 BNC/COCA word family files into global caches."""
+    global _nation_set_cache, _nation_level_cache
+    global _nation_headword_cache, _nation_headwords_cache
+
+    words: set[str] = set()
+    level_map: dict[str, int] = {}
+    headword_map: dict[str, str] = {}
+    headwords: list[str] = []
+
+    for level in range(1, _NUM_LEVELS + 1):
+        path = os.path.join(_DATA_DIR, f"basewrd{level}.txt")
+        if not os.path.isfile(path):
+            print(f"WARNING: {path} not found, skipping level {level}",
+                  file=sys.stderr)
+            continue
+
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            current_headword: str | None = None
+            for line in fh:
+                line = line.rstrip("\n\r")
+                if not line:
+                    continue
+
+                # Split: first token = word, rest = frequency number (discard)
+                parts = line.split(" ", 1)
+                word = parts[0].strip().lower()
+                if not word:
+                    continue
+
+                if line.startswith("\t"):
+                    # Family member
+                    if current_headword is not None:
+                        words.add(word)
+                        headword_map[word] = current_headword
+                        # First occurrence wins = lowest/most-frequent level
+                        if word not in level_map:
+                            level_map[word] = level
+                else:
+                    # Headword — starts a new family
+                    current_headword = word
+                    words.add(word)
+                    headword_map[word] = word
+                    headwords.append(word)
+                    # First occurrence wins
+                    if word not in level_map:
+                        level_map[word] = level
+
+    if not words:
+        print("ERROR: No BNC/COCA word family data found. "
+              f"Expected files in {_DATA_DIR}/basewrd1.txt–basewrd{_NUM_LEVELS}.txt",
+              file=sys.stderr)
+
+    _nation_set_cache = words
+    _nation_level_cache = level_map
+    _nation_headword_cache = headword_map
+    _nation_headwords_cache = headwords
 
 
 # ---------------------------------------------------------------------------
@@ -35,69 +117,48 @@ _freq_cache: Optional[list[str]] = None
 # ---------------------------------------------------------------------------
 
 def load_coca() -> set[str]:
-    """Load the COCA word set (cached after first call).
+    """Return the set of all word forms in the Nation BNC/COCA lists.
 
-    Reads from the single frequency-ranked word list, building a set for
-    O(1) membership checks.  Line order (frequency rank) is irrelevant for
-    set operations.
+    Covers all 25 levels (levels 1-25), includes both headwords and
+    family members.  Cached after first call.
     """
-    global _coca_cache
-    if _coca_cache is None:
-        words: set[str] = set()
-        with open(_DATA_PATH, encoding="utf-8") as fh:
-            for line in fh:
-                w = line.strip().lower()
-                if w:
-                    words.add(w)
-        _coca_cache = words
-    return _coca_cache
+    global _nation_set_cache
+    if _nation_set_cache is None:
+        _load_nation_data()
+    return _nation_set_cache  # type: ignore[return-value]
 
 
 def load_freq_ranked(top_n: int | None = None) -> list[str]:
-    """Load the top-N most frequent words, ranked by frequency (cached).
+    """Return headwords in level order (level 1 first, then level 2, ...).
 
-    Line order in the data file = frequency rank (line 1 = highest freq).
-    Returns an ordered list so that ``[:top_n]`` slicing yields the most
-    common N words.
+    Each headword represents one word family.  The list preserves the
+    order of families within each level as they appear in the basewrd
+    files (alphabetical within level).
 
     Args:
-        top_n: Number of top-frequency words to return (None = all).
+        top_n: Number of headwords to return (None = all).
     """
-    global _freq_cache
-    if _freq_cache is None:
-        words: list[str] = []
-        with open(_DATA_PATH, encoding="utf-8") as fh:
-            for line in fh:
-                w = line.strip().lower()
-                if w:
-                    words.append(w)
-        _freq_cache = words
+    global _nation_headwords_cache
+    if _nation_headwords_cache is None:
+        _load_nation_data()
     if top_n is not None:
-        return _freq_cache[:top_n]
-    return _freq_cache
+        return _nation_headwords_cache[:top_n]  # type: ignore[index]
+    return list(_nation_headwords_cache)  # type: ignore[arg-type]
 
 
 def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
-    """Check whether *word* (or its lemma form) is in the COCA frequency list.
+    """Check whether *word* (or its lemma form) is in the Nation lists.
 
-    Three-tier lookup strategy:
+    Three-tier lookup strategy (unchanged from coca_freq.txt era,
+    now operating on the Nation word family set):
 
-    Tier 1  direct set lookup (O(1)) — covers most words
-    Tier 2  lemminflect lemmatisation — handles inflected forms (runs→run)
-    Tier 3  suffix-stripping fallback — handles derivational forms that
-            COCA lists only by their base (indulgently→indulgent,
-            resentfulness→resentful)
-
-    Tiers 2–3 serve as a **derivational normalisation layer**.  The
-    pipeline's Step 1d ``lemmatize_word()`` intentionally only handles
-    inflectional forms (pondered→ponder), leaving derivational forms
-    untouched.  This function bridges the gap: COCA contains base lemmas
-    (indulgent, resentful) but not all derivational variants (indulgently,
-    resentfulness).
+    Tier 1  direct set lookup (O(1))
+    Tier 2  lemminflect lemmatisation (handles inflected forms)
+    Tier 3  suffix-stripping fallback (handles derivational forms)
 
     Args:
         word: The word to check (any inflected or derived form).
-        coca_lemmas: Pre-loaded lemma set.  Loaded automatically if None.
+        coca_lemmas: Pre-loaded set.  Loaded automatically if None.
 
     Returns:
         ``(in_list, detail)`` — *detail* explains the match or reason.
@@ -114,12 +175,6 @@ def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
         return True, w
 
     # Tier 2: lemminflect inflectional reduction
-    # Only accept a lemma that is strictly shorter (true suffix removal).
-    # Same-length mappings (abode→abide, ran→run) are irregular stem
-    # changes that lemminflect cannot verify without POS context; same-length
-    # VERB mappings to unrelated lemmas cause false positives (abode n.住所
-    # → abide v.忍受).  Same-length irregular verbs (ran→run, sat→sit) are
-    # basic vocabulary users rarely highlight.
     try:
         import lemminflect  # type: ignore
 
@@ -157,4 +212,57 @@ def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
             if stem_e in coca_lemmas:
                 return True, f"{w} -> {stem_e}"
 
-    return False, f"{w} not in COCA"
+    return False, f"{w} not in BNC/COCA"
+
+
+def get_word_level(word: str) -> int | None:
+    """Return the BNC/COCA word family level (1-25) for *word*.
+
+    Level 1 = most frequent 1000 word families.
+    Level 25 = least frequent 1000 word families.
+
+    Returns None if the word is not in any family list.
+    """
+    global _nation_level_cache
+    if _nation_level_cache is None:
+        _load_nation_data()
+    w = word.strip().lower()
+    if not w:
+        return None
+    return _nation_level_cache.get(w)
+
+
+def get_word_headword(word: str) -> str | None:
+    """Return the family headword for *word* in the Nation BNC/COCA lists.
+
+    Both headwords and family members return the headword.
+    Returns None if the word is not in any family list.
+    """
+    global _nation_headword_cache
+    if _nation_headword_cache is None:
+        _load_nation_data()
+    w = word.strip().lower()
+    if not w:
+        return None
+    return _nation_headword_cache.get(w)
+
+
+def load_level_range(lo: int = 1, hi: int = 25) -> set[str]:
+    """Return all word forms in family levels *lo* through *hi* (inclusive).
+
+    Args:
+        lo: Minimum level (1-25).  Default 1.
+        hi: Maximum level (1-25).  Default 25.
+
+    Returns:
+        Set of all word forms (lowercased) in the specified level range.
+    """
+    global _nation_level_cache
+    if _nation_level_cache is None:
+        _load_nation_data()
+    lo = max(1, min(lo, _NUM_LEVELS))
+    hi = max(1, min(hi, _NUM_LEVELS))
+    if lo > hi:
+        return set()
+    return {word for word, lvl in _nation_level_cache.items()
+            if lo <= lvl <= hi}

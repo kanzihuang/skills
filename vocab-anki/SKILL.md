@@ -21,10 +21,10 @@ description: >
 | 模式 | 输入 | 触发词 | 适用场景 |
 |------|------|--------|----------|
 | **划线模式**（默认） | 微信读书划线 | "/vocab-anki 书名"、"划线生词" | 从已读划线的生词制作卡片 |
-| **全文模式** | 图书原文 | "全文制作"、"全量词汇"、"按 COCA 词频"、"词频范围"、"指定章节"、"全文" | 按词频/章节范围从全书提取词汇 |
+| **全文模式** | 图书原文 | "全文制作"、"全量词汇"、"按词族等级"、"词频范围"、"指定章节"、"全文" | 按词族等级/章节范围从全书提取词汇 |
 
 全文模式额外支持：
-- **COCA 词频范围**：自然语言描述（如 "COCA 3000-10000"、"排除前3000高频词"），不明确时提问确认
+- **BNC/COCA 词族等级**：自然语言描述（如 "词族等级 3-10"、"排除前3级高频词族"），不明确时提问确认
 - **章节范围**：先展示检测到的章节列表，用户选择（如 `1-5,7,10-12`）
 - **Anki 去重范围**：必须提问确认——仅排除同本书已有卡片，还是排除本技能制作的所有牌组中的单词
 
@@ -179,7 +179,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 字段：
 ## 全文模式工作流
 
 > 当用户使用以下关键词时，跳过划线模式 Step 1，走以下全文模式分支：
-> **"全文制作"、"全量词汇"、"全文"、"按 COCA 词频"、"词频范围"、"指定章节"、"排除前X高频词"、"COCA X-Y"、"COCA X到Y"、"全部生词"**
+> **"全文制作"、"全量词汇"、"全文"、"按词族等级"、"词频范围"、"指定章节"、"排除前X级词族"、"词族等级 X-Y"、"全部生词"**
 >
 > 仅含 "生成牌组"、"制作卡片"、"Anki" 等词而不含上述关键词 → 走划线模式。
 > 全文模式的其他步骤（Step 3.0、Step 3、Step 3.5、Step 4）与划线模式相同。
@@ -190,21 +190,23 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 字段：
 
 | 参数 | 默认 | 何时提问 |
 |------|------|---------|
-| COCA 词频范围 | 无限制（全部 COCA 20000） | 用户未指定范围，或表述模糊（如 "中频词"） |
+| BNC/COCA 词族等级 | 无限制（全部 25000 词族） | 用户未指定范围，或表述模糊（如 "中频词"） |
 | 章节范围 | 全部章节 | 用户未指定，或表述模糊 |
 | Anki 去重范围 | **必须提问确认** | 用户未明确说明时显式提问；提及 "所有牌组"/"全局" → `--anki-dedup all-decks`；提及 "仅本书"/"同书" → `--anki-dedup same-book` |
 
 **COCA 范围意图解析：**
 
+> **注意**：`--basic-range` 现已改用 Nation BNC/COCA 词族等级（1-25），不再使用 COCA 词形排名。Level 1 = 最高频 1000 词族（the/be/and…），Level 25 = 最低频 1000 词族。
+
 | 用户表达 | 解析结果 | `--basic-range` |
 |----------|---------|-----------------|
-| "COCA 3000-10000" | 排名 3001-10000 | `3001-10000` |
-| "排除前3000高频词" / "排除前3000" | 排除 top 3000 | `3001-18964` |
-| "5000以内" / "前5000" | 排名 1-5000 | `1-5000` |
-| "中频词" / "中等难度" | 大致 3001-8000 | **提问确认具体范围** |
-| "全部COCA词" / 未提及 | 无范围限制 | 省略 `--basic-range` |
+| "等级 3-10" | Level 3-10 | `3-10` |
+| "排除前3级" | 排除 Level 1-3 | `4-25` |
+| "5级以上" | Level 5-25 | `5-25` |
+| "中频词" / "中等难度" | 大致 Level 4-10 | **提问确认具体范围** |
+| 未提及 | 无范围限制 | 省略 `--basic-range` |
 
-> 1-based rank: rank 1 = 最高频词 ("the")。范围两端均 inclusive。
+> 1-based level: level 1 = 最高频。两端均 inclusive。
 
 ### Step 1-FT.1: 获取数据（并行两步）
 
@@ -269,7 +271,7 @@ fi
 # 提取 + 过滤全文词汇
 cat /tmp/<safe_title>-full.txt | \
 <skill_dir>/.venv/bin/python3 <skill_dir>/filter_fulltext.py \
-  --basic-range 3001-10000 \
+  --basic-range 3-10 \
   --chapter-range "1-5,7,10-12" \
   --chapter-titles '<chapters_json>' \
   --anki-dedup same-book --book-id <bookId> \
@@ -548,9 +550,9 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
 1. **Claude 在自查清单中逐批校验**：确认句中用法为派生形容词 → 显式设置 `lemma`（如 `"lemma": "blundering"`）
 2. **spaCy 在同步前做句子级校验**：对 `-ed`/`-ing` 词，spaCy 读原句判断词性——若判定为形容词，阻止 `resolve_lemma()` 的还原（见 `_process_one_word()`）
 
-若派生形容词的自身不在 COCA 20000 中 → **不生成卡片**，加入 `excluded` 数组，reason 为 `"派生形容词，不在 COCA 20000 中"`。
+若派生形容词的自身不在 BNC/COCA 25000 词族中 → **不生成卡片**，加入 `excluded` 数组，reason 为 `"派生形容词，不在 BNC/COCA 25000 词族中"`。
 
-> 例：`blundering`(adj) 不在 COCA → 排除。`distinguished`(adj) 在 COCA → 生成，Claude 设 `lemma: "distinguished"`，spaCy 读 `a <b>distinguished</b> fisherman` 确认为形容词 → 不还原为 `distinguish`
+> 例：`blundering`(adj) 不在 Nation 词族 → 排除。`distinguished`(adj) 在 Nation 词族 → 生成
 
 **每批自查清单（写入 JSON 后、下一批开始前必做）：**
 
@@ -629,7 +631,7 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
     {"word": "pondered", "lemma": "ponder", "ipa": "/.../", "sentence": "...", "definition_cn": "...", "translation_cn": "..."}
   ],
   "excluded": [
-    {"word": "abash", "reason": "不在 COCA 20000 中"}
+    {"word": "abash", "reason": "不在 BNC/COCA 25000 词族中"}
   ]
 }
 ```
@@ -789,8 +791,8 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 | `sync_anki.py` | 增量同步到 Anki — 含 `resolve_lemma()` 自动原形还原 + spaCy 句子级校验 | JSON + AnkiConnect | 直接添加卡片到 Anki |
 | `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
 | `filter_pipeline.py` | 合并过滤流水线 — 标点/大小写清理 → lemmatize → Anki 去重 → COCA 检查。自动剥离句边界标点（`vexed.`→`vexed`）并归一化非全大写词为小写（`Clad`→`clad`）。透传章节信息（`chapterUid` + `chapterTitle`）供 Step 3.0 章节优先匹配 | WeRead API JSON (stdin) | 过滤结果 (stdout) + 结构化 JSON (--json-out，含 `chapters` 字段) |
-| `lib/coca.py` | COCA 词频查询 — 三层策略：直接 set 查找 + lemminflect（仅接受原形严格短于输入词的映射，如 `pondered`→`ponder`；同长映射如 `abode`→`abide` 被拒，避免名词误映射到无关动词）+ 后缀剥离兜底做派生归一（`indulgently`→`indulgent`） | 单词 → set 查找 + lemminflect + 后缀剥离 | 是否在 COCA 频率表中 |
-| `lib/data/coca_freq.txt` | COCA 词频数据（18,964 词，频率排序） | — | 单一数据源，同时服务 set 查找和频率分级 |
+| `lib/coca.py` | BNC/COCA 词族等级查询 — 三层查找（直接 set + lemminflect + 后缀剥离）+ `get_word_level()`（1–25）+ `get_word_headword()`（族首词用于跨族校验）+ `load_level_range()`（按等级筛选）。Nation (2017) Level 6 词族定义 | 单词 → set/等级/族首词 | 是否在 25000 词族中 + 等级 + 族归属 |
+| `lib/data/bnc_coca/basewrd1.txt–basewrd25.txt` | BNC/COCA 词族数据（25 级 × ~1000 族，~77K 词形，Range 格式）。来源：Nation (2017)，学术自由使用 | — | `word→level` + `word→headword` 双映射 |
 | `scripts/match_sentences.py` | Step 3.0 机械句子匹配 — 读过滤 JSON + 源文本，提取含生词的完整句子并用 `<b>` 标签标记。强制 3.0e 截断规则（禁止从句首裁切、禁止产出片段）。替代 Claude 人工回忆模式 | 过滤 JSON + 源文本 | 带 `<b>` 标签的句子 JSON |
 | `tests/` | pytest 单元测试套件（251 tests）——覆盖词形还原（含比较级、施事名词）、COCA 查询、LLM 输出拦截、章节解析、IPA 生成 | — | 回归防护 |
 

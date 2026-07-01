@@ -224,7 +224,7 @@ def main():
         if ok:
             passed.append((lemma, rep, forms))
         else:
-            rejected.append((lemma, rep, "不在 COCA 20000 中"))
+            rejected.append((lemma, rep, "不在 BNC/COCA 25000 词族中"))
 
     n_coca_excluded = len(rejected)
     n_final = len(passed)

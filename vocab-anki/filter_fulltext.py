@@ -10,8 +10,8 @@ Usage
     # Basic: all COCA words from full text
     cat book.txt | python filter_fulltext.py --json-out /tmp/out.json
 
-    # With COCA frequency range (ranks 3001–10000 only)
-    cat book.txt | python filter_fulltext.py --basic-range 3001-10000 --json-out /tmp/out.json
+    # With BNC/COCA word family level range (levels 3-10 only)
+    cat book.txt | python filter_fulltext.py --basic-range 3-10 --json-out /tmp/out.json
 
     # With chapter filtering (chapters 1–5 and 7)
     cat book.txt | python filter_fulltext.py \
@@ -20,7 +20,7 @@ Usage
 
     # Full pipeline with Anki dedup (new --anki-dedup flag)
     cat book.txt | python filter_fulltext.py \
-        --basic-range 3001-10000 --chapter-range "1-5" \
+        --basic-range 3-10 --chapter-range "1-5" \
         --chapter-titles '<json>' --anki-dedup same-book --book-id <bookId> \
         --json-out /tmp/out.json
 
@@ -45,7 +45,8 @@ if _SCRIPT_DIR not in sys.path:
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from lib.coca import load_coca, load_freq_ranked, in_coca             # noqa: E402
+from lib.coca import (load_coca, load_freq_ranked, in_coca,        # noqa: E402
+                         get_word_level, load_level_range)
 from lib.lemmatize import lemmatize, build_spacy_map               # noqa: E402
 
 
@@ -353,10 +354,9 @@ def main() -> None:
     rejected: list[tuple[str, str, str]] = []           # (lemma, rep, reason)
 
     if basic_min > 0 or basic_max > 0:
-        all_freq = load_freq_ranked()
         lo = max(basic_min, 1)
-        hi = min(basic_max, len(all_freq)) if basic_max else len(all_freq)
-        in_range_set: set[str] = set(all_freq[lo - 1:hi])
+        hi = min(basic_max, 25) if basic_max else 25
+        in_range_set = load_level_range(lo, hi)
 
     for lemma in sorted(lemma_forms.keys()):
         forms = sorted(lemma_forms[lemma])
@@ -366,7 +366,7 @@ def main() -> None:
         # that lemmatize() couldn't reduce (e.g. indulgently → indulgent)
         ok, detail = in_coca(lemma, coca_set)
         if not ok:
-            rejected.append((lemma, rep, "不在 COCA 20000 中"))
+            rejected.append((lemma, rep, "不在 BNC/COCA 25000 词族中"))
             continue
 
         # Determine the canonical COCA word for frequency rank lookup.
@@ -378,11 +378,9 @@ def main() -> None:
         # COCA frequency range check (using canonical COCA word's rank)
         if basic_min > 0 or basic_max > 0:
             if coca_word not in in_range_set:
-                try:
-                    rank = all_freq.index(coca_word) + 1
-                except ValueError:
-                    rank = 0
-                rejected.append((lemma, rep, f"COCA 词频范围外 (rank {rank})"))
+                lvl = get_word_level(coca_word)
+                lvl_str = f"level {lvl}/25" if lvl else "不在词族中"
+                rejected.append((lemma, rep, f"BNC/COCA 词族等级范围外 ({lvl_str})"))
                 continue
 
         passed.append((lemma, rep, forms))
@@ -438,7 +436,7 @@ def main() -> None:
         f"Unique lemmas: {total_lemmas}",
     ]
     if basic_min or basic_max:
-        parts.append(f"COCA range: {basic_min}-{basic_max}")
+        parts.append(f"BNC/COCA levels: {basic_min}-{basic_max}")
     parts.append(f"COCA excluded: {n_coca_excluded}")
     if n_anki_filtered:
         parts.append(f"Anki filtered: {n_anki_filtered}")
