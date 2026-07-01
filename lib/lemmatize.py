@@ -33,8 +33,9 @@ _CONTRACTIONS: dict[str, str] = {
 def build_spacy_map(text: str) -> dict[str, str]:
     """Parse *text* with spaCy and return ``{surface_form: lemma}``.
 
-    Run ONCE on the full book text.  Callers pass the result to
-    :func:`lemmatize` via the *spacy_map* parameter.
+    When a word appears in multiple POS (e.g. "running" as verb vs noun,
+    "distinguished" as adj vs verb), majority vote across all occurrences
+    picks the canonical lemma.
 
     Returns empty dict if spaCy or its model is not installed.
     """
@@ -44,8 +45,10 @@ def build_spacy_map(text: str) -> dict[str, str]:
     except Exception:
         return {}
 
-    result: dict[str, str] = {}
-    # Process in chunks to avoid memory issues on very long texts
+    # Collect all (surface → lemma) pairs with counts
+    from collections import Counter
+    votes: dict[str, Counter] = {}
+
     chunk_size = 100_000
     for i in range(0, len(text), chunk_size):
         chunk = text[i:i + chunk_size]
@@ -56,10 +59,23 @@ def build_spacy_map(text: str) -> dict[str, str]:
         for token in doc:
             surface = token.text.lower()
             lemma = token.lemma_.lower()
-            if surface != lemma:
-                # Prefer the first-occurring lemma for each surface form
-                if surface not in result:
-                    result[surface] = lemma
+            if surface not in votes:
+                votes[surface] = Counter()
+            votes[surface][lemma] += 1
+
+    # Pick the most common lemma for each surface form.
+    # If the winner equals the surface form (word is canonical), don't
+    # include it — callers fall through to COCA check / lemminflect.
+    result: dict[str, str] = {}
+    for surface, counter in votes.items():
+        top = counter.most_common()
+        if not top:
+            continue
+        best_count = top[0][1]
+        tied = [lemma for lemma, count in top if count == best_count]
+        winner = surface if surface in tied else tied[0]
+        if winner != surface:
+            result[surface] = winner
 
     return result
 
