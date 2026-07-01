@@ -11,6 +11,8 @@ Historical LLM errors covered:
   - Suspicious lemma override: beautiful→beautifully (commit 68be62e)
   - Missing required fields
   - IPA with Chinese characters
+  - Function-word endings: truncation cutting at prepositions/conjunctions
+    (e.g. "...the red of the blood from" ending with "from")
 """
 
 import re
@@ -290,3 +292,34 @@ def test_ipa_missing_slashes():
     # Should not be a hard error
     assert not has_error(errors, "test", "missing 'ipa'")
     assert isinstance(errors, list)
+
+
+# ── Function-word ending detection (commit: SKILL.md truncation rule) ──
+
+@pytest.mark.parametrize("word,bad_sentence", [
+    # angle: "...the red of the blood from" — "from" expects an object
+    ("angle", "The sea was discolouring with the red of the blood <b>from</b>"),
+    # aboard-like: "...hoisted her aboard" — NOT a function word, should pass
+])
+def test_sentence_ending_with_function_word_is_error(word, bad_sentence):
+    """Sentences ending with a preposition/conjunction are hard errors."""
+    w = make_word(word=word, sentence=bad_sentence)
+    errors = _validate_word_entries([w])
+    assert has_error(errors, word, "function word"), \
+        f"Expected function-word error for: {bad_sentence}"
+
+
+def test_sentence_ending_with_content_word_passes():
+    """Sentences ending with a noun/verb/adjective are fine."""
+    w = make_word(word="angle", sentence="The shaft was projecting at an <b>angle</b>.")
+    errors = _validate_word_entries([w])
+    assert not has_error(errors, "angle", "function word")
+
+    w2 = make_word(word="agony", sentence="He put it against the fish's <b>agony</b>.")
+    errors2 = _validate_word_entries([w2])
+    assert not has_error(errors2, "agony", "function word")
+
+    # aboard ends with a content word, not a function word
+    w3 = make_word(word="aboard", sentence="They hoisted her <b>aboard</b>.")
+    errors3 = _validate_word_entries([w3])
+    assert not has_error(errors3, "aboard", "function word")

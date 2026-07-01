@@ -596,6 +596,30 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                         file=sys.stderr,
                     )
 
+            # 7c. Ends with function word — strong signal of mid-clause truncation.
+            #      Prepositions and conjunctions expect a complement; when they are
+            #      the last word, the sentence is almost certainly incomplete.
+            _FUNCTION_ENDINGS: set[str] = {
+                # Prepositions (require an object)
+                "from", "with", "at", "for", "to", "of", "in", "on", "by",
+                "about", "into", "onto", "upon", "within", "without", "through",
+                "across", "along", "around", "before", "after", "between",
+                "among", "during", "until", "against", "toward", "towards",
+                "over", "under", "behind", "beside", "beneath",
+                # Conjunctions (expect a following clause)
+                "and", "but", "or", "nor", "so", "yet", "because",
+                "although", "though", "while", "when", "where",
+                "since", "if", "unless", "until", "as",
+                # Auxiliaries (expect a main verb)
+                "had", "has", "was", "were", "could", "would", "should",
+            }
+            last_word = re.split(r'\s+', clean.rstrip('"\'') + ' ')[-2].strip().lower()
+            if last_word in _FUNCTION_ENDINGS:
+                errors.append(
+                    f"[{word}] sentence ends with function word "
+                    f"'{last_word}' — likely truncated fragment"
+                )
+
     return errors
 
 
