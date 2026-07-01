@@ -288,7 +288,7 @@ cat /tmp/<safe_title>-full.txt | \
 **脚本内流水线：**
 1. 分词：`re.findall(r"[a-zA-Z]{2,}", text)`
 2. 章节切分：在原文中搜索 WeRead 章节标题（精确 → 忽略大小写 → 去标点），按字节偏移构建区间
-3. 词形还原：`lib.lemmatize.lemmatize()`（全面模式，含 IRREG + 规则变形）
+3. 词形还原：spaCy 全文 parse → `{surface→lemma}` 映射（POS-aware，正确处理不规则动词、比较级、派生形容词），fallback `lib.lemmatize.lemmatize()`（lemminflect VERB+NOUN）
 4. COCA 范围过滤：`in_coca()` 含派生还原（如 `indulgently` → `indulgent`）+ 频率排名范围
 5. Anki 去重：同书（或全库）已有卡片
 6. JSON 输出：格式与划线模式 `filter_pipeline.py` 输出一致
@@ -429,7 +429,7 @@ wc -c /tmp/<book>-full.txt
 | 字段 | 说明 | 示例 |
 |------|------|------|
 | `word` | 书中出现的**表面词形**——`<b>` 包裹什么就写什么。**绝不**填原形 | `blundering`（不是 `blunder`），`conceited`（不是 `conceit`），`pondered`（不是 `ponder`）|
-| `lemma` | **派生形容词时必填，常规屈折变化可留空**。`sync_anki.py` 三层防护：(1) Claude 显式设置的 `lemma` **无条件信任**——填了就以此为准；(2) 若留空，`resolve_lemma()` 用 lemminflect + IRREG 字典自动还原；(3) **spaCy 读原句校验**——对 `-ed`/`-ing` 词，若判定为形容词则阻止还原。因此：派生形容词（`blundering`、`accomplished`、`distinguished` 等）→ 填 `lemma`；常规屈折（`attached`→`attach`、`burning`→`burn`）→ 留空让脚本处理 | `pondered`→留空（自动 `ponder`）；`accomplished`(adj)→`"accomplished"`；`blundering`(adj)→`"blundering"` |
+| `lemma` | **派生形容词时必填，常规屈折变化可留空**。`sync_anki.py` 三层防护：(1) Claude 显式设置的 `lemma` **无条件信任**——填了就以此为准；(2) 若留空，`resolve_lemma()` 用 lemminflect + COCA 守卫自动还原；(3) **spaCy 读原句校验**——对 `-ed`/`-ing` 词，若判定为形容词则阻止还原。因此：派生形容词（`blundering`、`accomplished`、`distinguished` 等）→ 填 `lemma`；常规屈折（`attached`→`attach`、`burning`→`burn`）→ 留空让脚本处理 | `pondered`→留空（自动 `ponder`）；`accomplished`(adj)→`"accomplished"`；`blundering`(adj)→`"blundering"` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I felt awkward and <b>blundering</b>.` |
 | `ipa` | 对应 **lemma** 的 IPA 音标。**cmudict 自动生成，Claude 仅在多发音词时用作投票参考**。未登录词时 Claude 提供兜底 | 单发音词留空；异读词填正确发音如 `/riːd/`（非 `/red/`） |
 | `definition_cn` | **按句中实际用法释义**，不按原形常见义项，也不自动选择最常见的词典义。特别注意多义词的含义选择：同一个词在不同句子中可能是完全不同的意思。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）；`thriftily` 在 "he must be treated thriftily" 中→"有节制地，有所保留地"（**不写**"节俭地"）|
@@ -751,7 +751,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
 - **音频命名空间**：文件名含 `bookId`（`{lemma}_{bookId}_word/sent.mp3`），防止异读词和不同书例句在全局媒体库中冲突
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
-- **原形还原（spaCy + lemminflect 双层）**：`resolve_lemma()` 用 lemminflect + IRREG 字典做基础还原；`_process_one_word()` 中 **spaCy 读原句**判断 `-ed`/`-ing` 词的实际词性——若为形容词则阻止还原。Claude 显式设置的 `lemma` 无条件信任。零手动维护
+- **原形还原（spaCy + lemminflect 双层）**：`resolve_lemma()` 用 lemminflect + COCA 守卫做基础还原；`_process_one_word()` 中 **spaCy 读原句**判断 `-ed`/`-ing` 词的实际词性——若为形容词则阻止还原。Claude 显式设置的 `lemma` 无条件信任。全文过滤阶段 `build_spacy_map()` 一次性 parse + `lemmatize()` O(1) 查表，无手工词表
   - 两层均使用 `len(lemma) < len(word)` 作为准入条件：同长映射（`abode` n.→`abide` v.）被拒，避免跨词性误判。不同长映射正常通过（`crammed`→`cram`、`went`→`go`）。同长不规则变化（`ran`→`run`、`sat`→`sit`）同为已知限制，但这些词属基础词汇，实际划线中极少出现
 - **bookId 桥接**：Anki 卡片 WordId 天然包含 bookId（`{lemma}_{bookId}`），用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断
