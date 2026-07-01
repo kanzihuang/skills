@@ -287,7 +287,7 @@ cat /tmp/<safe_title>-full.txt | \
 **脚本内流水线：**
 1. 分词：`re.findall(r"[a-zA-Z]{2,}", text)`
 2. 章节切分：在原文中搜索 WeRead 章节标题（精确 → 忽略大小写 → 去标点），按字节偏移构建区间
-3. 词形还原：spaCy 全文 parse → `{surface→lemma}` 映射（POS-aware，正确处理不规则动词、比较级、派生形容词），fallback `lib.lemmatize.lemmatize()`（lemminflect VERB+NOUN）
+3. 词形还原：spaCy 全文 parse → `{surface→lemma}` 映射（POS-aware，正确处理不规则动词、比较级、派生形容词），fallback `lemmatize_word()`（lemminflect VERB+NOUN → ADJ/ADV + spaCy POS gate 处理比较级）
 4. COCA 范围过滤：`in_coca()` 含派生还原（如 `indulgently` → `indulgent`）+ 频率排名范围
 5. Anki 去重：同书（或全库）已有卡片
 6. JSON 输出：格式与划线模式 `filter_pipeline.py` 输出一致
@@ -543,7 +543,7 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
 
 **派生形容词 COCA 复查：**
 
-`lemmatize_word` 将派生 adj 还原为词根（`blundering`→`blunder`、`conceited`→`conceit`），词根在 COCA 中放行。对于此类词有两层防护：
+`lemmatize_word` 将派生 adj 还原为词根（`blundering`→`blunder`、`conceited`→`conceit`），词根在 COCA 中放行。比较级（`higher`→`high`）通过 ADJ/ADV 通道 + spaCy POS gate 处理——名词不会被误还原。对于派生形容词有两层防护：
 
 1. **Claude 在自查清单中逐批校验**：确认句中用法为派生形容词 → 显式设置 `lemma`（如 `"lemma": "blundering"`）
 2. **spaCy 在同步前做句子级校验**：对 `-ed`/`-ing` 词，spaCy 读原句判断词性——若判定为形容词，阻止 `resolve_lemma()` 的还原（见 `_process_one_word()`）
@@ -556,7 +556,7 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
 
 每批写入完成后，逐词检查以下四项，发现错误立即修正：
 
-1. **lemma 正确性**：脑中过一遍 `lemmatize_word(word)` 的返回结果。结果词性与句中实际用法一致（屈折变化）→ `lemma` **留空**，脚本自动还原；不一致（派生 adj 被当屈折）→ 必须显式覆写 `lemma`。例如 `blundering`(adj)→lemmatize→`blunder`(v) 词性不对，覆写 `lemma: "blundering"`；`distinguished`(adj)→lemmatize→`distinguish`(v) 词性不对，覆写 `lemma: "distinguished"`；`pondered`(v)→lemmatize→`ponder`(v) 正确，`lemma` 留空。**绝不在 `lemma` 字段中填写与 `word` 相同的表面词形**——留空让脚本处理，填表面词形反而阻止自动还原
+1. **lemma 正确性**：脑中过一遍 `lemmatize_word(word)` 的返回结果。结果词性与句中实际用法一致（屈折变化、比较级）→ `lemma` **留空**，脚本自动还原；不一致（派生 adj 被当屈折）→ 必须显式覆写 `lemma`。比较级现已正确处理：`higher`→`high`、`faster`→`fast`。派生形容词仍需覆写：`blundering`(adj)→lemmatize→`blunder`(v) 词性不对，覆写 `lemma: "blundering"`；`distinguished`(adj)→lemmatize→`distinguish`(v) 词性不对，覆写 `lemma: "distinguished"`；`pondered`(v)→lemmatize→`ponder`(v) 正确，`lemma` 留空。**绝不在 `lemma` 字段中填写与 `word` 相同的表面词形**——留空让脚本处理，填表面词形反而阻止自动还原
 2. **IPA 对应性**：每个 IPA 是否对应 `lemma`（卡片展示词）的正确发音？异读词（如 `intimate`）必须根据释义选择 `/ˈɪntɪmət/`(adj) 或 `/ˈɪntɪmeɪt/`(v)
 3. **释义词性对齐**：`definition_cn` 是否反映了句中实际用法的词性？`blundering` adj→"笨拙的"（非"犯大错"）；`conceited` adj→"自负的"（非"自负"）
    - **被动语态 vs 形容词检查**：`-ed` 分词在句中可以是动词过去分词（被动语态）或形容词（情感/状态）。判断标准分三层：
@@ -785,14 +785,14 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 
 | 脚本 | 用途 | 输入 | 输出 |
 |------|------|------|------|
-| `utils.py` | 共享工具模块 — lemmatize_word, edge_tts_bytes/file, safe_filename | — | 工具函数 |
+| `utils.py` | 共享工具模块 — lemmatize_word（lemminflect VERB+NOUN → ADJ/ADV + spaCy POS gate 处理比较级；名词如 baker/walker 不动）, edge_tts_bytes/file, safe_filename | — | 工具函数 |
 | `sync_anki.py` | 增量同步到 Anki — 含 `resolve_lemma()` 自动原形还原 + spaCy 句子级校验 | JSON + AnkiConnect | 直接添加卡片到 Anki |
 | `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
 | `filter_pipeline.py` | 合并过滤流水线 — 标点/大小写清理 → lemmatize → Anki 去重 → COCA 检查。自动剥离句边界标点（`vexed.`→`vexed`）并归一化非全大写词为小写（`Clad`→`clad`）。透传章节信息（`chapterUid` + `chapterTitle`）供 Step 3.0 章节优先匹配 | WeRead API JSON (stdin) | 过滤结果 (stdout) + 结构化 JSON (--json-out，含 `chapters` 字段) |
 | `lib/coca.py` | COCA 词频查询 — 三层策略：直接 set 查找 + lemminflect（仅接受原形严格短于输入词的映射，如 `pondered`→`ponder`；同长映射如 `abode`→`abide` 被拒，避免名词误映射到无关动词）+ 后缀剥离兜底做派生归一（`indulgently`→`indulgent`） | 单词 → set 查找 + lemminflect + 后缀剥离 | 是否在 COCA 频率表中 |
 | `lib/data/coca_freq.txt` | COCA 词频数据（18,964 词，频率排序） | — | 单一数据源，同时服务 set 查找和频率分级 |
 | `scripts/match_sentences.py` | Step 3.0 机械句子匹配 — 读过滤 JSON + 源文本，提取含生词的完整句子并用 `<b>` 标签标记。强制 3.0e 截断规则（禁止从句首裁切、禁止产出片段）。替代 Claude 人工回忆模式 | 过滤 JSON + 源文本 | 带 `<b>` 标签的句子 JSON |
-| `tests/` | pytest 单元测试套件（233 tests）——覆盖词形还原、COCA 查询、LLM 输出拦截、章节解析、IPA 生成 | — | 回归防护 |
+| `tests/` | pytest 单元测试套件（251 tests）——覆盖词形还原（含比较级、施事名词）、COCA 查询、LLM 输出拦截、章节解析、IPA 生成 | — | 回归防护 |
 
 ## 设计原则
 
@@ -827,7 +827,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
 - **音频命名空间**：文件名含 `bookId`（`{lemma}_{bookId}_word/sent.mp3`），防止异读词和不同书例句在全局媒体库中冲突
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
-- **原形还原（spaCy + lemminflect 双层）**：`resolve_lemma()` 用 lemminflect + COCA 守卫做基础还原；`_process_one_word()` 中 **spaCy 读原句**判断 `-ed`/`-ing` 词的实际词性——若为形容词则阻止还原。Claude 显式设置的 `lemma` 无条件信任。全文过滤阶段 `build_spacy_map()` 一次性 parse + `lemmatize()` O(1) 查表，无手工词表
+- **原形还原（spaCy + lemminflect 双层）**：`resolve_lemma()` 用 lemminflect + COCA 守卫做基础还原；`_process_one_word()` 中 **spaCy 读原句**判断 `-ed`/`-ing` 词的实际词性——若为形容词则阻止还原。`lemmatize_word()` 增加 ADJ/ADV 通道 + spaCy POS gate 处理比较级（`higher`→`high`），名词（`baker`、`walker`）不受影响。Claude 显式设置的 `lemma` 无条件信任。全文过滤阶段 `build_spacy_map()` 一次性 parse + `lemmatize()` O(1) 查表，无手工词表
   - 两层均使用 `len(lemma) < len(word)` 作为准入条件：同长映射（`abode` n.→`abide` v.）被拒，避免跨词性误判。不同长映射正常通过（`crammed`→`cram`、`went`→`go`）。同长不规则变化（`ran`→`run`、`sat`→`sit`）同为已知限制，但这些词属基础词汇，实际划线中极少出现
 - **bookId 桥接**：Anki 卡片 WordId 天然包含 bookId（`{lemma}_{bookId}`），用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断

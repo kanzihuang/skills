@@ -33,6 +33,23 @@ from utils import lemmatize_word, safe_filename
         ("pondered", "ponder"),         # -ed
         ("attached", "attach"),         # -ed
         ("burning", "burn"),            # -ing
+        # ── Comparatives & superlatives (ADJ channel + spaCy POS gate) ──
+        ("higher", "high"),             # -er comparative
+        ("faster", "fast"),             # -er comparative
+        ("bigger", "big"),              # -er with doubled consonant
+        ("lighter", "light"),           # -er comparative
+        ("highest", "high"),            # -est superlative
+        ("fastest", "fast"),            # -est superlative
+        ("better", "good"),             # irregular comparative
+        ("worse", "bad"),              # irregular comparative
+        # ── Agentive nouns (-er suffix, NOT comparatives) — spaCy gate ──
+        ("baker", "baker"),             # PROPN/NOUN, not reduced
+        ("walker", "walker"),           # NOUN, not reduced
+        ("robber", "robber"),           # PROPN/NOUN, not reduced
+        # ── Base-form nouns ending in -er — spaCy gate ──
+        ("beer", "beer"),               # NOUN, not reduced
+        ("anger", "anger"),             # NOUN, not reduced
+        ("fiber", "fiber"),             # NOUN, not reduced
         # ── Cross-POS same-length — NOT reduced ──
         ("abode", "abode"),             # len(abide) == len(abode), guard rejects
         # ── Words already base form ──

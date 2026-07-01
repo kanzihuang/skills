@@ -32,34 +32,72 @@ def safe_filename(word: str) -> str:
 # Lemmatization (inflectional only — derivational forms preserved)
 # ---------------------------------------------------------------------------
 
+_SPACY_NLP = None
+
+
+def _get_spacy():
+    """Lazy-load spaCy en_core_web_sm (used as POS gate for ADJ channel)."""
+    global _SPACY_NLP
+    if _SPACY_NLP is None:
+        try:
+            import spacy
+
+            _SPACY_NLP = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+        except Exception:
+            _SPACY_NLP = False
+    return _SPACY_NLP if _SPACY_NLP is not False else None
+
 
 def lemmatize_word(word: str) -> str:
     """Reduce an inflected word to its lemma (base form).
 
-    Uses lemminflect (VERB + NOUN only — ADJ/ADV produces false positives).
-      straying → stray, eruptions → eruption, caterpillars → caterpillar
-    Base forms and derivational words are left unchanged:
-      linger → linger, precious → precious, peaceful → peaceful
+    Three-tier strategy:
+      1. VERB (covers -ing, -ed, -s) then NOUN (plurals) via lemminflect.
+      2. ADJ + ADV channels for comparative/superlative forms (-er, -est),
+         gated by spaCy POS: only reduced if spaCy does NOT tag the word
+         as NOUN/PROPN.  This prevents agentive nouns (baker, walker,
+         robber) from being falsely reduced while allowing genuine
+         comparatives (higher→high, faster→fast).
+      3. Falls back to the original word.
 
-    Only accepts a lemma that is strictly shorter than the input word.
-    This avoids same-length cross-POS false positives (e.g. abode n.→abide v.)
-    while correctly handling doubled-consonant patterns that lemminflect misses:
-      crammed→cram, forsaken→forsake.
-    Same-length irregular verbs (ran→run, sat→sit) remain unhandled — these are
-    basic vocabulary and rarely appear as highlighted words.
+    Only accepts a lemma strictly shorter than the input word to avoid
+    same-length cross-POS errors (abode n.→abide v.).
+    Same-length irregulars (ran→run) remain unhandled — basic vocabulary
+    that rarely appears as highlighted words.
 
     Returns the lemma, or the original word if no change.
     """
     import lemminflect
 
     w = word.strip().lower()
-    # VERB first (covers -ing, -ed, -s, -es), then NOUN (plurals)
+
+    # Tier 1: VERB (covers -ing, -ed, -s, -es), then NOUN (plurals)
     for pos in ("VERB", "NOUN"):
         lemmas = lemminflect.getLemma(w, pos)
         if lemmas:
             lemma = lemmas[0].lower()
             if lemma != w and len(lemma) < len(w):
                 return lemma
+
+    # Tier 2: ADJ/ADV — comparatives and superlatives (-er, -est)
+    # Gate with spaCy POS: skip if the word is a noun (baker, walker,
+    # robber) rather than a comparative adjective.
+    nlp = _get_spacy()
+    if nlp is not None:
+        try:
+            doc = nlp(w)
+            if len(doc) > 0 and doc[0].pos_ in ("NOUN", "PROPN"):
+                return w  # noun — don't apply ADJ reduction
+        except Exception:
+            pass
+
+    for pos in ("ADJ", "ADV"):
+        lemmas = lemminflect.getLemma(w, pos)
+        if lemmas:
+            lemma = lemmas[0].lower()
+            if lemma != w and len(lemma) < len(w):
+                return lemma
+
     return w
 
 
