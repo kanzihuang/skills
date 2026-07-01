@@ -1,13 +1,13 @@
-"""Test lib/lemmatize.py — lemminflect-based lemmatization with COCA validation.
+"""Test lib/lemmatize.py — VERB + NOUN channels + irregular comparative lookup.
 
-All lemmatization is delegated to lemminflect (professional library).
-The only custom logic: COCA membership check + shortest-candidate selection.
-No hand-maintained IRREG dict, no custom _try_* pattern functions.
+ADJ channel removed — English -er/-est ambiguity makes it unreliable
+(121 false positives: baker→bak, beer→bee, etc.).
 
-Known trade-offs (documented, not patched):
-  - beer → bee (ADJ false positive, <3 vocab cards affected)
-  - distinguished → distinguish (needs sentence context for adj detection)
-  - less → less (lemminflect treats "less" as standalone lemma)
+Irregular comparatives/superlatives handled by explicit closed-set lookup
+(better→good, worse→bad, more→much — 12 entries).
+
+Regular comparatives (closest, fastest, happier) are NOT reduced — known
+trade-off, minor impact on vocabulary grouping.
 """
 
 import pytest
@@ -50,23 +50,18 @@ from lemmatize import lemmatize, lemmatize_conservative
     ("kisses", "kiss"),
     ("bumps", "bump"),
     ("cats", "cat"),
-    # ── lemminflect ADJ channel: comparatives/superlatives ──
-    ("closest", "close"),
-    ("fastest", "fast"),
+    # ── Irregular comparatives/superlatives (explicit lookup) ──
     ("better", "good"),
     ("best", "good"),
     ("worse", "bad"),
     ("worst", "bad"),
-    ("happier", "happy"),
-    ("happiest", "happy"),
-    ("smallest", "small"),
-    ("biggest", "big"),
     ("more", "much"),
     ("most", "much"),
+    ("least", "little"),
     ("further", "far"),
     ("elder", "old"),
-    # ── Words in COCA — noun base forms stay ──
-    ("beer", "bee"),             # known trade-off: ADJ→bee, shortest wins
+    # ── Words in COCA — stay ──
+    ("beer", "beer"),
     ("anger", "anger"),
     ("fiber", "fiber"),
     ("tremendous", "tremendous"),
@@ -77,11 +72,17 @@ from lemmatize import lemmatize, lemmatize_conservative
     ("bad", "bad"),
     ("good", "good"),
     ("much", "much"),
-    # ── Known trade-offs ──
-    ("less", "less"),            # lemminflect: "less" is standalone lemma
-    ("distinguished", "distinguish"),  # needs sentence context for adj
-    ("accomplished", "accomplish"),    # needs sentence context for adj
-    # ── Cross-POS: abode → abide (linguistically correct as past tense) ──
+    ("less", "little"),         # irregular comparative dict
+    # ── Known trade-offs: ADJ channel removed ──
+    ("distinguished", "distinguish"),  # needs sentence context
+    ("accomplished", "accomplish"),
+    ("closest", "closest"),           # regular comparative, not reduced
+    ("fastest", "fastest"),
+    ("happier", "happier"),          # known trade-off
+    ("happiest", "happy"),          # -iest handled by lemminflect VERB
+    ("smallest", "smallest"),
+    ("biggest", "biggest"),
+    # ── Cross-POS: abode → abide (correct as past tense) ──
     ("abode", "abide"),
 ])
 def test_lemmatize(word, expected, coca_set):
@@ -106,6 +107,22 @@ def test_contraction_without_apostrophe(coca_set):
     assert lemmatize("isnt", coca_set) == "be"
 
 
-def test_beer_is_known_tradeoff(coca_set):
-    """Documented: beer→bee. Shortest COCA candidate wins."""
-    assert lemmatize("beer", coca_set) == "bee"
+def test_beer_is_noun_not_bee(coca_set):
+    """beer is a noun, no ADJ channel → no false reduction."""
+    assert lemmatize("beer", coca_set) == "beer"
+
+
+def test_spacy_path(coca_set):
+    """With sentence context, spaCy handles derivational adjectives."""
+    try:
+        import spacy
+        spacy.load("en_core_web_sm")
+    except Exception:
+        pytest.skip("spaCy model not installed")
+    assert lemmatize("distinguished", coca_set,
+                     "He was a distinguished fisherman.") == "distinguished"
+    assert lemmatize("accomplished", coca_set,
+                     "She is an accomplished pianist.") == "accomplished"
+    # spaCy also handles regular comparatives correctly
+    assert lemmatize("closest", coca_set,
+                     "the closest star") == "close"

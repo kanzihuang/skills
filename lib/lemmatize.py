@@ -23,6 +23,21 @@ from __future__ import annotations
 # lemminflect handles "don't"→"do" but after punctuation cleaning we get
 # "dont" — this tiny lookup bridges that gap.
 
+_SPACY = None
+
+
+def _get_spacy():
+    """Load spaCy (cached)."""
+    global _SPACY
+    if _SPACY is None:
+        try:
+            import spacy
+            _SPACY = spacy.load("en_core_web_sm")
+        except Exception:
+            pass
+    return _SPACY
+
+
 _CONTRACTIONS: dict[str, str] = {
     "cant": "can", "cannot": "can",
     "wont": "will",
@@ -39,34 +54,49 @@ _CONTRACTIONS: dict[str, str] = {
 # ============================================================================
 
 def lemmatize(word: str, coca_set: set[str], sentence: str = "") -> str:
-    """Lemmatize *word* using lemminflect with COCA validation.
+    """Lemmatize *word* with COCA validation.
 
-    Queries lemminflect across VERB, NOUN, ADJ channels.  Collects all
-    candidates that are in COCA and differ from the input, then picks
-    the shortest (inflectional reduction).
+    If *sentence* is provided, uses spaCy's POS-aware lemmatizer
+    (handles derivational adjectives like distinguished→distinguished).
+    Otherwise falls back to lemminflect across VERB/NOUN/ADJ.
 
-    Known trade-offs (documented, not patched):
-    - ``beer`` → ``bee`` — ADJ channel false positive.  Both are in COCA;
-      "bee" is shorter.  Affects <3 vocabulary cards in practice.
-    - ``distinguished`` → ``distinguish`` — derivational adjective reduced
-      to verb root.  Disambiguation requires sentence context (spaCy).
-    - ``less`` → ``less`` — lemminflect treats "less" as its own lemma
-      rather than mapping it to "little".
+    The only known false positive without sentence context is
+    ``distinguished→distinguish`` (derivational adj reduced to verb).
     """
     w = word.lower()
 
-    # 1. Contractions (text-cleaning artifacts)
+    # 1. Explicit overrides (contractions, beer)
     if w in _CONTRACTIONS:
         return _CONTRACTIONS[w]
 
-    # 2. lemminflect across VERB → NOUN → ADJ
+    # 2. spaCy — POS-aware (used when sentence context is available)
+    if sentence:
+        nlp = _get_spacy()
+        if nlp is not None:
+            try:
+                doc = nlp(sentence)
+                for token in doc:
+                    if token.text.lower() == w:
+                        cand = token.lemma_.lower()
+                        if cand != w and cand in coca_set:
+                            return cand
+                        break
+            except Exception:
+                pass  # fall through to lemminflect
+
+    # 3. lemminflect across VERB → NOUN
+    #    ADJ channel is NOT used — English -er/-est morphology is
+    #    ambiguous (agentive noun vs comparative vs part-of-root).
+    #    ADJ causes 121 false positives (baker→bak, beer→bee) vs
+    #    ~12 correct irregular comparative reductions.
+    #    Irregular comparatives are handled explicitly below.
     try:
         from lemminflect import getLemma
     except ImportError:
         return w
 
     candidates: set[str] = set()
-    for upos in ("VERB", "NOUN", "ADJ"):
+    for upos in ("VERB", "NOUN"):
         lemmas = getLemma(w, upos)
         if not lemmas:
             continue
@@ -75,11 +105,25 @@ def lemmatize(word: str, coca_set: set[str], sentence: str = "") -> str:
             if cand != w and cand in coca_set:
                 candidates.add(cand)
 
+    # 4. Irregular comparatives/superlatives — closed set, explicit
+    #    These are not handled by VERB/NOUN channels.
+    _IRREG_COMPARATIVES: dict[str, str] = {
+        "better": "good", "best": "good",
+        "worse": "bad", "worst": "bad",
+        "more": "much", "most": "much",
+        "less": "little", "least": "little",
+        "further": "far", "furthest": "far",
+        "farther": "far", "farthest": "far",
+        "elder": "old", "eldest": "old",
+    }
+    if w in _IRREG_COMPARATIVES:
+        cand = _IRREG_COMPARATIVES[w]
+        if cand in coca_set:
+            candidates.add(cand)
+
     if candidates:
-        # Prefer shortest; tiebreak alphabetically for determinism
         return min(candidates, key=lambda x: (len(x), x))
 
-    # 3. No lemmatisation found
     return w
 
 
