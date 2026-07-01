@@ -74,6 +74,13 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 - **JSON output via Python json.dump**: Step 3 JSON output prefers Python `json.dump` over `Write` tool — avoids Unicode quote normalization issues (Write tool may normalize Chinese curly quotes `""` to ASCII `"`, breaking JSON). Python `json.dump` with `ensure_ascii=False` preserves Chinese text correctly. Fallback to Write tool only when translations contain no special Unicode quotes
 - **Batched content generation**: for >20 words, write JSON in batches of ~15-20 words using Python json.dump (preferred) or `Edit` to append to the `words` array. First batch: full JSON skeleton + first batch. Subsequent batches: `Read limit=5` → `Edit` appends new words before `  ],\n  "excluded"`. **Critical**: after pipeline output, first run Step 3.0 to fetch source text and mechanically extract all sentences. Then write JSON with pre-extracted sentences — no recall needed. Batch writing focuses on IPA + definitions + translations only; per-batch ~5-8s, total ~15-30s
 
+## Testing
+
+- **Every bug fix must include a unit test** that reproduces the failure before the fix is applied. Tests live in `vocab-anki/tests/` (pytest, 231 tests).
+- **LLM output quality issues** (definitions, translations, POS classification) are tested via `test_validation.py` — the validator is tested with intentionally bad data simulating historical Claude mistakes. The test verifies the validator catches the error, not that the LLM produces correct output.
+- **Python code bugs** (lemmatization, COCA lookup, chapter parsing) are tested directly with parametrized input/output assertions.
+- Run `cd vocab-anki && .venv/bin/python -m pytest tests/ -v` before committing.
+
 ## Integration
 
 This repo's skills integrate with the `weread-skills` skill (installed from `Tencent/WeChatReading`) for WeRead API access. Skills reuse the same gateway URL, auth header (`Authorization: Bearer $WEREAD_API_KEY`), and flat JSON parameter conventions.
