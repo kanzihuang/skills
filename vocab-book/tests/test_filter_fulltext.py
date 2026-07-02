@@ -119,6 +119,45 @@ class TestBasicFiltering:
         for word in ["dark", "night", "wind", "rain", "sea", "think", "edge"]:
             assert word in lemmas, f"Expected '{word}' to pass COCA check"
 
+    def test_vbg_amod_adjective_kept_as_is(self):
+        """VBG + amod dependency = participial adjective — keep surface form.
+
+        "bewildering" in "the bewildering complexity" is tagged VBG by spaCy
+        but has an amod (adjectival modifier) dependency — it modifies the
+        noun "complexity".  Without the VBG-amod guard, lemminflect's VERB
+        channel would reduce it to "bewilder".
+
+        Regular VBD past-tense forms like "bewildered" must still reduce.
+        """
+        text = (
+            "The bewildering complexity of the problem stunned everyone. "
+            "He bewildered the audience with his rapid-fire questions."
+        )
+        data = _run_filter_json(text)
+        lemmas = {e["lemma"] for e in data["in_coca"]}
+
+        assert "bewildering" in lemmas, (
+            f"VBG-amod adjective 'bewildering' should be kept as its own "
+            f"lemma, got: {sorted(lemmas)}"
+        )
+        assert "bewilder" in lemmas, (
+            f"Regular VBD 'bewildered' should still reduce to 'bewilder', "
+            f"got: {sorted(lemmas)}"
+        )
+
+    def test_vbg_verbal_still_reduces(self):
+        """Verbal VBG ('he was boasting', dep_=ROOT) — reduce normally.
+
+        The VBG-amod guard must NOT block genuine verbal participles.
+        """
+        text = "He was boasting about his achievements all day."
+        data = _run_filter_json(text)
+        lemmas = {e["lemma"] for e in data["in_coca"]}
+        assert "boast" in lemmas, (
+            f"Verbal 'boasting' (dep_=ROOT) should reduce to 'boast', "
+            f"got: {sorted(lemmas)}"
+        )
+
 
 class TestCOCARangeFiltering:
     """Tests for --basic-range filtering."""

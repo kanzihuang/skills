@@ -166,6 +166,19 @@ def main() -> None:
                     if cand in coca_set and cand != surface:
                         lemma = cand
 
+            # Guard: VBG with amod dependency = participial adjective
+            # modifying a noun (e.g. "the bewildering complexity").
+            # spaCy correctly tags the token as VBG (verb form) but the
+            # dependency parse reveals its adjectival role.  Without this
+            # guard, lemminflect reduces it to the verb base ("bewilder")
+            # — losing the adjectival meaning.  Keep the surface form.
+            #
+            # Only amod is guarded: acomp ("is bewildering") is tagged
+            # JJ by spaCy, acl ("the man standing") is a reduced relative
+            # clause, ROOT/xcomp ("he was boasting") is verbal.
+            if token.tag_ == "VBG" and token.dep_ == "amod" and lemma != surface:
+                lemma = surface
+
             lemma_forms.setdefault(lemma, set()).add(surface)
 
     total_raw_words = raw_token_count
