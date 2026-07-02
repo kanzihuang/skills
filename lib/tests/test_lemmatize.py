@@ -42,6 +42,9 @@ def spacy_map():
         "A bee stung him. He forsook his vows. Crammed with food. "
         "He went home. He ran fast. He sat down. They had gone. "
         "He drank beer. His anger grew. The sacred text. "
+        # Derived adjectives — must not be reduced to verb stems
+        "She was alluring and charming. A touching story bored him. "
+        "It was an interesting book. He found her boring and she left. "
     )
     return build_spacy_map(sample)
 
@@ -66,9 +69,16 @@ def spacy_map():
     ("happier", "happy"),
     ("biggest", "big"),
     ("smallest", "smallest"),    # not in sample → fallback
-    # Derivational adjectives
-    ("distinguished", "distinguish"),  # not in sample (canonical) → fallback
-    ("accomplished", "accomplish"),    # same
+    # Derivational adjectives — spaCy tags as ADJ, lemma==surface.
+    # Fix: canonical adjective form stays as-is, not reduced to verb stem.
+    ("distinguished", "distinguished"),    # ADJ in sample, spaCy→canonical
+    ("accomplished", "accomplished"),      # ADJ in sample, spaCy→canonical
+    # Derived -ing/-ed adjectives — must NOT be reduced to verb stems
+    ("alluring", "alluring"),              # ADJ, not inflection of "allure"
+    ("interesting", "interesting"),        # ADJ, not inflection of "interest"
+    ("boring", "boring"),                  # ADJ, not inflection of "bore"
+    ("touching", "touching"),              # ADJ, not inflection of "touch"
+    ("charming", "charming"),              # ADJ, not inflection of "charm"
     # Agentive nouns — NOT reduced
     ("baker", "baker"),
     ("walker", "walker"),

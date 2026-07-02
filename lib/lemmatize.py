@@ -34,8 +34,9 @@ def build_spacy_map(text: str) -> dict[str, str]:
     """Parse *text* with spaCy and return ``{surface_form: lemma}``.
 
     When a word appears in multiple POS (e.g. "running" as verb vs noun,
-    "distinguished" as adj vs verb), majority vote across all occurrences
-    picks the canonical lemma.
+    "distinguished" as adj vs verb), the resolution logic distinguishes
+    between **inflection** (reduce: "running"→"run") and **derivation**
+    (keep: "alluring" ADJ stays "alluring", not reduced to "allure").
 
     Returns empty dict if spaCy or its model is not installed.
     """
@@ -45,9 +46,13 @@ def build_spacy_map(text: str) -> dict[str, str]:
     except Exception:
         return {}
 
-    # Collect all (surface → lemma) pairs with counts
+    # Collect all (surface → lemma) pairs with POS counts.
+    # Track POS distribution to distinguish inflection from derivation:
+    #   - ADJ + lemma==surface → derived adjective, keep surface form
+    #   - VERB + lemma!=surface → regular inflection, reduce
     from collections import Counter
     votes: dict[str, Counter] = {}
+    pos_counts: dict[str, Counter] = {}
 
     chunk_size = 100_000
     for i in range(0, len(text), chunk_size):
@@ -59,13 +64,20 @@ def build_spacy_map(text: str) -> dict[str, str]:
         for token in doc:
             surface = token.text.lower()
             lemma = token.lemma_.lower()
+            pos = token.pos_
             if surface not in votes:
                 votes[surface] = Counter()
+                pos_counts[surface] = Counter()
             votes[surface][lemma] += 1
+            pos_counts[surface][pos] += 1
 
     # Pick the most common lemma for each surface form.
-    # If the winner equals the surface form (word is canonical), don't
-    # include it — callers fall through to COCA check / lemminflect.
+    #
+    # When the winner differs from the surface form (e.g. "running"→"run"),
+    # add it to the result so callers reduce it.  When the winner equals the
+    # surface form, spaCy considers it canonical (e.g. "alluring" ADJ →
+    # lemma "alluring").  We STILL add these as {surface: surface} so the
+    # lemminflect fallback in lemmatize() won't incorrectly re-reduce them.
     result: dict[str, str] = {}
     for surface, counter in votes.items():
         top = counter.most_common()
@@ -74,8 +86,22 @@ def build_spacy_map(text: str) -> dict[str, str]:
         best_count = top[0][1]
         tied = [lemma for lemma, count in top if count == best_count]
         winner = surface if surface in tied else tied[0]
+
+        # Guard: derived adjectives must not be reduced to their verb stems.
+        # When spaCy tags occurrences as ADJ with lemma==surface (e.g.
+        # "alluring" ADJ → lemma "alluring"), the surface form IS the
+        # canonical adjective lemma.  Verb-lemma majority (e.g. "alluring"
+        # VBG → lemma "allure") must not overwrite it.
         if winner != surface:
-            result[surface] = winner
+            pos_counter = pos_counts.get(surface)
+            if pos_counter is not None:
+                dominant_pos = pos_counter.most_common(1)[0][0] if pos_counter else None
+                # ADJ-dominant word where surface form is its own lemma
+                # → derived adjective, not inflection
+                if dominant_pos == "ADJ" and surface in counter:
+                    winner = surface  # override: keep surface form
+
+        result[surface] = winner  # always add — even canonical forms
 
     return result
 
@@ -109,9 +135,14 @@ def lemmatize(
     if w in _CONTRACTIONS:
         return _CONTRACTIONS[w]
 
-    # 2. spaCy map — primary source (POS-aware, zero false positives)
+    # 2. spaCy map — primary source (POS-aware, zero false positives).
+    #    When cand == w, spaCy has determined this is already a canonical
+    #    form (e.g. "alluring" ADJ).  Return immediately — don't let the
+    #    lemminflect fallback re-reduce a derived adjective to its verb stem.
     if spacy_map and w in spacy_map:
         cand = spacy_map[w]
+        if cand == w:
+            return w  # spaCy-declared canonical — no reduction needed
         if cand in coca_set:
             return cand
 

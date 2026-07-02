@@ -63,7 +63,7 @@ Extract vocabulary from any English book's full text, generate Anki flashcard de
 **Scripts (skill-specific):**
 | Script | Purpose |
 |--------|---------|
-| `filter_fulltext.py` | Full-text filter pipeline — spaCy parse → lemmatize → COCA range filter + level annotation. Generates UUID suffix. No AnkiConnect dependency |
+| `filter_fulltext.py` | Full-text filter pipeline — spaCy POS tagging → lemminflect per-channel (ADJ/VERB/NOUN) → COCA range filter + level annotation. spaCy health auto-repair on startup. Generates UUID suffix. No AnkiConnect dependency |
 
 **Shared scripts:** Same `lib/` scripts as vocab-anki.
 
@@ -76,7 +76,7 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 | File | Purpose |
 |------|---------|
 | `coca.py` | BNC/COCA word family lookup (Nation 2017), 3-tier strategy |
-| `lemmatize.py` | Two-tier lemmatization (spaCy primary, lemminflect fallback) |
+| `lemmatize.py` | Two-tier lemmatization (spaCy POS gate, lemminflect fallback). Used by vocab-list; vocab-book uses spaCy per-token POS + lemminflect directly in filter_fulltext.py |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client |
 | `utils.py` | Shared utilities: TTS, lemmatize_word, safe_filename, print_progress |
 | `sync_anki.py` | Main sync orchestrator (uses relative imports from lib package) |
@@ -95,7 +95,8 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 - **Incremental safety**: sync mode only adds, never modifies existing cards.
 - **Graceful degradation**: audio failures don't block card generation.
 - **Filter-first**: all mechanical filtering happens BEFORE Claude generates content.
-- **UUID isolation (vocab-book)**: UUID suffix ensures WordId and audio filenames don't collide with other decks.
+- **POS-gated lemmatization (vocab-book)**: spaCy provides POS tags; lemminflect provides lemmatization. Per-token POS→channel matching (ADJ/VERB/NOUN) — spaCy's lemma output is never used. Proper nouns and derivational adjectives are kept as-is.
+- **Truncate before translate**: sentence truncation (≤150 chars) must complete before DeepL translation. Never translate then truncate — causes sentence/translation mismatch.
 - **bookId bridging (vocab-anki)**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching.
 
 ## Testing

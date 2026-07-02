@@ -84,8 +84,29 @@ def truncate_sentence(sentence: str, max_len: int = 150) -> str:
                 return sentence[:cand_end].rstrip()
 
     # If no natural break found after <b> within limit,
-    # keep the complete sentence — a long grammatical sentence
-    # is better than a fragment (SKILL.md 3.0e rule)
+    # truncate at the last word boundary within max_len.
+    # A clean cut is better than a long sentence whose translation
+    # will later go out of sync after manual shortening.
+    #
+    # Walk the tagged sentence tracking plain-text position to find
+    # the last space that maps to ≤ max_len plain chars and is after <b>.
+    best_tagged_pos = 0
+    plain_pos = 0
+    in_tag = False
+    for idx, ch in enumerate(sentence):
+        if ch == '<':
+            in_tag = True
+        elif ch == '>':
+            in_tag = False
+        elif not in_tag:
+            if ch == ' ' and plain_pos <= max_len and idx > b_end:
+                best_tagged_pos = idx
+            plain_pos += 1
+
+    if best_tagged_pos > b_end:
+        return sentence[:best_tagged_pos].rstrip()
+
+    # Absolute last resort: keep sentence as-is (should be rare)
     return sentence
 
 

@@ -36,10 +36,58 @@ if _REPO_ROOT not in sys.path:
 
 from lib.coca import (load_coca, in_coca,                         # noqa: E402
                          get_word_level, load_level_range)
-from lib.lemmatize import lemmatize, build_spacy_map               # noqa: E402
+from lemminflect import getLemma                                     # noqa: E402
 
 
 # ── main pipeline ───────────────────────────────────────────────────────────
+
+def _check_spacy() -> bool:
+    """Verify spaCy + model are functional.  Try auto-repair if broken."""
+    try:
+        import spacy  # noqa: F401
+    except ImportError:
+        print("Error: spaCy not installed. Run: pip install spacy", file=sys.stderr)
+        return False
+
+    try:
+        spacy.load("en_core_web_sm")
+        return True
+    except Exception:
+        pass
+
+    # Model missing or dependency broken — try auto-repair
+    print("[warn] spaCy model/dependency missing, attempting auto-repair...", file=sys.stderr)
+    import subprocess
+    venv_python = sys.executable
+
+    # 1. Install click (common missing dep that breaks spacy import)
+    try:
+        subprocess.run(
+            [venv_python, "-m", "pip", "install", "-q", "click"],
+            check=True, capture_output=True, timeout=60,
+        )
+    except Exception:
+        pass
+
+    # 2. Download model
+    try:
+        subprocess.run(
+            [venv_python, "-m", "spacy", "download", "en_core_web_sm"],
+            check=True, capture_output=True, timeout=120,
+        )
+    except Exception:
+        pass
+
+    # Final check
+    try:
+        spacy.load("en_core_web_sm")
+        print("[ok] spaCy auto-repair succeeded", file=sys.stderr)
+        return True
+    except Exception as e:
+        print(f"FATAL: spaCy still broken after repair attempt: {e}", file=sys.stderr)
+        print("Cannot continue — POS-aware lemmatization is required.", file=sys.stderr)
+        return False
+
 
 def main() -> None:
     # -- parse CLI args -------------------------------------------------------
@@ -62,6 +110,10 @@ def main() -> None:
         else:
             i += 1
 
+    # -- pre-flight: verify spaCy is functional --------------------------------
+    if not _check_spacy():
+        sys.exit(1)
+
     # -- read stdin -----------------------------------------------------------
     text = sys.stdin.read()
     if not text.strip():
@@ -70,24 +122,53 @@ def main() -> None:
 
     coca_set = load_coca()
 
-    # Build spaCy lemma map from full text (run once, POS-aware)
-    spacy_map = build_spacy_map(text)
-
     # Generate UUID suffix for WordId/audio namespace isolation
     suffix = uuid.uuid4().hex[:12]
 
-    # -- tokenize & lemmatize -------------------------------------------------
-    # lemma_forms:  lemma → set of surface forms found in text
+    # ── POS → lemminflect channel mapping ────────────────────────────────────
+    # spaCy provides POS tags; lemminflect does the actual lemmatization.
+    # Each token's POS determines which lemminflect channel to use.
+    # ADJ, ADV, PROPN, ADP etc → keep surface form (no lemmatization needed).
+    _POS_CHANNEL: dict[str, str] = {"VERB": "VERB", "NOUN": "NOUN"}
+    _TAG_CHANNEL: dict[str, str] = {
+        "JJR": "ADJ", "JJS": "ADJ",   # comparative/superlative adjectives
+        "RBR": "ADJ", "RBS": "ADJ",   # comparative/superlative adverbs
+    }
+
+    # ── tokenize & lemmatize (spaCy per-token) ───────────────────────────────
+    import spacy
+    nlp = spacy.load("en_core_web_sm")
+
     lemma_forms: dict[str, set[str]] = {}
+    raw_token_count = 0
 
-    all_words = set(re.findall(r"[a-zA-Z]{2,}", text.lower()))
-    for w in all_words:
-        lemma = lemmatize(w, coca_set, spacy_map)
-        if lemma not in lemma_forms:
-            lemma_forms[lemma] = set()
-        lemma_forms[lemma].add(w)
+    chunk_size = 100_000
+    for i in range(0, len(text), chunk_size):
+        doc = nlp(text[i:i + chunk_size])
+        for token in doc:
+            if not token.is_alpha or len(token.text) < 2:
+                continue
+            raw_token_count += 1
+            surface = token.text.lower()
 
-    total_raw_words = len(re.findall(r"[a-zA-Z]{2,}", text.lower()))
+            # Which lemminflect channel?
+            channel = _TAG_CHANNEL.get(token.tag_)  # comparatives first
+            if channel is None:
+                channel = _POS_CHANNEL.get(token.pos_)
+
+            if channel is None:
+                lemma = surface  # ADJ, ADV, ADP, PROPN, … — keep as-is
+            else:
+                lemma = surface
+                lemmas = getLemma(surface, channel)
+                if lemmas:
+                    cand = lemmas[0].lower()
+                    if cand in coca_set and cand != surface:
+                        lemma = cand
+
+            lemma_forms.setdefault(lemma, set()).add(surface)
+
+    total_raw_words = raw_token_count
     total_lemmas = len(lemma_forms)
 
     # -- COCA frequency range filtering ---------------------------------------

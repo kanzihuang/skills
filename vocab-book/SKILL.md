@@ -91,8 +91,12 @@ cat /tmp/<safe_title>-full.txt | \
 ```
 
 脚本内流水线：
-1. 分词：`re.findall(r"[a-zA-Z]{2,}", text)`
-2. 词形还原：spaCy 全文 parse → `{surface→lemma}` + lemminflect fallback
+1. spaCy 健康检查：验证 spaCy + `en_core_web_sm` 可用，失败自动修复，修复失败则终止
+2. 分词 + 词形还原：spaCy per-token POS 标注 → lemminflect 按 POS 通道还原
+   - ADJ 比较级/最高级 (`JJR/JJS/RBR/RBS`) → lemminflect ADJ 通道
+   - VERB (`VB*`) → lemminflect VERB 通道
+   - NOUN (`NN*`) → lemminflect NOUN 通道
+   - 其他 POS (ADJ/ADV/PROPN/…) → 保持原形
 3. COCA 范围过滤 + 等级标注（`coca_level`: 1-25）
 4. 生成 UUID 后缀（`uuid.uuid4().hex[:12]`），写入 JSON `suffix` 字段
 5. JSON 输出（含 `in_coca[]`、`excluded[]`、`suffix`、`summary`）
@@ -118,6 +122,7 @@ cat /tmp/<safe_title>-full.txt | \
 |------|------|
 | 无法获取全文 | 告知用户，建议提供文本文件 |
 | 源文本不可用 | 该批次所有单词跳过，不生成卡片 |
+| spaCy 不可用 | 自动修复（安装依赖+下载模型），修复失败则终止任务 |
 | 脚本运行失败 | 检查依赖安装、网络连接 |
 | 音频生成失败 | 降级为纯文本卡片 |
 | AnkiConnect 不可达 | 提示启动 Anki 并安装插件 |
