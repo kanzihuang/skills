@@ -25,51 +25,14 @@ def split_sentences(text: str) -> list[str]:
     # Split on sentence-ending punctuation followed by space and capital
     # or opening quote.  "“"=“, ‘=' are curly quotes common
     # in books; without them, dialogue after a period isn't split.
-    # « (guillemet) is added for non-English metadata like
-    # «The Little Prince».
-    sentences = re.split(r'(?<=[.!?"”])\s+(?=[A-Z"“‘’“«])', text)
+    sentences = re.split(r'(?<=[.!?"”])\s+(?=[A-Z"“‘’“])', text)
     return [s.strip() for s in sentences if s.strip()]
-
-
-def _is_metadata(sentence: str) -> bool:
-    """Return True if *sentence* looks like book metadata, not narrative text.
-
-    Gutenberg / Internet Archive texts often include chapter headers,
-    author names, and title markers that aren't real sentences.  These
-    produce garbage cards when matched as vocabulary sentences.
-    """
-    if not sentence:
-        return True
-
-    # Cyrillic, Greek, or other non-Latin scripts — book metadata
-    if re.search(r'[Ѐ-ӿͰ-Ͽ]', sentence):
-        return True
-
-    # Guillemets — non-English title markers like «The Little Prince»
-    if re.search(r'[«»]', sentence):
-        return True
-
-    # Bare numeric chapter/page markers: "33", "Chapter 1", "CHAPTER I"
-    stripped = sentence.strip()
-    if re.match(r'^\d{1,4}$', stripped):
-        return True
-    if re.match(r'^(Chapter|CHAPTER|chapitre)\s+[\dIVX]+\.?$', stripped):
-        return True
-
-    # Lines that are >40% non-word characters (garbled OCR, tables, etc.)
-    alpha = sum(1 for c in sentence if c.isalpha())
-    if len(sentence) > 0 and alpha / len(sentence) < 0.4:
-        return True
-
-    return False
 
 
 def find_best_sentence(text: str, word_forms: list[str], lemma: str) -> str | None:
     """Find the best sentence containing any of the word's surface forms.
 
     Tries each form, picks the shortest sentence that contains it.
-    Metadata lines (chapter headers, author names, page numbers) are
-    skipped — they are not valid vocabulary sentences.
     """
     sentences = split_sentences(text)
 
@@ -82,8 +45,6 @@ def find_best_sentence(text: str, word_forms: list[str], lemma: str) -> str | No
     for form in word_forms:
         pattern = re.compile(r'\b' + re.escape(form) + r'\b', re.IGNORECASE)
         for sent in sentences:
-            if _is_metadata(sent):
-                continue
             m = pattern.search(sent)
             if m:
                 matched_text = m.group(0)
@@ -198,6 +159,20 @@ def main():
 
     with open(text_path) as f:
         text = f.read()
+
+    # Reject non-English source texts.  Bilingual editions contain
+    # chapter headers, author names, and title markers in Cyrillic /
+    # guillemet that produce garbage sentences.  Require English-only
+    # source text — the SKILL.md and SHARED_WORKFLOW.md constrain
+    # source selection to English editions.
+    if re.search(r'[Ѐ-ӿ«»]', text):
+        print(
+            "ERROR: Source text contains Cyrillic or guillemet (non-English) "
+            "characters.  Use an English-only edition — bilingual texts "
+            "produce contaminated sentences.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Strip title page metadata - start from "He was an old man..."
     story_start = text.find('He was an old man')

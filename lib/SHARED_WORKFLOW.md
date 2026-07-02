@@ -24,6 +24,8 @@ wc -c /tmp/<book>-full.txt
 - 全部失败 → WebFetch 逐章拉取
 - 验证：`head -c 500` 确认是书中文本
 
+**源文本语言要求**：必须使用英文原版。`match_sentences.py` 会拒绝含西里尔字母或 guillemet（«»）的文本——双语版源文本中的非英文元数据会污染句子匹配结果。搜索结果中优先选 Project Gutenberg（英文版）、Standard Ebooks、Internet Archive（英文原版）。
+
 ### 3.0c. 句子匹配
 
 对每个待生成单词，在源文本中搜索（大小写不敏感）→ 提取所在完整句子。
@@ -32,8 +34,6 @@ wc -c /tmp/<book>-full.txt
 - 匹配到 → 用 `<b>` 包裹目标词
 - 未匹配到 → 标记 `⚠️`，回退回忆模式
 - **全文模式无章节信息** → 全文本搜索
-
-**元数据自动过滤**：`match_sentences.py` 的 `_is_metadata()` 自动跳过含西里尔字母、guillemet（«»）、章节号标记、乱码字符的句子。Gutenberg / Internet Archive 文本中的章首元数据不会污染匹配结果。
 
 ### 3.0c-1. 句子匹配校验
 
@@ -261,7 +261,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/lib/sync_anki.
 2. Word 被截断（`lavend`/`silv`/`weath` 等）
 3. Word 大小写异常（`Amen`/`Champion`/`Dick` 等专有名词泄漏）
 4. 翻译与例句语义一致（英文句子和中文翻译是否对应同一内容）
-5. 例句不含元数据杂质（西里尔字母、guillemet、章节号等）
+5. 例句来自英文原版书（不含西里尔字母、guillemet、章节号等非英文元数据——源文本在匹配阶段已拒绝非英文内容）
 
 审计命令：
 ```bash
@@ -274,6 +274,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/lib/sync_anki.
 
 | 类型 | 检查项 | 级别 |
 |------|--------|------|
+| 源文本 | 含西里尔/guillemet → 拒绝（要求英文原版） | 硬错误 |
 | 句子 | `<b>` 标签与 word 字段一致 | 硬错误 |
 | 句子 | 目标词实际出现在句中 | 硬错误 |
 | 句子 | 长度 ≤150 字符 | 硬错误 |
