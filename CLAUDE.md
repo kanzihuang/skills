@@ -30,65 +30,100 @@ Generate weekly work reports from daily reports. Categorizes similar tasks acros
 
 ### vocab-anki (`vocab-anki/`)
 
-Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book highlights.
+Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book highlights. **Highlight mode only** — for full-text extraction use vocab-book.
 
 **Architecture:** Claude ↔ Python two-phase design:
-- **Claude**: knowledge work — extracts sentences from web-sourced book text (Step 3.0), provides Chinese definitions, translations, and IPA
+- **Claude**: knowledge work — extracts sentences from web-sourced book text, provides Chinese definitions, translations, and IPA
 - **Python**: mechanical work — lemmatizes words, generates word/sentence TTS via Edge TTS, syncs to Anki via AnkiConnect
 
-**Scripts:**
+**Scripts (skill-specific):**
 | Script | Purpose |
 |--------|---------|
-| `utils.py` | Shared utilities: lemmatize_word (lemminflect VERB+NOUN → ADJ/ADV with spaCy POS gate for comparatives), edge_tts_bytes/file, safe_filename, constants |
-| `sync_anki.py` | Incremental sync to Anki via AnkiConnect (only adds new words, preserves learning progress, per-word timeout with `--word-timeout`, triggers AnkiWeb sync after cards added unless `--no-ankiweb-sync`). Uses JSON `lemma` field as override for `lemmatize_word()`. Validates entries before sync: sentence contains target word, IPA format, definition sanity; hard errors block sync, soft warnings print to stderr. **Full-text mode**: auto-bands words into hierarchical decks (`Book::COCA X-Y`) via `compute_bands()` — greedy partition of COCA levels into ≤5 contiguous bands with ≥100 words each. Adjustable via `--max-bands` and `--min-band-size` |
-| `ankiconnect.py` | AnkiConnect JSON-RPC client library |
-| `filter_pipeline.py` | Combined filter pipeline (Step 1d+1e+1f merged): clean punctuation/case → lemmatize → Anki dedup → COCA check in a single Python invocation. Strips sentence-boundary punctuation (`vexed.`→`vexed`) and normalizes case (`Clad`→`clad`) before processing — eliminates Claude round-trip data transfer, ~0.5s vs previous ~33s. Anki dedup checks surface forms first then lemmas — prevents re-processing words whose surface form already exists as a card (e.g. `blundering` card with WordId `blundering_{bookId}` won't be missed when pipeline lemmatizes to `blunder` and looks for `blunder_{bookId}`) |
-| `filter_fulltext.py` | Full-text mode filter pipeline — spaCy parse → chapter segmentation → lemmatize → COCA range filter → Anki dedup. JSON output includes `coca_level` (1-25) for each word, powering `sync_anki.py` auto-banding |
-| `lib/data/bnc_coca/basewrd1.txt–basewrd25.txt` | BNC/COCA word family lists by Nation (2017) — 25 levels × 1000 families each, Bauer & Nation Level 6 affix criteria. Replaced corrupted COCA word-form frequency data. Provides `word→level` (1-25) for tiered frequency filtering and `word→headword` for cross-family validation in `sync_anki.py`. Frequency lookup via `lib/coca.py` with three-tier strategy: direct set → lemminflect → suffix stripping |
-| `scripts/match_sentences.py` | Step 3.0 mechanical sentence matching — reads `filter_fulltext.py` JSON output + source text, extracts one sentence per word with `<b>` tagging. Enforces SKILL.md 3.0e truncation rules (never cut from start, never produce fragments). Replaces Claude manual recall with mechanical matching |
-| `scripts/translate_deepl.py` | Step 3.0f DeepL translation — reads vocab-anki JSON, strips `<b>` tags, batch-translates sentences via DeepL API (free tier), writes translations back. Eliminates Claude translation hallucination and post-truncation misalignment. Requires `DEEPL_API_KEY` env var |
-| `scripts/audit_deck.py` | Deck quality audit — uses `lemmatize_word()` to check every card's Word vs `<b>` text consistency (no hand-rolled rules), plus IPA/definition/translation presence and sentence length. Usage: `python scripts/audit_deck.py "deck name"` |
+| `filter_pipeline.py` | Combined filter pipeline — clean punctuation/case → lemmatize → Anki dedup → COCA check |
 
-**Dependencies:** `weread-skills` (for highlight data via WeRead API), Python packages: `edge-tts`, `lemminflect`
+**Shared scripts (in `lib/`):**
+| Script | Purpose |
+|--------|---------|
+| `lib/sync_anki.py` | Incremental sync to Anki via AnkiConnect |
+| `lib/ankiconnect.py` | AnkiConnect JSON-RPC client library |
+| `lib/utils.py` | Shared utilities: lemmatize_word, edge_tts_bytes/file, safe_filename, print_progress |
+| `lib/scripts/match_sentences.py` | Mechanical sentence matching with `<b>` tagging |
+| `lib/scripts/translate_deepl.py` | DeepL batch translation |
+| `lib/scripts/audit_deck.py` | Deck quality audit |
+| `lib/SHARED_WORKFLOW.md` | Shared workflow steps (3.0–4) with vocab-book |
 
-**Design principles:**
-- **Separation of concerns**: knowledge work (Claude) vs mechanical work (Python)
-- **Filter-first**: all mechanical filtering (Anki dedup, COCA frequency check) happens BEFORE Claude generates content, avoiding wasted effort
-- **Anki-before-COCA**: Anki dedup runs before COCA frequency check. Words already in Anki are preserved regardless of COCA frequency changes; COCA only filters truly new words
-- **Surface-form-aware dedup**: Anki dedup checks both surface forms AND lemmas against existing cards. Surface forms first (catches cases where sync_anki wrote a derivational adj like `blundering` directly as the WordId), then lemmas (existing behaviour for inflectional forms like `pondered`→`ponder`). Same-book same-surface-form can only have one POS, no false positives
-- **JSON lemma override**: `lemmatize_word()` uses VERB+NOUN channels first, then ADJ+ADV for comparatives (gated by spaCy POS — nouns like `baker`/`walker` are not falsely reduced). It treats `-ing`/`-ed` forms as verb participles, including derivational adjectives (`blundering` adj.→`blunder` v., `conceited` adj.→`conceit` n.). Claude determines the correct lemma from context: inflectional forms reduce to root (`pondered`→`ponder`), derivational adjectives keep their surface form (`blundering`→`blundering`). The JSON `lemma` field overrides `lemmatize_word()` in `sync_anki.py`
-- **Claude quality self-review**: per-batch checklist after writing JSON — lemma correctness (inflectional vs derivational), IPA alignment to lemma, definition POS alignment to contextual usage, word field consistency with `<b>` text, and semantic-context alignment (verify definition/translation captures the correct sense for the specific sentence, not the most common dictionary sense). Catch and fix errors before proceeding to next batch
-- **Sentence verification (Step 3.0c-1)**: after mechanically matching a sentence from source text, confirm the target word's surface form actually appears in the sentence (case-insensitive). If source text is unavailable → skip the batch, do not generate cards
-- **Derivational adj BNC/COCA review**: `lemmatize_word` reduces derivational adjectives to roots that pass COCA (`blundering`→`blunder`). Claude checks: if the word is a derivational adj and its surface form is not directly in BNC/COCA 25000 word families → exclude with reason "派生形容词，不在 BNC/COCA 25000 词族中"
-- **Card alignment**: card Word = lemma → IPA corresponds to lemma → audio reads lemma → definition reflects contextual usage. All four aligned. `word` field stores surface form solely for `<b>` tag matching and sentence validation
-- **Two-tier lemmatization**: `filter_fulltext.py` calls `build_spacy_map(text)` once to parse the full book text with spaCy (POS-aware, handles ALL irregular/regular/comparative/derivational forms correctly). The resulting `{surface → lemma}` map is passed to `lemmatize()` for O(1) lookup. When spaCy is unavailable, `lemmatize()` falls back to `lemmatize_word()` (lemminflect VERB+NOUN → ADJ/ADV with spaCy POS gate for comparatives, COCA validation). `sync_anki.py` has its own `resolve_lemma()` using lemminflect + COCA gating + spaCy sentence-level POS check for derivational adjectives. No hand-maintained IRREG dict — everything delegated to professional libraries.
-- **bookId bridging**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching without relying on book titles (which may differ between Chinese/English).
-- **Source-truth-only sentences**: never fabricate a sentence and attribute it to a specific book. Book sentences must come from mechanically matched source text (Step 3.0). If source text is unavailable → skip the batch. Claude's memory for book sentences is unreliable — audit of The Old Man and the Sea deck (2026-06-30) found **245/327 (75%)** sentences were confabulated yet grammatically and thematically plausible. The stroke card had "He took a stroke with the oar" — stroke only appears as "strokes" in the book, describing a tuna's tail, not rowing
-- **Single confirmation**: only one user prompt at the end (before sync); intermediate steps report progress without asking
-- **Cross-book independence**: same word from different books coexists as independent cards via WordId
-- **IPA display-only audio**: Claude provides IPA for card display; IPA corresponds to lemma (card display word), not surface form. Word audio uses Edge TTS reading the lemma text — naturally aligned with IPA since both target the lemma. SSML `<phoneme>` not supported (`edge_tts.Communicate` internally `escape()`s input then wraps in its own `<speak>` via `mkssml()`, causing external SSML to be double-escaped). IPA missing → skip word audio gracefully
-- **Graceful degradation**: audio failures don't block card generation
-- **Incremental safety**: sync mode only adds, never modifies existing cards
-- **Source text retrieval (Step 3.0)**: sentences are extracted from web-sourced book text via mechanical word matching — no longer rely on Claude recall. Eliminates fabricated sentences (e.g., attributing a word to the wrong passage). Extracted sentences must be grammatically complete (subject + finite verb); noun phrase fragments are rejected. Truncation for >150 char sentences preserves main clause integrity — never produces fragments. Falls back to recall mode only when source text is unavailable, with explicit disclaimer in Step 4 summary
-- **Per-word timeout**: each word has a 30s timeout (`--word-timeout` flag); on timeout the word is skipped and sync continues; 3 consecutive timeouts abort the sync with a summary of failed words
-- **Text progress output**: plain text progress `i/N label` (in-place `\r` on real TTY, line-by-line when piped/captured; no `-v` needed); no graphical bar characters since Claude Code can't render `\r`; verbose mode adds audio source details and byte counts; media upload progress shown in same format
-- **Background execution for large syncs**: when word count ≥30, run sync in background (`run_in_background: true`) with `python -u` (unbuffered) to avoid blocking the conversation for several minutes; read the output file after completion to show results
-- **Auto deck naming**: deck name auto-derived as `{book_title} ({book_author})`
-- **Auto frequency banding (full-text mode)**: `sync_anki.py` counts words per COCA level (1-25), greedily partitions into ≤5 contiguous bands with ≥100 words each, and creates hierarchical Anki decks. Naming: parent = `{Title} ({Author}) - 分级词汇`, children = `{Title} ({Author}) - COCA X-Y` (full path: `parent::child`). Cuts at natural gaps (non-consecutive levels) and merges undersized bands into smaller neighbors. Falls back to single flat deck when total words <100 or only one band. Dedup is per-sub-deck (not cross-deck). Highlight mode: `{Title} ({Author})` — single flat deck, no banding. Adjustable via `--max-bands` (default 5) and `--min-band-size` (default 100)
-- **Single-pass filter pipeline**: Step 1 runs `filter_pipeline.py` — one Python invocation that pipelines lemmatize → Anki dedup → COCA check. All data flows through stdin/stdout between processes; Claude never carries tab-separated word lists in echo commands. Eliminates the prior ~33s Claude round-trip overhead (capture output → regenerate as echo → re-parse) down to ~0.5s
-- **JSON output via Python json.dump**: Step 3 JSON output prefers Python `json.dump` over `Write` tool — avoids Unicode quote normalization issues (Write tool may normalize Chinese curly quotes `""` to ASCII `"`, breaking JSON). Python `json.dump` with `ensure_ascii=False` preserves Chinese text correctly. Fallback to Write tool only when translations contain no special Unicode quotes
-- **Batched content generation**: for >20 words, write JSON in batches of ~15-20 words using Python json.dump (preferred) or `Edit` to append to the `words` array. First batch: full JSON skeleton + first batch. Subsequent batches: `Read limit=5` → `Edit` appends new words before `  ],\n  "excluded"`. **Critical**: after pipeline output, first run Step 3.0 to fetch source text and mechanically extract all sentences. Then write JSON with pre-extracted sentences — no recall needed. Batch writing focuses on IPA + definitions + translations only; per-batch ~5-8s, total ~15-30s
+**Dependencies:** `weread-skills`, Python: `edge-tts`, `lemminflect`
+
+### vocab-book (`vocab-book/`)
+
+Extract vocabulary from any English book's full text, generate Anki flashcard decks with BNC/COCA frequency banding. **Does NOT depend on WeRead.** UUID suffix isolates cards from other decks.
+
+**Architecture:** Claude ↔ Python two-phase design (same as vocab-anki).
+
+**Scripts (skill-specific):**
+| Script | Purpose |
+|--------|---------|
+| `filter_fulltext.py` | Full-text filter pipeline — spaCy parse → lemmatize → COCA range filter + level annotation. Generates UUID suffix. No AnkiConnect dependency |
+
+**Shared scripts:** Same `lib/` scripts as vocab-anki.
+
+**Dependencies:** Python: `edge-tts`, `lemminflect`, `spacy`
+
+### lib (`lib/`)
+
+Shared Python package and data files used by vocab-anki, vocab-book, and vocab-list.
+
+| File | Purpose |
+|------|---------|
+| `coca.py` | BNC/COCA word family lookup (Nation 2017), 3-tier strategy |
+| `lemmatize.py` | Two-tier lemmatization (spaCy primary, lemminflect fallback) |
+| `ankiconnect.py` | AnkiConnect JSON-RPC client |
+| `utils.py` | Shared utilities: TTS, lemmatize_word, safe_filename, print_progress |
+| `sync_anki.py` | Main sync orchestrator (uses relative imports from lib package) |
+| `scripts/` | Shared entry-point scripts (match_sentences, translate_deepl, audit_deck) |
+| `data/bnc_coca/` | Nation (2017) word family lists (25 levels × ~1000 families) |
+| `data/cmudict.dict` | CMU Pronouncing Dictionary (135K entries) |
+| `tests/` | Shared pytest suite (~237 tests) for lib modules |
+| `SHARED_WORKFLOW.md` | Shared Claude workflow steps (3.0–4) referenced by both SKILL.md files |
+
+## Shared Design Principles
+
+See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principles:
+
+- **Separation of concerns**: Claude does knowledge work (sentences, definitions, translations, IPA), Python does mechanical work (lemmatization, TTS, Anki sync).
+- **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 3.0). No fabricated or dictionary sentences. Source text unavailable → skip the batch.
+- **Incremental safety**: sync mode only adds, never modifies existing cards.
+- **Graceful degradation**: audio failures don't block card generation.
+- **Filter-first**: all mechanical filtering happens BEFORE Claude generates content.
+- **UUID isolation (vocab-book)**: UUID suffix ensures WordId and audio filenames don't collide with other decks.
+- **bookId bridging (vocab-anki)**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching.
 
 ## Testing
 
-- **Every bug fix must include a unit test** that reproduces the failure before the fix is applied. Tests live in `vocab-anki/tests/` (pytest, 251 tests).
-- **LLM output quality issues** (definitions, translations, POS classification) are tested via `test_validation.py` — the validator is tested with intentionally bad data simulating historical Claude mistakes. The test verifies the validator catches the error, not that the LLM produces correct output.
-- **Python code bugs** (lemmatization, COCA lookup, chapter parsing) are tested directly with parametrized input/output assertions.
-- Run `cd vocab-anki && .venv/bin/python -m pytest tests/ -v` before committing.
+- **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
+- **Shared tests** live in `lib/tests/` (pytest, 237 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 23 tests), `vocab-book/tests/` (filter_fulltext, 10 tests).
+- **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
+- **Python code bugs** are tested directly with parametrized input/output assertions.
+- Run all tests before committing:
+  ```bash
+  cd lib && ../vocab-anki/.venv/bin/python -m pytest tests/ -v && \
+  cd ../vocab-ani && .venv/bin/python -m pytest tests/ -v && \
+  cd ../vocab-book && ../vocab-anki/.venv/bin/python -m pytest tests/ -v
+  ```
 
 ## Integration
 
-This repo's skills integrate with the `weread-skills` skill (installed from `Tencent/WeChatReading`) for WeRead API access. Skills reuse the same gateway URL, auth header (`Authorization: Bearer $WEREAD_API_KEY`), and flat JSON parameter conventions.
+- `vocab-anki` integrates with `weread-skills` (Tencent/WeChatReading) for WeRead API access.
+- `vocab-book` has no external skill dependencies.
+- Both reuse the shared `lib/` package for COCA lookup, lemmatization, AnkiConnect, and sync.
+
+## Package Skills
+
+```bash
+bash scripts/package_skill.sh [output_dir]
+```
+Creates self-contained zip files for each skill, embedding required `lib/` modules.
 
 ## License
 

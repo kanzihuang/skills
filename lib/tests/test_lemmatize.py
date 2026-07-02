@@ -7,7 +7,7 @@ No hardcoded word lists.
 """
 
 import pytest
-from lemmatize import lemmatize, lemmatize_conservative, build_spacy_map
+from lib.lemmatize import lemmatize, lemmatize_conservative, build_spacy_map
 
 
 # ── Fixture: build spacy_map from a sample of The Old Man and the Sea ──

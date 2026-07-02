@@ -5,10 +5,9 @@ description: >
   English book highlights. Syncs directly to Anki via AnkiConnect plugin.
   Use when user wants to create Anki cards from WeRead highlights, e.g.
   "/vocab-anki The Little Prince" or "为这本书的划线生词生成 Anki 牌组".
-  Also supports full-text mode: extract vocabulary from entire book text
-  with COCA frequency range and chapter range filtering.
   Integrates with weread-skills for data; Claude does knowledge work
   (sentences, translations), Python scripts handle audio + sync.
+  For full-text vocabulary extraction, use vocab-book instead.
 ---
 
 # vocab-anki — 英文书词汇 Anki 牌组生成
@@ -16,17 +15,11 @@ description: >
 将微信读书英文原版书的划线生词（或全书词汇）通过 AnkiConnect 直接同步到 Anki，嵌入发音音频。
 自动对比已有卡片，仅添加新词，保留学习进度不受影响。
 
-## 两种模式
+## 模式
 
-| 模式 | 输入 | 触发词 | 适用场景 |
-|------|------|--------|----------|
-| **划线模式**（默认） | 微信读书划线 | "/vocab-anki 书名"、"划线生词" | 从已读划线的生词制作卡片 |
-| **全文模式** | 图书原文 | "全文制作"、"全量词汇"、"按词族等级"、"词频范围"、"指定章节"、"全文" | 按词族等级/章节范围从全书提取词汇 |
+**仅划线模式** — 从微信读书英文原版书的划线生词制作 Anki 卡片。
 
-全文模式额外支持：
-- **BNC/COCA 词族等级**：自然语言描述（如 "词族等级 3-10"、"排除前3级高频词族"），不明确时提问确认
-- **章节范围**：先展示检测到的章节列表，用户选择（如 `1-5,7,10-12`）
-- **Anki 去重范围**：必须提问确认——仅排除同本书已有卡片，还是排除本技能制作的所有牌组中的单词
+> 如需从全书全文提取词汇（全文模式），请使用 `vocab-book` 技能。
 
 ## 前置条件
 
@@ -176,158 +169,22 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 
 > Anki 去重先于 COCA：已在牌组中的词直接保留，不受 COCA 频次影响。COCA 仅对真正的新词做筛。所有检查均为本地/本地网络查询（~0.5s），无需缓存。
 
----
+## 共享工作流（Step 3.0–4）
 
-## 全文模式工作流
+> Steps 3.0（句子匹配）、3.0f（DeepL 翻译）、3（生成内容）、3.5（预下载音频）、4（同步）与 vocab-book 共享。
+> **详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`**——Claude 执行到对应步骤时必须 Read 该文件获取完整指令。
 
-> 当用户使用以下关键词时，跳过划线模式 Step 1，走以下全文模式分支：
-> **"全文制作"、"全量词汇"、"全文"、"按词族等级"、"词频范围"、"指定章节"、"排除前X级词族"、"词族等级 X-Y"、"全部生词"**
->
-> 仅含 "生成牌组"、"制作卡片"、"Anki" 等词而不含上述关键词 → 走划线模式。
-> 全文模式的其他步骤（Step 3.0、Step 3、Step 3.5、Step 4）与划线模式相同。
+共享步骤中的关键路径（`<skill_dir>/lib/` 前缀）：
+- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配
+- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译
+- `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步
+- `<skill_dir>/lib/scripts/audit_deck.py` — 同步后审计
 
-### Step 1-FT.0: 需求确认
-
-在获取数据前，确认用户未明确表述的需求：
-
-| 参数 | 默认 | 何时提问 |
-|------|------|---------|
-| BNC/COCA 词族等级 | 无限制（全部 25000 词族） | 用户未指定范围，或表述模糊（如 "中频词"） |
-| 章节范围 | 全部章节 | 用户未指定，或表述模糊 |
-| Anki 去重范围 | **必须提问确认** | 用户未明确说明时显式提问；提及 "所有牌组"/"全局" → `--anki-dedup all-decks`；提及 "仅本书"/"同书" → `--anki-dedup same-book` |
-
-**COCA 范围意图解析：**
-
-> **注意**：`--basic-range` 现已改用 Nation BNC/COCA 词族等级（1-25），不再使用 COCA 词形排名。Level 1 = 最高频 1000 词族（the/be/and…），Level 25 = 最低频 1000 词族。
-
-| 用户表达 | 解析结果 | `--basic-range` |
-|----------|---------|-----------------|
-| "等级 3-10" | Level 3-10 | `3-10` |
-| "排除前3级" | 排除 Level 1-3 | `4-25` |
-| "5级以上" | Level 5-25 | `5-25` |
-| "中频词" / "中等难度" | 大致 Level 4-10 | **提问确认具体范围** |
-| 未提及 | 无范围限制 | 省略 `--basic-range` |
-
-> 1-based level: level 1 = 最高频。两端均 inclusive。
-
-### Step 1-FT.1: 获取数据（并行两步）
-
-**与划线模式共享 Step 0、Step 1a-1b**（bookId 桥接、搜索/路由、bookInfo）。
-
-并行执行：
-
-**(a) 获取 WeRead 章节列表：**
-
-```json
-{"api_name": "/book/chapterinfo", "bookId": "<bookId>", "skill_version": "1.0.3"}
-```
-
-目的：获取完整章节层级。返回的 `chapters[]` 含 `level` 字段——level=1 是封面/版权/书名页等元数据，level=2 是实际内容章节。`updated[]` 划线数据在全文模式不使用。
-
-> **注意**：`/book/bookmarklist` 的 `chapters[]` 仅返回 level-1 章节，会漏掉嵌套的实际内容章节。**全文模式必须用 `/book/chapterinfo`**。
-
-**(b) 获取全文：**
-
-与 Step 3.0a-3.0b 相同：WebSearch → curl 下载 → 验证（`head -c 500` 确认是书的内容，文件 >20KB）。
-
-```bash
-curl -sL --max-time 60 '<URL>' -o /tmp/<safe_title>-full.txt
-```
-
-> 全文下载在此步骤完成，后续 Step 3.0 即可直接使用，无需重复获取。
-
-### Step 1-FT.2: 章节展示 + 用户选择
-
-从 `/book/chapterinfo` 响应 `chapters[]` 中**过滤 level=2 的章节**（实际内容章节，排除封面/版权/书名页等 level=1 元数据），按原始顺序扁平编号（1-based）：
-
-```
-检测到 6 个章节:
-  1. 一
-  2. 二
-  ...
-  6. 六
-
-请输入需要制作的章节范围（如 1-3,5），或回车选择全部章节：
-```
-
-**用户输入解析规则：**
-- 空白 / "全部" / "all" → 全选
-- `1-5,7,10-12` → 章节 1-5、7、10-12
-- 章节标题关键词匹配（如 "一"、"Chapter 1"）→ 包含即选中
-
-验证：范围在 [1, N] 内，不包含倒置范围（如 10-5）。
-
-如果无 level=2 章节（如短篇无分章），跳过此步，直接处理全文。
-
-> 简短书籍（≤5 章）且用户未指定章节范围时，跳过确认直接处理全部章节。
-
-### Step 1-FT.3: 运行 filter_fulltext.py
-
-```bash
-# 确保 venv 存在（仅首次）
-if [ ! -d <skill_dir>/.venv ]; then
-    python3 -m venv <skill_dir>/.venv
-    <skill_dir>/.venv/bin/pip install -q -r <skill_dir>/requirements.txt
-fi
-
-# 提取 + 过滤全文词汇
-cat /tmp/<safe_title>-full.txt | \
-<skill_dir>/.venv/bin/python3 <skill_dir>/filter_fulltext.py \
-  --basic-range 3-10 \
-  --chapter-range "1-5,7,10-12" \
-  --chapter-titles '<chapters_json>' \
-  --anki-dedup same-book --book-id <bookId> \
-  --json-out /tmp/vocab-anki-filtered-<bookId>.json
-```
-
-**flags：**
-- `--basic-range M-N`：COCA 频率排名范围。省略表示不限制。
-- `--chapter-range RANGE`：用户选择的章节。省略表示全部。
-- `--chapter-titles JSON`：WeRead API `/book/chapterinfo` 返回的 `chapters[]` 中 **level=2 的章节**序列化为 JSON 字符串（注意 shell 转义）。
-- `--anki-dedup same-book|all-decks`：Anki 去重模式。`same-book` 仅同书去重（需 `--book-id`），`all-decks` 全库去重。省略表示不去重。
-- `--book-id <bookId>`：用于 WordId 构建 + 同书去重目标
-- `--json-out <path>`：输出结构化 JSON。
-
-**脚本内流水线：**
-1. 分词：`re.findall(r"[a-zA-Z]{2,}", text)`
-2. 章节切分：在原文中搜索 WeRead 章节标题（精确 → 忽略大小写 → 去标点），按字节偏移构建区间
-3. 词形还原：spaCy 全文 parse → `{surface→lemma}` 映射（POS-aware，正确处理不规则动词、比较级、派生形容词），fallback `lemmatize_word()`（lemminflect VERB+NOUN → ADJ/ADV + spaCy POS gate 处理比较级）
-4. COCA 范围过滤：`in_coca()` 含派生还原（如 `indulgently` → `indulgent`）+ 频率排名范围
-5. COCA 等级标注：`get_word_level()` 获取每个通过单词的 COCA 等级（1-25），写入 JSON `coca_level` 字段
-6. Anki 去重：同书（或全库）已有卡片
-7. JSON 输出：格式与划线模式 `filter_pipeline.py` 输出一致（额外含 `coca_level` 字段）
-
-### Step 1-FT.4: 汇总展示
-
-```
-全文模式分析完成:
-- 全文总词例 (tokens): 48,523
-- 去重后原形 (lemmas): 3,210
-- Anki 已有: 0 个
-- COCA 范围外: 2,429 个
-- 待生成卡片: 781 个
-```
-
-从 stdout `SUMMARY:` 行和 JSON `summary` 字段提取数字展示。**不在此步确认**——继续执行 Step 3.0。
-
-> **频次分级**：`sync_anki.py` 在同步时自动根据 `coca_level` 统计每级单词数，贪心分割为 ≤5 个连续区间（≥100 词/区间），创建层级牌组 `{书名} ({作者}) - 分级词汇::{书名} ({作者}) - COCA X-Y`。单词不足或仅一个区间时回退单层牌组。
-
-### Step 3.0: 句子匹配（全文模式调整）
-
-全文已在 Step 1-FT.1 下载（`/tmp/<safe_title>-full.txt`），**跳过 3.0a 和 3.0b**，直接从 3.0c 开始。
-
-其余步骤与划线模式完全相同：
-- 3.0c 机械匹配句子（章节优先，利用 JSON 中 `in_coca[].chapters` 字段）
-- 3.0c-1 验证表面形式确实在句子中
-- 3.0c-2 句子完整性检查
-- 3.0d 版本验证（查一句名言）
-- 3.0e 截断处理（>150 字符）
-
-> **全文模式特有**：每个 lemma 的 `forms` 数组列出了文本中出现的所有表面形式（如 `["abandoned", "abandoning"]`）。匹配句子时，在对应章节的文本中搜索任一形式。`word` 字段填匹配到的表面形式，`lemma` 填原形。
-
-> 若全书文本无法获取（Step 1-FT.1 下载失败）→ 跳过整个 batch，不生成卡片。
-
----
+**划线模式特有调整**：
+- `<tmp_id>` 使用微信读书 `bookId`
+- WordId = `{lemma}_{bookId}`，音频文件 = `{lemma}_{bookId}_word.mp3` / `{lemma}_{bookId}_sent.mp3`
+- 句子匹配时利用 JSON 中 `in_coca[].chapters` 字段做章节优先匹配
+- Anki 去重已在 Step 1d 完成（同书去重）
 
 ### Step 3.0: 获取源文本（句子检索替代回忆）
 
@@ -443,7 +300,7 @@ wc -c /tmp/<book>-full.txt
 ```bash
 # 若 DEEPL_API_KEY 未设置 → 跳过此步，翻译仍由 Claude 在 Step 3 完成
 if [ -n "$DEEPL_API_KEY" ]; then
-    <skill_dir>/.venv/bin/python3 <skill_dir>/scripts/translate_deepl.py /tmp/vocab-anki-input-<bookId>.json
+    <skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/translate_deepl.py /tmp/vocab-anki-input-<bookId>.json
 fi
 ```
 
@@ -463,7 +320,7 @@ fi
 |------|------|------|
 | `word` | 书中出现的**表面词形**——`<b>` 包裹什么就写什么。**绝不**填原形 | `blundering`（不是 `blunder`），`conceited`（不是 `conceit`），`pondered`（不是 `ponder`）|
 | `lemma` | **派生形容词时必填，常规屈折变化可留空**。`sync_anki.py` 三层防护：(1) Claude 显式设置的 `lemma` **无条件信任**——填了就以此为准；(2) 若留空，`resolve_lemma()` 用 lemminflect + COCA 守卫自动还原；(3) **spaCy 读原句校验**——对 `-ed`/`-ing` 词，若判定为形容词则阻止还原。因此：派生形容词（`blundering`、`accomplished`、`distinguished` 等）→ 填 `lemma`；常规屈折（`attached`→`attach`、`burning`→`burn`）→ 留空让脚本处理 | `pondered`→留空（自动 `ponder`）；`accomplished`(adj)→`"accomplished"`；`blundering`(adj)→`"blundering"` |
-| `coca_level` | **从 Step 1 JSON 输出透传**。`filter_fulltext.py --json-out` 的 `in_coca[].coca_level` 值原样写入。供 `sync_anki.py` 自动频次分级使用 | `5` |
+| `coca_level` | **从 Step 1 JSON 输出透传**。`filter_pipeline.py --json-out` 的 `in_coca[].coca_level` 值原样写入 | `5` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I felt awkward and <b>blundering</b>.` |
 | `ipa` | 对应 **lemma** 的 IPA 音标。**cmudict 自动生成，Claude 仅在多发音词时用作投票参考**。未登录词时 Claude 提供兜底 | 单发音词留空；异读词填正确发音如 `/riːd/`（非 `/red/`） |
 | `definition_cn` | **按句中实际用法释义**，不按原形常见义项，也不自动选择最常见的词典义。特别注意多义词的含义选择：同一个词在不同句子中可能是完全不同的意思。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）；`thriftily` 在 "he must be treated thriftily" 中→"有节制地，有所保留地"（**不写**"节俭地"）|
@@ -645,12 +502,10 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
 - `book_id` 为微信读书 bookId
 - `deck_name`：**从 Step 0b 的 `{牌组名: bookId}` 映射中反查**。
   - **划线模式**：`{title} ({author})`
-  - **全文模式**：`{title} ({author}) - 分级词汇`
   - 若 bookId 已有牌组 → 填入 Anki 中实际牌组名（确保新旧卡片归入同一牌组）；若新书无已有牌组 → 按上述规则拼接（**去掉作者国籍前缀如 `[美]`**）
-  - `sync_anki.py` 同步时自动创建子牌组 `{deck_name}::{title} ({author}) - COCA X-Y`
 - `ipa` 由 cmudict 自动生成；Claude 仅在多发音词时提供投票参考
 - `excluded` 数组从 Step 1 `--json-out` 输出的 JSON 文件中读取，**使用 `lemma` 字段**（非 `rep`）填入 `word`，确保排除词以原形展示；`reason` 字段直接沿用
-- `coca_level` 从 Step 1 JSON 的 `in_coca[].coca_level` **原样透传**到每个 `words[]` 条目，供同步时自动频次分级
+- `coca_level` 从 Step 1 JSON 的 `in_coca[].coca_level` **原样透传**到每个 `words[]` 条目
 - **此步骤不展示样卡，不询问用户**
 
 ### Step 3.5: 预下载音频（并发，不依赖 Anki）
@@ -665,7 +520,7 @@ if [ ! -d <skill_dir>/.venv ]; then
 fi
 
 # 并发生成全部音频 → 保存到临时目录 → 输出 AUDIO_DIR 路径
-<skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
+<skill_dir>/.venv/bin/python -u <skill_dir>/lib/sync_anki.py \
   /tmp/vocab-anki-input-<bookId>.json \
   --prefetch -v
 ```
@@ -701,11 +556,6 @@ fi
 
 > 音频已在 Step 3.5 预下载到临时目录。同步阶段仅上传媒体 + 创建卡片，无需等待音频生成。
 > 脚本启动时自动校验 JSON 质量（句子长度、`<b>` 匹配、必填字段），违规则拒绝同步。
-> **全文模式自动频次分级**：`sync_anki.py` 根据 `words[].coca_level` 统计每级单词数，贪心分割为 ≤5 个连续频次区间（≥100 词/区间），创建层级牌组。命名规范：
-> - 父牌组：`{书名} ({作者}) - 分级词汇`
-> - 子牌组：`{书名} ({作者}) - COCA X-Y`（完整路径 `父牌组::子牌组`）
-> - 划线牌组：`{书名} ({作者})`（不变）
-> - 可通过 `--min-band-size`（默认 100）和 `--max-bands`（默认 5）调整。
 > 超时按每词 3s（上传 ~1s + 余量），下限 60s。由于很快，通常前台直接运行即可。
 
 ```bash
@@ -713,7 +563,7 @@ WORD_COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/vocab-anki-
 SYNC_TIMEOUT=$(( WORD_COUNT * 3 + 30 ))
 [ "$SYNC_TIMEOUT" -lt 60 ] && SYNC_TIMEOUT=60
 
-timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
+timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/lib/sync_anki.py \
   /tmp/vocab-anki-input-<bookId>.json \
   --audio-dir <AUDIO_DIR_FROM_STEP_3.5> \
   -v
@@ -733,8 +583,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 5. **单词音频**：Edge TTS 默认发音（IPA 仅用于卡片显示）；IPA 缺失时跳过单词音频
 6. **例句音频**：Edge TTS 朗读
 7. **已有卡片完全不动**，保留复习进度和调度数据
-8. **自动频次分级（全文模式）**：统计 `words[].coca_level` → 贪心分割为 ≤5 个连续区间（≥100 词/区间）→ 创建层级牌组 `{书名} ({作者}) - 分级词汇::{书名} ({作者}) - COCA X-Y` → 每个词仅在目标子牌组内去重。单词不足或仅一个区间时回退单层牌组。划线模式不启用
-9. **触发 AnkiWeb 同步**：卡片添加完成后自动触发 `sync` 操作，将新卡片同步到 AnkiWeb。此操作为 fire-and-forget——成功响应仅表示 Anki 已接受请求，不代表 AnkiWeb 已收到数据。若 Anki 弹出冲突解决对话框，同步可能静默排队。使用 `--no-ankiweb-sync` 跳过此步骤
+8. **触发 AnkiWeb 同步**：卡片添加完成后自动触发 `sync` 操作，将新卡片同步到 AnkiWeb。此操作为 fire-and-forget——成功响应仅表示 Anki 已接受请求，不代表 AnkiWeb 已收到数据。若 Anki 弹出冲突解决对话框，同步可能静默排队。使用 `--no-ankiweb-sync` 跳过此步骤
 
 牌组名优先从 JSON `deck_name` 字段读取（Claude 在 Step 3 从 Step 0b 的 `{牌组名: bookId}` 映射反查填入）。未提供时回退 `--deck` 参数；都未提供才自动拼接。
 
@@ -804,15 +653,16 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 
 | 脚本 | 用途 | 输入 | 输出 |
 |------|------|------|------|
-| `utils.py` | 共享工具模块 — lemmatize_word（lemminflect VERB+NOUN → ADJ/ADV + spaCy POS gate 处理比较级；名词如 baker/walker 不动）, edge_tts_bytes/file, safe_filename | — | 工具函数 |
-| `sync_anki.py` | 增量同步到 Anki — 含 `resolve_lemma()` 自动原形还原 + spaCy 句子级校验 + `compute_bands()` 全文模式自动频次分级（≤5 组、≥100 词/组、贪心分割） | JSON + AnkiConnect | 直接添加层级牌组到 Anki |
-| `ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
-| `filter_pipeline.py` | 合并过滤流水线 — 标点/大小写清理 → lemmatize → Anki 去重 → COCA 检查。自动剥离句边界标点（`vexed.`→`vexed`）并归一化非全大写词为小写（`Clad`→`clad`）。透传章节信息（`chapterUid` + `chapterTitle`）和 COCA 等级（`coca_level`）供后续步骤使用 | WeRead API JSON (stdin) | 过滤结果 (stdout) + 结构化 JSON (--json-out，含 `chapters` 和 `coca_level` 字段) |
-| `filter_fulltext.py` | 全文模式过滤流水线 — spaCy 全文 parse → 章节切分 → 词形还原 → COCA 范围过滤 → Anki 去重。JSON 输出含 `coca_level`（1-25）供 `sync_anki.py` 自动频次分级 | 全文文本 (stdin) | 过滤结果 (stdout) + 结构化 JSON (--json-out) |
-| `lib/coca.py` | BNC/COCA 词族等级查询 — 三层查找（直接 set + lemminflect + 后缀剥离）+ `get_word_level()`（1–25）+ `get_word_headword()`（族首词用于跨族校验）+ `load_level_range()`（按等级筛选）。Nation (2017) Level 6 词族定义 | 单词 → set/等级/族首词 | 是否在 25000 词族中 + 等级 + 族归属 |
-| `lib/data/bnc_coca/basewrd1.txt–basewrd25.txt` | BNC/COCA 词族数据（25 级 × ~1000 族，~77K 词形，Range 格式）。来源：Nation (2017)，学术自由使用 | — | `word→level` + `word→headword` 双映射 |
-| `scripts/match_sentences.py` | Step 3.0 机械句子匹配 — 读过滤 JSON + 源文本，提取含生词的完整句子并用 `<b>` 标签标记。强制 3.0e 截断规则（禁止从句首裁切、禁止产出片段）。替代 Claude 人工回忆模式 | 过滤 JSON + 源文本 | 带 `<b>` 标签的句子 JSON |
-| `tests/` | pytest 单元测试套件（283 tests）——覆盖词形还原（含比较级、施事名词）、COCA 查询、LLM 输出拦截、章节解析、IPA 生成、自动频次分级 | — | 回归防护 |
+| `filter_pipeline.py` | 合并过滤流水线 — 标点/大小写清理 → lemmatize → Anki 去重 → COCA 检查 | WeRead API JSON (stdin) | 过滤结果 (stdout) + 结构化 JSON (`--json-out`) |
+| `lib/sync_anki.py` | 增量同步到 Anki — `resolve_lemma()` 原形还原 + `compute_bands()` 频次分级 | JSON + AnkiConnect | 层级牌组 |
+| `lib/ankiconnect.py` | AnkiConnect 客户端模块 | (内部使用) | AnkiConnect API 封装 |
+| `lib/utils.py` | 共享工具 — lemmatize_word, edge_tts_bytes/file, safe_filename, print_progress | — | 工具函数 |
+| `lib/coca.py` | BNC/COCA 词族等级查询（Nation 2017）| 单词 | 在 25000 词族中 + 等级 + 族归属 |
+| `lib/scripts/match_sentences.py` | 机械句子匹配 — `<b>` 标签标记 | 过滤 JSON + 源文本 | 带 `<b>` 标签的句子 |
+| `lib/scripts/translate_deepl.py` | DeepL 批量翻译 | vocab JSON | 翻译写回 `translation_cn` |
+| `lib/scripts/audit_deck.py` | 牌组质量审计 | Anki 牌组名 | 审计报告 |
+| `lib/data/bnc_cova/basewrd1.txt–25.txt` | BNC/COCA 词族数据（Nation 2017）| — | `word→level` + `word→headword` |
+| `tests/` | pytest 单元测试套件 | — | 回归防护 |
 
 ## 设计原则
 
@@ -847,7 +697,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 - **音频并发**：多线程（16 workers）并发生成音频（Step 3.5），将音频生成压缩到秒级
 - **音频命名空间**：文件名含 `bookId`（`{lemma}_{bookId}_word/sent.mp3`），防止异读词和不同书例句在全局媒体库中冲突
 - **确认前置音频**：音频在确认前预下载（`--prefetch`），确认后秒级同步（`--audio-dir`），用户不被阻塞
-- **原形还原（spaCy + lemminflect 双层）**：`resolve_lemma()` 用 lemminflect + COCA 守卫做基础还原；`_process_one_word()` 中 **spaCy 读原句**判断 `-ed`/`-ing` 词的实际词性——若为形容词则阻止还原。`lemmatize_word()` 增加 ADJ/ADV 通道 + spaCy POS gate 处理比较级（`higher`→`high`），名词（`baker`、`walker`）不受影响。Claude 显式设置的 `lemma` 无条件信任。全文过滤阶段 `build_spacy_map()` 一次性 parse + `lemmatize()` O(1) 查表，无手工词表
+- **原形还原（spaCy + lemminflect 双层）**：`resolve_lemma()` 用 lemminflect + COCA 守卫做基础还原；`_process_one_word()` 中 **spaCy 读原句**判断 `-ed`/`-ing` 词的实际词性——若为形容词则阻止还原。`lemmatize_word()` 增加 ADJ/ADV 通道 + spaCy POS gate 处理比较级（`higher`→`high`），名词（`baker`、`walker`）不受影响。Claude 显式设置的 `lemma` 无条件信任。`build_spacy_map()` 一次性 parse + `lemmatize()` O(1) 查表，无手工词表
   - 两层均使用 `len(lemma) < len(word)` 作为准入条件：同长映射（`abode` n.→`abide` v.）被拒，避免跨词性误判。不同长映射正常通过（`crammed`→`cram`、`went`→`go`）。同长不规则变化（`ran`→`run`、`sat`→`sit`）同为已知限制，但这些词属基础词汇，实际划线中极少出现
 - **bookId 桥接**：Anki 卡片 WordId 天然包含 bookId（`{lemma}_{bookId}`），用于精确关联微信读书，替代不可靠的书名匹配
 - **一次性确认**：整个流程仅在最终同步前确认一次，中间步骤不打断

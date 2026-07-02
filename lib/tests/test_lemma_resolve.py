@@ -8,7 +8,7 @@ Covers historical errors:
 """
 
 import pytest
-from sync_anki import resolve_lemma
+from lib.sync_anki import resolve_lemma
 
 
 @pytest.mark.parametrize("word,json_lemma,expected", [

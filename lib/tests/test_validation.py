@@ -19,7 +19,7 @@ Historical LLM errors covered:
 
 import re
 import pytest
-from sync_anki import _validate_word_entries
+from lib.sync_anki import _validate_word_entries
 
 
 # ── Helper ──

@@ -13,7 +13,7 @@ Historical errors covered:
 """
 
 import pytest
-from utils import lemmatize_word, safe_filename
+from lib.utils import lemmatize_word, safe_filename
 
 
 @pytest.mark.parametrize(

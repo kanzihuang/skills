@@ -5,7 +5,7 @@ import sys
 import pytest
 
 sys.path.insert(0, '/home/agent/github/kanzihuang/skills/vocab-anki')
-from scripts.match_sentences import split_sentences
+from lib.scripts.match_sentences import split_sentences
 
 
 def _clean(text):

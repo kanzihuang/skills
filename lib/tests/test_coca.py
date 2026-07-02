@@ -11,7 +11,7 @@ Covers:
 """
 
 import pytest
-from coca import (in_coca, load_coca, load_freq_ranked,
+from lib.coca import (in_coca, load_coca, load_freq_ranked,
                    get_word_level, get_word_headword, load_level_range)
 
 

@@ -19,14 +19,16 @@ import re
 import sys
 import urllib.request
 
-# Allow running from repo root or vocab-anki/
+# Add repo root to sys.path so lib.* imports work when run as a script
 import os
-_skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _skill_dir not in sys.path:
-    sys.path.insert(0, _skill_dir)
+_script_dir = os.path.dirname(os.path.abspath(__file__))      # lib/scripts/
+_package_dir = os.path.dirname(_script_dir)                    # lib/
+_repo_root = os.path.dirname(_package_dir)                     # skills/
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 
-from sync_anki import resolve_lemma
-from utils import lemmatize_word
+from lib.sync_anki import resolve_lemma
+from lib.utils import lemmatize_word
 
 ANKICONNECT = "http://localhost:8765"
 

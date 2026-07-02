@@ -29,8 +29,8 @@ import sys
 import tempfile
 import time
 
-from ankiconnect import AnkiConnect, AnkiConnectError
-from utils import (
+from .ankiconnect import AnkiConnect, AnkiConnectError
+from .utils import (
     edge_tts_bytes,
     lemmatize_word,
     print_progress,
@@ -297,8 +297,8 @@ def _load_cmudict() -> dict[str, list[list[str]]]:
     try:
         from pathlib import Path
         path = (
-            Path(__file__).resolve().parent.parent
-            / "lib" / "data" / "cmudict.dict"
+            Path(__file__).resolve().parent
+            / "data" / "cmudict.dict"
         )
         if not path.exists():
             return _CMUDICT
@@ -443,7 +443,7 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
     #    false reductions like beer→bee, anger→ange, sacred→sacre.
     _coca: set[str] = set()
     try:
-        from lib.coca import load_coca
+        from .coca import load_coca
         _coca = load_coca()
     except ImportError:
         pass
@@ -539,7 +539,7 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
     #    handle those.
     if reduced != w:
         try:
-            from lib.coca import get_word_headword
+            from .coca import get_word_headword
             nation_head = get_word_headword(w)
             if nation_head:
                 lemma_head = get_word_headword(reduced)
