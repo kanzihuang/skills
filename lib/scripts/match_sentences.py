@@ -76,6 +76,9 @@ def find_best_sentence(text: str, word_forms: list[str], lemma: str) -> str | No
     best = None
     best_len = float('inf')
 
+    # Normalized source text for verification (single pass)
+    text_normalized = ' '.join(text.split())
+
     for form in word_forms:
         pattern = re.compile(r'\b' + re.escape(form) + r'\b', re.IGNORECASE)
         for sent in sentences:
@@ -85,7 +88,15 @@ def find_best_sentence(text: str, word_forms: list[str], lemma: str) -> str | No
             if m:
                 matched_text = m.group(0)
                 tagged = sent[:m.start()] + f'<b>{matched_text}</b>' + sent[m.end():]
-                plain_len = len(re.sub(r'<[^>]+>', '', tagged))
+                # Verify the sentence actually exists in the source text.
+                # Normalize whitespace for comparison — split_sentences()
+                # merges newlines, so the extracted sentence may not match
+                # the raw text verbatim.
+                clean = re.sub(r'<[^>]+>', '', tagged)
+                clean_normalized = ' '.join(clean.split())
+                if clean_normalized not in text_normalized:
+                    continue  # sentence does not exist in source → skip
+                plain_len = len(clean)
                 if plain_len < best_len:
                     best = tagged
                     best_len = plain_len
