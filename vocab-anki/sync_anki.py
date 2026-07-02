@@ -238,17 +238,49 @@ def _count_coca_levels(words: list[dict]) -> dict[int, int]:
     return level_counts
 
 
-def _get_existing_across_decks(
-    ac: "AnkiConnect",  # noqa: F821
-    parent_deck: str,
+def _pre_assign_bands(
+    words: list[dict],
+    deck_name: str,
     bands: list[tuple[str, int, int]],
-) -> dict[str, int]:
-    """Query existing WordId→note_id across parent deck and all sub-decks."""
-    all_decks = [parent_deck] + [f"{parent_deck}::{name}" for name, _lo, _hi in bands]
-    existing: dict[str, int] = {}
-    for deck in all_decks:
-        existing.update(ac.get_word_id_map(deck))
-    return existing
+    band_assignment: dict[int, str],
+) -> None:
+    """Pre-assign each word in the full list to its target deck.
+
+    Populates band_assignment with {word_index: target_deck_name}.
+    Words without a valid coca_level default to the parent deck.
+    """
+    band_map: dict[tuple[int, int], str] = {}
+    for band_name, lo, hi in bands:
+        band_map[(lo, hi)] = f"{deck_name}::{band_name}"
+    for idx, w in enumerate(words):
+        lvl = w.get("coca_level")
+        assigned = False
+        if isinstance(lvl, int):
+            for (lo, hi), sub_deck in band_map.items():
+                if lo <= lvl <= hi:
+                    band_assignment[idx] = sub_deck
+                    assigned = True
+                    break
+        if not assigned:
+            band_assignment[idx] = deck_name
+
+
+def _get_existing_per_deck(
+    ac: "AnkiConnect",  # noqa: F821
+    deck_name: str,
+    bands: list[tuple[str, int, int]],
+    band_assignment: dict[int, str],
+) -> dict[str, dict[str, int]]:
+    """Query existing WordId→note_id for each target deck separately.
+
+    Returns {deck_name: {WordId: note_id}}.
+    Only queries decks that have at least one word assigned.
+    """
+    target_decks: set[str] = set(band_assignment.values())
+    result: dict[str, dict[str, int]] = {}
+    for deck in target_decks:
+        result[deck] = ac.get_word_id_map(deck)
+    return result
 
 
 # Words lemminflect can't distinguish as derivational adjectives.
@@ -981,10 +1013,13 @@ def sync(
                 ac.ensure_deck_and_model(sub_deck, MODEL_NAME)
                 print(f'    └ "{band_name}"')
 
-            # Query existing cards across parent and all sub-decks
-            print(f"\nQuerying existing cards across all sub-decks...")
-            existing = _get_existing_across_decks(ac, deck_name, bands)
-            print(f"  Found {len(existing)} existing cards")
+            # Pre-compute band assignment for all input words.
+            # Each word is only deduped against its own target sub-deck.
+            _pre_assign_bands(words, deck_name, bands, band_assignment)
+            print(f"\nQuerying existing cards per sub-deck...")
+            existing = _get_existing_per_deck(ac, deck_name, bands, band_assignment)
+            total_existing = sum(len(v) for v in existing.values())
+            print(f"  Found {total_existing} existing cards across {len(existing)} decks")
         else:
             # Single flat deck
             ac.ensure_deck_and_model(deck_name, MODEL_NAME)
@@ -993,10 +1028,10 @@ def sync(
 
             # Get existing WordId map from target deck
             print(f"\nQuerying existing cards in deck...")
-            existing = ac.get_word_id_map(deck_name)
-            print(f"  Found {len(existing)} existing cards")
+            existing = {"": ac.get_word_id_map(deck_name)}
+            print(f"  Found {len(existing[''])} existing cards")
     else:
-        existing = {}
+        existing = {}  # prefetch: no Anki connection, skip dedup
 
     # 5. Identify new words (check lemma-based WordId, fallback to original).
     #    Repair cards whose WordId still uses the surface form instead of
@@ -1004,18 +1039,22 @@ def sync(
     new_words = []
     skipped_words = []
     repaired = 0
-    for w in words:
+    for idx, w in enumerate(words):
         json_lemma = w.get("lemma", "").strip()
         lemma = resolve_lemma(w["word"], json_lemma)
         original_id = f"{w['word'].strip().lower()}_{book_id}"
         lemma_id = f"{lemma}_{book_id}"
-        if lemma_id in existing or original_id in existing:
+
+        # Only dedup against this word's target deck
+        target_deck = band_assignment.get(idx, deck_name)
+        deck_cards = existing.get(target_deck, {})
+        if lemma_id in deck_cards or original_id in deck_cards:
             skipped_words.append(w)
             # Repair: if the card exists under the surface-form WordId
             # but the resolved lemma differs, update ALL dependent fields
             # AND re-upload audio under the new filename.
-            if ac and original_id in existing and lemma_id != original_id:
-                old_nid = existing[original_id]
+            if ac and original_id in deck_cards and lemma_id != original_id:
+                old_nid = deck_cards[original_id]
                 safe = safe_filename(lemma)
                 fields = {
                     "WordId": lemma_id,
@@ -1062,9 +1101,10 @@ def sync(
         print(f"  Intra-batch duplicates removed: {intra_dupes}")
     new_words = deduped_new
 
-    # Populate band_assignment: map each new_word index to its sub-deck
+    # Rebuild band_assignment for new_words (0-based indices after dedup)
     if bands:
-        band_map: dict[tuple[int, int], str] = {}  # (lo, hi) -> sub_deck_name
+        band_assignment.clear()
+        band_map: dict[tuple[int, int], str] = {}
         for band_name, lo, hi in bands:
             band_map[(lo, hi)] = f"{deck_name}::{band_name}"
         for idx, w in enumerate(new_words):
@@ -1074,7 +1114,6 @@ def sync(
                     if lo <= lvl <= hi:
                         band_assignment[idx] = sub_deck
                         break
-            # Words without a valid coca_level stay in the parent deck
             if idx not in band_assignment:
                 band_assignment[idx] = deck_name
         # Print band distribution

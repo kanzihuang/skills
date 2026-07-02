@@ -725,7 +725,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 5. **单词音频**：Edge TTS 默认发音（IPA 仅用于卡片显示）；IPA 缺失时跳过单词音频
 6. **例句音频**：Edge TTS 朗读
 7. **已有卡片完全不动**，保留复习进度和调度数据
-8. **自动频次分级（全文模式）**：统计 `words[].coca_level` → 贪心分割为 ≤5 个连续区间（≥100 词/区间）→ 创建层级牌组 `{书名}::COCA X-Y` → 跨全部子牌组去重。单词不足或仅一个区间时回退单层牌组。通过 `--max-bands`（默认 5）和 `--min-band-size`（默认 100）调整。划线模式不启用
+8. **自动频次分级（全文模式）**：统计 `words[].coca_level` → 贪心分割为 ≤5 个连续区间（≥100 词/区间）→ 创建层级牌组 `{书名}::COCA X-Y` → 每个词仅在目标子牌组内去重（不跨牌组）。单词不足或仅一个区间时回退单层牌组。通过 `--max-bands`（默认 5）和 `--min-band-size`（默认 100）调整。划线模式不启用
 9. **触发 AnkiWeb 同步**：卡片添加完成后自动触发 `sync` 操作，将新卡片同步到 AnkiWeb。此操作为 fire-and-forget——成功响应仅表示 Anki 已接受请求，不代表 AnkiWeb 已收到数据。若 Anki 弹出冲突解决对话框，同步可能静默排队。使用 `--no-ankiweb-sync` 跳过此步骤
 
 牌组名优先从 JSON `deck_name` 字段读取（Claude 在 Step 3 从 Step 0b 的 `{牌组名: bookId}` 映射反查填入）。未提供时回退 `--deck` 参数；都未提供才自动拼接。
