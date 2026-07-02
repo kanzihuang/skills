@@ -310,7 +310,7 @@ cat /tmp/<safe_title>-full.txt | \
 
 从 stdout `SUMMARY:` 行和 JSON `summary` 字段提取数字展示。**不在此步确认**——继续执行 Step 3.0。
 
-> **频次分级**：`sync_anki.py` 在同步时会自动根据 `coca_level` 统计每级单词数，贪心分割为 ≤5 个连续频次区间（每组 ≥100 词），创建层级牌组 `{书名}::COCA X-Y`。若单词不足或仅一个有效区间则回退单层牌组。可通过 `--min-band-size`（默认 100）和 `--max-bands`（默认 5）调整。
+> **频次分级**：`sync_anki.py` 在同步时自动根据 `coca_level` 统计每级单词数，贪心分割为 ≤5 个连续区间（≥100 词/区间），创建层级牌组 `{书名} ({作者}) - 分级词汇::{书名} ({作者}) - COCA X-Y`。单词不足或仅一个区间时回退单层牌组。
 
 ### Step 3.0: 句子匹配（全文模式调整）
 
@@ -632,7 +632,7 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
   "book_title": "小王子（英文版）",
   "book_author": "圣埃克絮佩里",
   "book_id": "22720170",
-  "deck_name": "小王子（英文版） (圣埃克絮佩里)",
+  "deck_name": "小王子（英文版） (圣埃克絮佩里) - 分级词汇",
   "words": [
     {"word": "pondered", "lemma": "ponder", "coca_level": 3, "ipa": "/.../", "sentence": "...", "definition_cn": "...", "translation_cn": "..."}
   ],
@@ -643,7 +643,11 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
 ```
 - `book_title` 和 `book_author` 来自 Step 1 的解析结果（已有牌组则来自牌组名，否则来自微信读书 API）
 - `book_id` 为微信读书 bookId
-- `deck_name`：**从 Step 0b 的 `{牌组名: bookId}` 映射中反查**。若 bookId 已有牌组 → 填入 Anki 中实际牌组名（确保新旧卡片归入同一牌组）；若新书无已有牌组 → 用 `{title} ({author})` 拼接（**去掉作者国籍前缀如 `[美]`**）
+- `deck_name`：**从 Step 0b 的 `{牌组名: bookId}` 映射中反查**。
+  - **划线模式**：`{title} ({author})`
+  - **全文模式**：`{title} ({author}) - 分级词汇`
+  - 若 bookId 已有牌组 → 填入 Anki 中实际牌组名（确保新旧卡片归入同一牌组）；若新书无已有牌组 → 按上述规则拼接（**去掉作者国籍前缀如 `[美]`**）
+  - `sync_anki.py` 同步时自动创建子牌组 `{deck_name}::{title} ({author}) - COCA X-Y`
 - `ipa` 由 cmudict 自动生成；Claude 仅在多发音词时提供投票参考
 - `excluded` 数组从 Step 1 `--json-out` 输出的 JSON 文件中读取，**使用 `lemma` 字段**（非 `rep`）填入 `word`，确保排除词以原形展示；`reason` 字段直接沿用
 - `coca_level` 从 Step 1 JSON 的 `in_coca[].coca_level` **原样透传**到每个 `words[]` 条目，供同步时自动频次分级
@@ -697,7 +701,11 @@ fi
 
 > 音频已在 Step 3.5 预下载到临时目录。同步阶段仅上传媒体 + 创建卡片，无需等待音频生成。
 > 脚本启动时自动校验 JSON 质量（句子长度、`<b>` 匹配、必填字段），违规则拒绝同步。
-> **全文模式自动频次分级**：`sync_anki.py` 根据 `words[].coca_level` 统计每级单词数，贪心分割为 ≤5 个连续频次区间（≥100 词/区间），创建层级牌组 `{书名}::COCA X-Y`。可通过 `--min-band-size`（默认 100）和 `--max-bands`（默认 5）调整。划线模式不启用分级。
+> **全文模式自动频次分级**：`sync_anki.py` 根据 `words[].coca_level` 统计每级单词数，贪心分割为 ≤5 个连续频次区间（≥100 词/区间），创建层级牌组。命名规范：
+> - 父牌组：`{书名} ({作者}) - 分级词汇`
+> - 子牌组：`{书名} ({作者}) - COCA X-Y`（完整路径 `父牌组::子牌组`）
+> - 划线牌组：`{书名} ({作者})`（不变）
+> - 可通过 `--min-band-size`（默认 100）和 `--max-bands`（默认 5）调整。
 > 超时按每词 3s（上传 ~1s + 余量），下限 60s。由于很快，通常前台直接运行即可。
 
 ```bash
@@ -725,7 +733,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/sync_anki.py \
 5. **单词音频**：Edge TTS 默认发音（IPA 仅用于卡片显示）；IPA 缺失时跳过单词音频
 6. **例句音频**：Edge TTS 朗读
 7. **已有卡片完全不动**，保留复习进度和调度数据
-8. **自动频次分级（全文模式）**：统计 `words[].coca_level` → 贪心分割为 ≤5 个连续区间（≥100 词/区间）→ 创建层级牌组 `{书名}::COCA X-Y` → 每个词仅在目标子牌组内去重（不跨牌组）。单词不足或仅一个区间时回退单层牌组。通过 `--max-bands`（默认 5）和 `--min-band-size`（默认 100）调整。划线模式不启用
+8. **自动频次分级（全文模式）**：统计 `words[].coca_level` → 贪心分割为 ≤5 个连续区间（≥100 词/区间）→ 创建层级牌组 `{书名} ({作者}) - 分级词汇::{书名} ({作者}) - COCA X-Y` → 每个词仅在目标子牌组内去重。单词不足或仅一个区间时回退单层牌组。划线模式不启用
 9. **触发 AnkiWeb 同步**：卡片添加完成后自动触发 `sync` 操作，将新卡片同步到 AnkiWeb。此操作为 fire-and-forget——成功响应仅表示 Anki 已接受请求，不代表 AnkiWeb 已收到数据。若 Anki 弹出冲突解决对话框，同步可能静默排队。使用 `--no-ankiweb-sync` 跳过此步骤
 
 牌组名优先从 JSON `deck_name` 字段读取（Claude 在 Step 3 从 Step 0b 的 `{牌组名: bookId}` 映射反查填入）。未提供时回退 `--deck` 参数；都未提供才自动拼接。
