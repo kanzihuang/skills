@@ -92,12 +92,14 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 
 - **Separation of concerns**: Claude does knowledge work (sentences, definitions, translations, IPA), Python does mechanical work (lemmatization, TTS, Anki sync).
 - **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 3.0). No fabricated or dictionary sentences. Source text unavailable → skip the batch.
+- **Source-truth-only translations**: Translations must be of the mechanically matched sentence. Never substitute a translation from memory even if you recognize the passage — this causes sentence/translation mismatch.
 - **Incremental safety**: sync mode only adds, never modifies existing cards.
 - **Graceful degradation**: audio failures don't block card generation.
 - **Filter-first**: all mechanical filtering happens BEFORE Claude generates content.
-- **POS-gated lemmatization (vocab-book)**: spaCy provides POS tags; lemminflect provides lemmatization. Per-token POS→channel matching (ADJ/VERB/NOUN) — spaCy's lemma output is never used. Proper nouns and derivational adjectives are kept as-is.
-- **Truncate before translate**: sentence truncation (≤150 chars) must complete before DeepL translation. Never translate then truncate — causes sentence/translation mismatch.
+- **POS-gated lemmatization (vocab-book)**: spaCy provides POS tags; lemminflect provides lemmatization. Per-token POS→channel matching (ADJ/VERB/NOUN) — spaCy's lemma output is never used. Proper nouns and derivational adjectives are kept as-is. VBG+amod (participial adjectives like "bewildering") are guarded against reduction.
+- **Truncate before translate**: sentence truncation (≤150 chars) must complete before DeepL/Claude translation. Never translate then truncate — causes sentence/translation mismatch. Verification: Chinese translation must not end with conjunctions like "然后"/"但是".
 - **bookId bridging (vocab-anki)**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching.
+- **IPA from cmudict**: IPA is generated mechanically from the CMU Pronouncing Dictionary. Stress placement follows Maximal Onset Principle. ER0 (unstressed) → /ər/, ER1/ER2 → /ɜːr/. Claude only votes on heteronym disambiguation.
 
 ## Testing
 

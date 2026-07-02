@@ -97,6 +97,7 @@ cat /tmp/<safe_title>-full.txt | \
    - VERB (`VB*`) → lemminflect VERB 通道
    - NOUN (`NN*`) → lemminflect NOUN 通道
    - 其他 POS (ADJ/ADV/PROPN/…) → 保持原形
+   - **VBG-amod 守卫**：VBG + `amod` 依赖关系 = 分词形容词（如 "bewildering complexity"），保持原形不还原。仅 `amod` 触发——`ROOT`/`xcomp`（动词谓语）照常还原
 3. COCA 范围过滤 + 等级标注（`coca_level`: 1-25）
 4. 生成 UUID 后缀（`uuid.uuid4().hex[:12]`），写入 JSON `suffix` 字段
 5. JSON 输出（含 `in_coca[]`、`excluded[]`、`suffix`、`summary`）
