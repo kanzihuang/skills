@@ -93,6 +93,18 @@ def parse_args() -> argparse.Namespace:
         help="Skip triggering AnkiWeb sync after cards are added",
     )
     parser.add_argument(
+        "--max-bands",
+        type=int,
+        default=5,
+        help="Maximum number of COCA frequency sub-decks (default: 5)",
+    )
+    parser.add_argument(
+        "--min-band-size",
+        type=int,
+        default=100,
+        help="Minimum words per frequency band (default: 100)",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Show detailed progress"
     )
     return parser.parse_args()
@@ -109,6 +121,134 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 # Sync logic
 # ---------------------------------------------------------------------------
+
+
+def compute_bands(
+    level_counts: dict[int, int],
+    max_bands: int = 5,
+    min_band_size: int = 100,
+) -> list[tuple[str, int, int]] | None:
+    """Group COCA levels into balanced bands based on actual word counts.
+
+    Greedy partition: walk levels in ascending order, cut when accumulated
+    count reaches target (= total / K).  Post-process: merge undersized
+    tail band into previous band.
+
+    Returns list of (band_name, lo, hi) or None if no banding needed.
+    """
+    if not level_counts:
+        return None
+
+    total = sum(level_counts.values())
+    if total < min_band_size:
+        return None
+
+    sorted_levels = sorted(level_counts.keys())
+    if len(sorted_levels) <= 1:
+        return None
+
+    # Determine number of bands K
+    k = min(max_bands, len(sorted_levels), total // min_band_size)
+    if k <= 1:
+        return None
+
+    target = total / k
+
+    # Greedy partition: cut when running sum >= target, or at natural
+    # gaps between non-consecutive levels (gap > 1).
+    # Don't cut at gaps if current_sum < min_band_size — avoids creating
+    # tiny fragments from the gap detection.
+    bands: list[tuple[int, int, int]] = []  # (lo, hi, count)
+    current_lo = sorted_levels[0]
+    current_sum = 0
+    prev_level = current_lo
+
+    for level in sorted_levels:
+        count = level_counts[level]
+        # Natural gap: start a new band if there's a gap AND current
+        # accumulated count is already at least min_band_size
+        gap_cut = (level - prev_level > 1 and current_sum >= min_band_size)
+        # Target cut: accumulated count reached target
+        target_cut = (current_sum > 0 and current_sum >= target
+                      and len(bands) < k - 1)
+        if gap_cut or target_cut:
+            bands.append((current_lo, prev_level, current_sum))
+            current_lo = level
+            current_sum = 0
+        current_sum += count
+        prev_level = level
+
+    # Final band
+    bands.append((current_lo, sorted_levels[-1], current_sum))
+
+    if len(bands) <= 1:
+        return None
+
+    # Post-process: merge undersized bands into smaller neighbor.
+    # Repeat until all bands >= min_band_size or only one remains.
+    changed = True
+    while changed and len(bands) >= 2:
+        changed = False
+        for i in range(len(bands)):
+            _lo, _hi, cnt = bands[i]
+            if cnt < min_band_size and len(bands) >= 2:
+                if i == 0:
+                    # First band: merge into next
+                    bands[1] = (bands[i][0], bands[1][2],
+                                cnt + bands[1][2])
+                    bands.pop(i)
+                elif i == len(bands) - 1:
+                    # Last band: merge into previous
+                    bands[i - 1] = (bands[i - 1][0], bands[i][2],
+                                    bands[i - 1][2] + cnt)
+                    bands.pop(i)
+                else:
+                    # Middle band: merge into smaller neighbor
+                    if bands[i - 1][2] <= bands[i + 1][2]:
+                        bands[i - 1] = (bands[i - 1][0], bands[i][2],
+                                        bands[i - 1][2] + cnt)
+                    else:
+                        bands[i + 1] = (bands[i][0], bands[i + 1][2],
+                                        cnt + bands[i + 1][2])
+                    bands.pop(i)
+                changed = True
+                break  # Restart scan after mutation
+
+    if len(bands) <= 1:
+        return None
+
+    # Format names
+    result: list[tuple[str, int, int]] = []
+    for lo, hi, _count in bands:
+        if lo == hi:
+            result.append((f"COCA {lo}", lo, hi))
+        else:
+            result.append((f"COCA {lo}-{hi}", lo, hi))
+
+    return result
+
+
+def _count_coca_levels(words: list[dict]) -> dict[int, int]:
+    """Count words per COCA level from the words array."""
+    level_counts: dict[int, int] = {}
+    for w in words:
+        lvl = w.get("coca_level")
+        if isinstance(lvl, int) and 1 <= lvl <= 25:
+            level_counts[lvl] = level_counts.get(lvl, 0) + 1
+    return level_counts
+
+
+def _get_existing_across_decks(
+    ac: "AnkiConnect",  # noqa: F821
+    parent_deck: str,
+    bands: list[tuple[str, int, int]],
+) -> dict[str, int]:
+    """Query existing WordId→note_id across parent deck and all sub-decks."""
+    all_decks = [parent_deck] + [f"{parent_deck}::{name}" for name, _lo, _hi in bands]
+    existing: dict[str, int] = {}
+    for deck in all_decks:
+        existing.update(ac.get_word_id_map(deck))
+    return existing
 
 
 # Words lemminflect can't distinguish as derivational adjectives.
@@ -805,6 +945,8 @@ def sync(
     audio_dir: str | None = None,
     no_direct_media: bool = False,
     no_ankiweb_sync: bool = False,
+    max_bands: int = 5,
+    min_band_size: int = 100,
 ) -> dict:
     """Run the full sync workflow. Returns a summary dict."""
     words = data["words"]
@@ -814,19 +956,45 @@ def sync(
 
     # 1. Connect to Anki (skip for prefetch — audio-only mode)
     ac = None
+
+    # Compute frequency bands from the full word list (before dedup).
+    # band_assignment maps word_index in new_words → deck_name;
+    # populated after new_words is finalized below.
+    band_assignment: dict[int, str] = {}
+    bands = compute_bands(
+        _count_coca_levels(words), max_bands, min_band_size
+    )
+
     if not prefetch:
         print(f'Connecting to AnkiConnect...')
         ac = AnkiConnect()
 
-        # 2. Ensure deck and model exist
-        ac.ensure_deck_and_model(deck_name, MODEL_NAME)
-        print(f'  Deck: "{deck_name}"')
-        print(f"  Model: {MODEL_NAME}")
+        # 2. Create hierarchical decks (or flat deck if no bands)
+        if bands:
+            # Create parent deck first
+            ac.ensure_deck_and_model(deck_name, MODEL_NAME)
+            print(f'  Deck: "{deck_name}" (parent)')
 
-        # 3. Get existing WordId map from target deck
-        print(f"\nQuerying existing cards in deck...")
-        existing = ac.get_word_id_map(deck_name)
-        print(f"  Found {len(existing)} existing cards")
+            # Create each band sub-deck
+            for band_name, _lo, _hi in bands:
+                sub_deck = f"{deck_name}::{band_name}"
+                ac.ensure_deck_and_model(sub_deck, MODEL_NAME)
+                print(f'    └ "{band_name}"')
+
+            # Query existing cards across parent and all sub-decks
+            print(f"\nQuerying existing cards across all sub-decks...")
+            existing = _get_existing_across_decks(ac, deck_name, bands)
+            print(f"  Found {len(existing)} existing cards")
+        else:
+            # Single flat deck
+            ac.ensure_deck_and_model(deck_name, MODEL_NAME)
+            print(f'  Deck: "{deck_name}"')
+            print(f"  Model: {MODEL_NAME}")
+
+            # Get existing WordId map from target deck
+            print(f"\nQuerying existing cards in deck...")
+            existing = ac.get_word_id_map(deck_name)
+            print(f"  Found {len(existing)} existing cards")
     else:
         existing = {}
 
@@ -894,6 +1062,28 @@ def sync(
         print(f"  Intra-batch duplicates removed: {intra_dupes}")
     new_words = deduped_new
 
+    # Populate band_assignment: map each new_word index to its sub-deck
+    if bands:
+        band_map: dict[tuple[int, int], str] = {}  # (lo, hi) -> sub_deck_name
+        for band_name, lo, hi in bands:
+            band_map[(lo, hi)] = f"{deck_name}::{band_name}"
+        for idx, w in enumerate(new_words):
+            lvl = w.get("coca_level")
+            if isinstance(lvl, int):
+                for (lo, hi), sub_deck in band_map.items():
+                    if lo <= lvl <= hi:
+                        band_assignment[idx] = sub_deck
+                        break
+            # Words without a valid coca_level stay in the parent deck
+            if idx not in band_assignment:
+                band_assignment[idx] = deck_name
+        # Print band distribution
+        band_counts: dict[str, int] = {}
+        for deck in band_assignment.values():
+            short = deck.split("::")[-1] if "::" in deck else deck
+            band_counts[short] = band_counts.get(short, 0) + 1
+        print(f"\n  Band distribution: {', '.join(f'{k}: {v}' for k, v in band_counts.items())}")
+
     print(f"\n  New words to add: {len(new_words)}")
     print(f"  Already in deck: {len(skipped_words)}")
 
@@ -940,8 +1130,8 @@ def sync(
         with open(manifest_path, "r", encoding="utf-8") as mf:
             manifest = json.load(mf)
         # Restore notes (without deckName — fill in below)
-        for note in manifest["notes"]:
-            note["deckName"] = deck_name
+        for idx, note in enumerate(manifest["notes"]):
+            note["deckName"] = band_assignment.get(idx, deck_name)
             notes_to_add.append(note)
         # Load audio files from disk
         for filename, filepath in manifest["audio_files"].items():
@@ -959,20 +1149,20 @@ def sync(
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {
-                executor.submit(_process_one_word, w, book_id, no_audio): (i, w)
-                for i, w in enumerate(new_words, 1)
+                executor.submit(_process_one_word, w, book_id, no_audio): (idx, w)
+                for idx, w in enumerate(new_words)
             }
 
             completed = 0
             for future in concurrent.futures.as_completed(future_map):
-                i, w = future_map[future]
+                idx, w = future_map[future]
                 word = w["word"]
                 lemma = lemmatize_word(word)
                 completed += 1
 
                 try:
                     note, word_audio, final_ipa = future.result()
-                    note["deckName"] = deck_name
+                    note["deckName"] = band_assignment.get(idx, deck_name)
                     notes_to_add.append(note)
                     audio_uploads.extend(word_audio)
 
@@ -1237,6 +1427,8 @@ def main() -> None:
             audio_dir=args.audio_dir,
             no_direct_media=args.no_direct_media,
             no_ankiweb_sync=args.no_ankiweb_sync,
+            max_bands=args.max_bands,
+            min_band_size=args.min_band_size,
         )
         if result.get("error"):
             sys.exit(1)

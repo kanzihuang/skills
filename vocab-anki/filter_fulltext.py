@@ -358,6 +358,8 @@ def main() -> None:
         hi = min(basic_max, 25) if basic_max else 25
         in_range_set = load_level_range(lo, hi)
 
+    passed_coca_levels: dict[str, int | None] = {}
+
     for lemma in sorted(lemma_forms.keys()):
         forms = sorted(lemma_forms[lemma])
         rep = lemma  # rep is always the lemma in full-text mode
@@ -375,10 +377,13 @@ def main() -> None:
         if " -> " in detail:
             coca_word = detail.split(" -> ", 1)[1]
 
+        # Always resolve COCA level for banding in sync_anki.py
+        passed_coca_levels[lemma] = get_word_level(coca_word)
+
         # COCA frequency range check (using canonical COCA word's rank)
         if basic_min > 0 or basic_max > 0:
             if coca_word not in in_range_set:
-                lvl = get_word_level(coca_word)
+                lvl = passed_coca_levels[lemma]
                 lvl_str = f"level {lvl}/25" if lvl else "不在词族中"
                 rejected.append((lemma, rep, f"BNC/COCA 词族等级范围外 ({lvl_str})"))
                 continue
@@ -465,6 +470,7 @@ def main() -> None:
                     "lemma": lemma,
                     "rep": rep,
                     "forms": forms,
+                    "coca_level": passed_coca_levels.get(lemma),
                     "chapters": sorted(
                         [
                             {"chapterUid": idx, "chapterTitle": title}
