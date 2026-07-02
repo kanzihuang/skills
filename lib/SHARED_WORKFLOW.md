@@ -12,6 +12,8 @@
 
 WebSearch `<英文书名> full text` 或 `<英文书名> <作者> full text`。优先选 Internet Archive（`archive.org`）、Project Gutenberg、Standard Ebooks。搜索时留意可直链下载的纯文本 URL（`.txt` 结尾或 `/download/` 路径）。
 
+**必须使用英文原版**——双语对照版中的非英文内容会污染句子匹配。`match_sentences.py` 遇到含西里尔字母或 guillemet（«»）的文本直接拒绝。
+
 ### 3.0b. 拉取源文本（curl 优先，WebFetch 兜底）
 
 ```bash
@@ -22,9 +24,7 @@ wc -c /tmp/<book>-full.txt
 - curl 成功（文件 >20KB）→ 直接用
 - curl 返回 HTML → 试 Internet Archive `/download/` 路径
 - 全部失败 → WebFetch 逐章拉取
-- 验证：`head -c 500` 确认是书中文本
-
-**源文本语言要求**：必须使用英文原版。`match_sentences.py` 会拒绝含西里尔字母或 guillemet（«»）的文本——双语版源文本中的非英文元数据会污染句子匹配结果。搜索结果中优先选 Project Gutenberg（英文版）、Standard Ebooks、Internet Archive（英文原版）。
+- 验证：`head -c 500` 确认是英文原版书中文本，不含双语对照或非英文元数据
 
 ### 3.0c. 句子匹配
 

@@ -68,11 +68,11 @@ cp /path/to/book.txt /tmp/<safe_title>-full.txt
 
 # 或 curl 下载
 curl -sL --max-time 60 '<URL>' -o /tmp/<safe_title>-full.txt
-# 验证
+# 验证：必须是英文原版，不含双语对照/非英文元数据
 head -c 500 /tmp/<safe_title>-full.txt
 ```
 
-> 文件 >20KB 且包含书中实际文本。
+> 文件 >20KB 且包含书中实际文本。**必须使用英文原版**——双语版中的中文翻译、西里尔字母、guillemet（«»）等非英文内容会污染句子匹配。`match_sentences.py` 遇到此类文本直接拒绝。优先选择 Project Gutenberg（英文版）、Standard Ebooks、Internet Archive 英文原版。
 
 ### Step 2: 运行 filter_fulltext.py
 

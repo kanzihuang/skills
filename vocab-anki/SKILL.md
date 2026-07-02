@@ -194,6 +194,8 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 
 WebSearch `<英文书名> full text` 或 `<英文书名> <作者> full text`。优先选 Internet Archive（`archive.org` 的原始文本链接）、Project Gutenberg、Standard Ebooks 等公版书站点。**搜索时重点留意可直链下载的纯文本 URL**（以 `.txt` 结尾或 `/download/` 路径），供下一步 curl 使用。
 
+> **必须是英文原版**，不能使用中英双语版。双语版中的中文翻译段落、西里尔字母作者名、guillemet（«»）书名号会严重污染句子匹配结果。`match_sentences.py` 在 Step 3.0c 遇到此类文本直接拒绝。
+
 **3.0b. 拉取源文本（优先 curl 直链，WebFetch 仅作兜底）：**
 
 > **WebFetch 有严格引用字数限制（~125 字符/条），不适合拉取全书文本。必须优先用 `curl -sL` 直接下载。**
