@@ -330,6 +330,59 @@ _ARPABET_TO_IPA = {
     "W": "w",   "Y": "j",   "Z": "z",   "ZH": "ʒ",
 }
 
+# Legal English onset consonant clusters (ARPAbet phonemes).
+# Used for correct stress placement — the stress marker goes before
+# the syllable onset, not before the vowel nucleus.
+#
+# Single consonants are always legal onsets (except NG, which never
+# appears word-initially in English and is handled by the onset logic).
+_SONORANTS = frozenset({"L", "R", "W", "Y"})
+_OBSTRUENTS = frozenset({
+    "P", "B", "T", "D", "K", "G",
+    "F", "V", "TH", "DH", "S", "Z",
+    "SH", "ZH", "CH", "JH", "HH",
+})
+
+
+def _is_legal_onset(consonants: list[str]) -> bool:
+    """Check whether a sequence of ARPAbet consonants is a legal English onset."""
+    n = len(consonants)
+    if n == 0:
+        return True
+    if n == 1:
+        # NG is not a legal English onset (only appears syllable-finally)
+        return consonants[0] != "NG"
+    if n == 2:
+        c1, c2 = consonants
+        # Obstruent + sonorant (e.g. PL, BR, TW, KY)
+        if c1 in _OBSTRUENTS and c2 in _SONORANTS:
+            return True
+        # S + voiceless stop (SP, ST, SK)
+        if c1 == "S" and c2 in ("P", "T", "K"):
+            return True
+        # S + nasal (SM, SN)
+        if c1 == "S" and c2 in ("M", "N"):
+            return True
+        return False
+    if n == 3:
+        c1, c2, c3 = consonants
+        # S + voiceless stop + sonorant (SPR, STR, SKR, SPL, SKL, SKW)
+        if c1 == "S" and c2 in ("P", "T", "K") and c3 in _SONORANTS:
+            return True
+        return False
+    return False
+
+
+def _arpabet_to_ipa(arpa: str, stress_digit: str = "") -> str:
+    """Convert a single ARPAbet phoneme to IPA, handling special cases.
+
+    *stress_digit* is the original CMU stress marker ("" , "0", "1", "2").
+    ER0 (unstressed) → /ər/;  ER1/ER2 (stressed) → /ɜːr/.
+    """
+    if arpa == "ER":
+        return "ər" if stress_digit == "0" else "ɜːr"
+    return _ARPABET_TO_IPA.get(arpa, arpa.lower())
+
 
 def _pick_best_pronunciation(
     entries: list[list[str]], claude_ipa: str
@@ -366,6 +419,12 @@ def _cmu_ipa(word: str, claude_ipa: str = "") -> str | None:
     to pick the phonetically closest entry (handles heteronyms like
     read/read, wound/wound).  Without a Claude IPA, defaults to the
     first entry.
+
+    Stress placement follows the Maximal Onset Principle: consonants
+    between vowels are assigned to the following syllable's onset when
+    they form a legal English onset cluster.  The stress marker is
+    placed before the onset (not the nucleus) — e.g. "bewilder" →
+    /bɪˈwɪldər/, not /bɪwˈɪldər/.
     """
     cmu = _load_cmudict()
     w = word.lower()
@@ -378,21 +437,64 @@ def _cmu_ipa(word: str, claude_ipa: str = "") -> str | None:
     else:
         # Multiple → pick closest to Claude's IPA by vowel match
         phones = _pick_best_pronunciation(entries, claude_ipa)
-    # Convert ARPAbet phones to IPA string
-    vowel_count = sum(1 for p in phones if any(c.isdigit() for c in p))
-    result: list[str] = []
+
+    # ── Two-pass ARPAbet → IPA conversion ──────────────────────────
+    # Pass 1: split into (arpabet, is_vowel, stress_digit) segments.
+    segments: list[tuple[str, bool, str]] = []
     for p in phones:
-        stress = ""
         if p[-1].isdigit():
-            if p[-1] == "1" and vowel_count > 1:
-                stress = "ˈ"
-            elif p[-1] == "2" and vowel_count > 1:
-                stress = "ˌ"
-            p = p[:-1]
-        ipa = _ARPABET_TO_IPA.get(p, p.lower())
-        if stress:
-            result.append(stress)
-        result.append(ipa)
+            segments.append((p[:-1], True, p[-1]))
+        else:
+            segments.append((p, False, ""))
+
+    vowel_count = sum(1 for _, is_v, _ in segments if is_v)
+
+    # Pass 2: place stress marks at syllable onsets.
+    result: list[str] = []
+    pending: list[str] = []  # consonants since last vowel
+
+    for arpa, is_vowel, stress_digit in segments:
+        if is_vowel:
+            stress_mark = ""
+            if stress_digit == "1" and vowel_count > 1:
+                stress_mark = "ˈ"
+            elif stress_digit == "2" and vowel_count > 1:
+                stress_mark = "ˌ"
+
+            # Maximal Onset: move as many pending consonants as
+            # possible into the onset of the upcoming syllable.
+            onset_size = 0
+            if pending:
+                for n in range(min(len(pending), 3), 0, -1):
+                    if _is_legal_onset(pending[-n:]):
+                        onset_size = n
+                        break
+
+            coda_count = len(pending) - onset_size
+
+            # Flush coda consonants (belong to previous syllable)
+            for c in pending[:coda_count]:
+                result.append(_arpabet_to_ipa(c))
+
+            # Place stress before the onset
+            if stress_mark:
+                result.append(stress_mark)
+
+            # Flush onset consonants
+            for c in pending[coda_count:]:
+                result.append(_arpabet_to_ipa(c))
+
+            pending = []
+
+            # Now the vowel nucleus
+            result.append(_arpabet_to_ipa(arpa, stress_digit))
+        else:
+            pending.append(arpa)
+
+    # Flush any trailing consonants
+    for c in pending:
+        result.append(_arpabet_to_ipa(c))
+
     return "/" + "".join(result) + "/"
 
 
@@ -879,6 +981,53 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                     f"[{word}] sentence ends with function word "
                     f"'{last_word}' — likely truncated fragment"
                 )
+
+            # 7d. Punctuation artifact: ",." (comma-period) or ",)" —
+            #     source-text formatting debris from sentence-boundary
+            #     detection failures.  Example: "...in the breeze,."
+            if re.search(r',[.)]$', clean.rstrip()):
+                errors.append(
+                    f"[{word}] sentence has punctuation artifact "
+                    f"({clean.rstrip()[-3:]}...) — source-text boundary debris"
+                )
+
+        # 8. Translation quality checks (soft warnings)
+        translation = w.get("translation_cn", "")
+        if translation and sentence:
+            # 8a. Chinese translation ends with conjunction / transition word
+            #     — strong signal of mid-clause truncation before translation.
+            #     "然后" (then), "但是" (but), "而且" (and/moreover),
+            #     "所以" (so/therefore), "不过" (however), "于是" (thus).
+            _CN_TRUNCATION_ENDINGS = frozenset({
+                "然后", "但是", "而且", "所以", "不过", "于是",
+                "因此", "然而", "并且", "以及", "还是", "或者",
+                "接着", "随后", "之后", "以后", "以前",
+            })
+            cn_clean = translation.strip().rstrip("，。！？、；：…")
+            cn_last = cn_clean[-2:] if len(cn_clean) >= 2 else cn_clean
+            if cn_last in _CN_TRUNCATION_ENDINGS or (
+                len(cn_clean) >= 3 and cn_clean[-3:] in _CN_TRUNCATION_ENDINGS
+            ):
+                print(
+                    f"  [WARN] [{word}] Chinese translation ends with "
+                    f"'{cn_last}' — may be truncated (sentence: {clean[:50]}...)",
+                    file=sys.stderr,
+                )
+
+            # 8b. Sentence-translation length ratio: English (chars) vs
+            #     Chinese (chars).  Typical ratio is 0.5–2.5.  Values
+            #     outside this range suggest a mismatch.
+            en_len = len(clean)
+            cn_len = len(translation.strip())
+            if en_len > 0 and cn_len > 0:
+                ratio = cn_len / en_len
+                if ratio < 0.3 or ratio > 3.0:
+                    print(
+                        f"  [WARN] [{word}] unusual EN→ZH length ratio "
+                        f"({en_len}→{cn_len} chars, ratio {ratio:.1f}) — "
+                        f"possible sentence/translation mismatch",
+                        file=sys.stderr,
+                    )
 
     return errors
 
@@ -1519,10 +1668,10 @@ def _test_arpabet_to_ipa() -> None:
     check("food", "/fuːd/")          # UW → uː
     check("foot", "/fʊt/")           # UH → ʊ
     check("fast", "/fæst/")          # AE → æ
-    check("father", "/fˈɑːðɜːr/")   # AA → ɑː, 2-syll → stress
+    check("father", "/ˈfɑːðər/")     # AA → ɑː, ER0 → ər
     check("law", "/lɔː/")            # AO → ɔː, unambiguous in cmudict
     check("cup", "/kʌp/")            # AH → ʌ
-    check("bird", "/bɜːrd/")         # ER → ɜːr
+    check("bird", "/bɜːrd/")         # ER1 → ɜːr (monosyllabic, no stress)
 
     # ── Diphthongs ──
     check("day", "/deɪ/")            # EY → eɪ
@@ -1538,22 +1687,22 @@ def _test_arpabet_to_ipa() -> None:
     check("chip", "/tʃɪp/")          # CH → tʃ
     check("judge", "/dʒʌdʒ/")        # JH → dʒ
     check("sing", "/sɪŋ/")           # NG → ŋ
-    check("measure", "/mˈeʒɜːr/")   # ZH → ʒ, 2-syll → stress
+    check("measure", "/ˈmeʒər/")     # ZH → ʒ, ER0 → ər
     check("yes", "/jes/")            # Y → j
 
     # ── Multi-syllable stress ──
-    check("hunting", "/hˈʌntɪŋ/")
-    check("accomplished", "/ʌkˈɑːmplɪʃt/")
-    check("distinguished", "/dɪstˈɪŋɡwɪʃt/")
-    check("beautiful", "/bjˈuːtʌfʌl/")
-    check("blundering", "/blˈʌndɜːrɪŋ/")
-    check("comfortable", "/kˈʌmfɜːrtʌbʌl/")
+    check("hunting", "/ˈhʌntɪŋ/")
+    check("accomplished", "/ʌˈkɑːmplɪʃt/")
+    check("distinguished", "/dɪˈstɪŋɡwɪʃt/")
+    check("beautiful", "/ˈbjuːtʌfʌl/")
+    check("blundering", "/ˈblʌndərɪŋ/")
+    check("comfortable", "/ˈkʌmfərtʌbʌl/")
 
     if failures:
         print(f"\n  {failures} ARPAbet→IPA test(s) FAILED", file=sys.stderr)
         sys.exit(1)
     else:
-        print(f"  ARPAbet→IPA: all {23+5} tests passed ✓")
+        print(f"  ARPAbet→IPA: all {29} tests passed ✓")
 
 
 if __name__ == "__main__":
