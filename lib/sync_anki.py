@@ -863,9 +863,19 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                 f"'{word}' not in '{clean_sentence[:80]}{'...' if len(clean_sentence) > 80 else ''}'"
             )
 
-        # 3. Sentence length ≤ 150 chars (hard error)
+        # 3. Sentence length ≤ 150 chars — hard error unless 3A has explicitly
+        #    exempted this sentence (exempt_from_150 flag).
         if len(sentence) > 150:
-            errors.append(f"[{word}] sentence too long: {len(sentence)} chars (max 150)")
+            if not w.get("exempt_from_150"):
+                errors.append(
+                    f"[{word}] sentence too long: {len(sentence)} chars (max 150)"
+                )
+            else:
+                print(
+                    f"  [WARN] [{word}] sentence too long ({len(sentence)} chars) "
+                    f"but exempted by 3A",
+                    file=sys.stderr,
+                )
 
         # 4. Required fields non-empty (hard error)
         for field in ["ipa", "definition_cn", "translation_cn"]:
@@ -974,6 +984,12 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                 "since", "if", "unless", "until", "as",
                 # Auxiliaries (expect a main verb)
                 "had", "has", "was", "were", "could", "would", "should",
+                # Adverbs (signal mid-clause truncation when sentence-final)
+                "also", "even", "just", "still", "then", "now", "only",
+                "quite", "rather", "almost", "very", "too", "already",
+                "always", "never", "often", "here", "there", "again",
+                "once", "soon", "ever", "indeed", "hardly", "merely",
+                "nearly", "else",
             }
             last_word = re.split(r'\s+', clean.rstrip('"\'') + ' ')[-2].strip().lower()
             if last_word in _FUNCTION_ENDINGS:
@@ -982,13 +998,14 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                     f"'{last_word}' — likely truncated fragment"
                 )
 
-            # 7d. Punctuation artifact: ",." (comma-period) or ",)" —
-            #     source-text formatting debris from sentence-boundary
-            #     detection failures.  Example: "...in the breeze,."
-            if re.search(r',[.)]$', clean.rstrip()):
+            # 7d. Punctuation artifact: ",." (comma-period), ",)" —
+            #     or bare trailing comma (",$").  Source-text formatting
+            #     debris or mid-clause truncation fragments.
+            stripped = clean.rstrip()
+            if re.search(r',[.)]$', stripped) or stripped.endswith(','):
                 errors.append(
                     f"[{word}] sentence has punctuation artifact "
-                    f"({clean.rstrip()[-3:]}...) — source-text boundary debris"
+                    f"({stripped[-3:]}...) — source-text boundary debris"
                 )
 
         # 8. Translation quality checks (soft warnings)

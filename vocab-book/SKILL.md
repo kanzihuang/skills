@@ -102,13 +102,16 @@ cat /tmp/<safe_title>-full.txt | \
 4. 生成 UUID 后缀（`uuid.uuid4().hex[:12]`），写入 JSON `suffix` 字段
 5. JSON 输出（含 `in_coca[]`、`excluded[]`、`suffix`、`summary`）
 
-### Steps 3.0–4: 句子匹配 / 翻译 / 内容 / 音频 / 同步
+### Steps 3.0–4: 句子匹配 / 内容生成 / 翻译 / 音频 / 同步
 
 > 以下步骤与 vocab-anki 共享。详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`。
 
 关键路径（`<skill_dir>` 内 `lib/` 前缀）：
-- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配（Step 3.0）
-- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 3.0f）
+- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配（Step 3.0，PySBD 分句 + candidates）
+- **Step 3A**: 句子选择 + 完整性校验（Claude，1 agent）
+- **Step 3B**: 生成释义 + IPA（Claude，N agents 并行，≤25 词/agent）
+- **Step 3C**: 内容验证 — POS 对齐 + 释义准确（Claude，1 agent）
+- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 3.0f，3C 之后）
 - `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步（Step 3.5 + Step 4）
 
 **全文模式特有**：

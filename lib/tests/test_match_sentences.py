@@ -1,65 +1,116 @@
-"""Test match_sentences.py — sentence splitting and extraction."""
+"""Test match_sentences.py — PySBD segmentation + candidate extraction.
 
-import re
-import sys
+Covers:
+  - PySBD sentence splitting accuracy
+  - Candidate extraction (order, count limit)
+  - Hard 500-char truncation
+  - <b> tag insertion
+"""
+
 import pytest
-
-sys.path.insert(0, '/home/agent/github/kanzihuang/skills/vocab-anki')
-from lib.scripts.match_sentences import split_sentences
-
-
-def _clean(text):
-    """Normalize text same way split_sentences does."""
-    text = re.sub(r'\n{2,}', '\n\n', text)
-    text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
-    return text
+from lib.scripts.match_sentences import (
+    split_sentences,
+    find_all_sentences,
+    hard_truncate,
+)
 
 
-def test_split_sentences_ascii_quotes():
-    """Standard ASCII double quotes after period are recognized."""
-    text = _clean(
-        'He wore a golden bracelet. '
-        '"Whomever I touch," the snake said.'
+# ── PySBD sentence splitting ──
+
+
+def test_standard_sentence_split():
+    """Standard sentences with abbreviation should not be over-split."""
+    sents = split_sentences(
+        "Hello! This is a test. Dr. Smith arrived."
     )
-    sents = split_sentences(text)
+    assert len(sents) == 3
+    assert "Dr. Smith arrived." in sents
+
+
+def test_dialogue_quote_split():
+    """Dialogue with quotes inside should be split correctly."""
+    sents = split_sentences(
+        '"Draw me a sheep!" he said. "What?"'
+    )
     assert len(sents) == 2
-    assert 'bracelet.' in sents[0]
-    assert '"Whomever' in sents[1]
+    assert '"Draw me a sheep!" he said.' in sents
 
 
-def test_split_sentences_curly_quotes():
-    """Curly/smart quotes “” after period are recognized.
-    Historical bug: the character class only matched ASCII \" (U+0022),
-    not curly “ (U+201C), so dialogue sentences weren't split.
-    """
-    text = _clean(
-        'He twined himself around the little prince’s ankle, '
-        'like a golden bracelet. '
-        '“Whomever I touch, I send back to the earth,” '
-        'the snake spoke again.'
+def test_abbreviation_not_split():
+    """Common abbreviations (Mr., Dr., U.S.) should not trigger splits."""
+    sents = split_sentences(
+        "Mr. Jones and Dr. Lee went to U.S. offices."
     )
-    sents = split_sentences(text)
-    # Must be at least 2 sentences — bracelet. and “Whomever...
-    assert len(sents) >= 2, f"Expected >=2 sentences, got {len(sents)}: {sents}"
-    assert 'bracelet.' in sents[0]
-    assert '“Whomever' in sents[1]
+    assert len(sents) == 1
 
 
-def test_split_sentences_curly_single_quotes():
-    """Curly single quotes ‘’ after period."""
-    text = _clean(
-        'He said goodbye. '
-        '‘Farewell,’ she whispered.'
+# ── Hard truncation ──
+
+
+def test_hard_truncate_short_sentence_unchanged():
+    """Sentences under the cutoff are returned as-is."""
+    text, was_truncated = hard_truncate("Short sentence.", max_len=500)
+    assert text == "Short sentence."
+    assert was_truncated is False
+
+
+def test_hard_truncate_long_sentence_cut_at_word_boundary():
+    """Long sentences (>500 chars) are cut at the last word boundary."""
+    long_text = "word " * 300  # ~1500 chars
+    text, was_truncated = hard_truncate(long_text, max_len=500)
+    assert was_truncated is True
+    assert len(text) <= 500
+    assert not text.endswith(" ")
+
+
+# ── Candidate extraction ──
+
+
+def test_candidates_in_original_order():
+    """Candidates are returned in original text order, not by length."""
+    text = (
+        "The little prince was abashed. "
+        "He felt very abashed indeed. "
+        "Completely abashed, he looked away."
     )
-    sents = split_sentences(text)
-    assert len(sents) >= 2
+    results = find_all_sentences(text, ["abashed"], "abash")
+    assert len(results) == 3
+    assert "little prince" in results[0]["text"]
+    assert "very" in results[1]["text"]
+    assert "Completely" in results[2]["text"]
 
 
-def test_split_sentences_no_false_split():
-    """Mid-sentence abbreviations (Mr., Dr.) inside dialogue are fine."""
-    text = _clean(
-        'He said, "Mr. Smith is here." Then he left.'
-    )
-    sents = split_sentences(text)
-    # "Mr. Smith" has a period but then lowercase "Smith" — no split there
-    assert len(sents) >= 1
+def test_candidates_capped_at_five():
+    """At most 5 candidates are returned."""
+    text = ". ".join([f"Sentence {i} with the word test." for i in range(10)])
+    results = find_all_sentences(text, ["test"], "test")
+    assert len(results) <= 5
+
+
+def test_word_not_in_text_returns_empty():
+    """Empty list when word is not in text."""
+    results = find_all_sentences("No match here.", ["abashed"], "abash")
+    assert results == []
+
+
+def test_b_tag_inserted():
+    """<b> tags wrap the matched surface form."""
+    text = "The little prince was abashed."
+    results = find_all_sentences(text, ["abashed"], "abash")
+    assert len(results) == 1
+    assert "<b>abashed</b>" in results[0]["text"]
+
+
+def test_case_insensitive_match_preserves_original():
+    """Matching is case-insensitive; <b> preserves original case."""
+    text = "ABASHED, he looked away."
+    results = find_all_sentences(text, ["abashed"], "abash")
+    assert len(results) == 1
+    assert "<b>ABASHED</b>" in results[0]["text"]
+
+
+def test_duplicate_sentences_deduplicated():
+    """Identical sentences are deduplicated."""
+    text = "He was abashed. He was abashed."
+    results = find_all_sentences(text, ["abashed"], "abash")
+    assert len(results) == 1

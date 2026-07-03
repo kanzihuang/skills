@@ -348,3 +348,94 @@ def test_emotional_adjective_to_infinitive_valid():
     errors = _validate_word_entries([w])
     assert not has_error(errors, "astonished", "suspicious"), \
         f"Emotional adj with to-infinitive should pass\nErrors: {errors}"
+
+
+# ── Adverb function-word endings (commit: humble "also," fragment) ──
+
+
+@pytest.mark.parametrize("word,sentence,adverb", [
+    ("humble", "I resolved to <b>humble</b> myself also,", "also"),
+    ("persist", "He continued to <b>persist</b> even,", "even"),
+    ("linger", "She let the moment <b>linger</b> still,", "still"),
+])
+def test_sentence_ending_with_adverb_is_error(word, sentence, adverb):
+    """Sentences ending with an adverb signal mid-clause truncation.
+
+    Historical: match_sentences.py truncated '...to humble myself also,
+    she would really allow herself to die.' at the comma, producing a
+    fragment ending with 'also,'.  The old _FUNCTION_ENDINGS set only
+    covered prepositions/conjunctions/auxiliaries, missing adverbs.
+
+    These fragments end with a bare comma, so they trigger the
+    punctuation-artifact check (backstop).  But they would ALSO trigger
+    the function-word check if the comma were stripped — the last word
+    is an adverb that signals truncation.  We verify at least one of
+    the two checks fires.
+    """
+    w = make_word(word=word, sentence=sentence)
+    errors = _validate_word_entries([w])
+    # Should be caught by either function-word check (adverb ending)
+    # or punctuation-artifact check (bare comma ending).
+    caught = (
+        has_error(errors, word, "function word") or
+        has_error(errors, word, "punctuation artifact")
+    )
+    assert caught, \
+        f"Should detect adverb/comma ending: '{adverb}' in: {sentence}\nErrors: {errors}"
+
+
+def test_sentence_ending_with_bare_comma_is_error():
+    """Sentences ending with bare comma are hard errors.
+
+    Historical: '...to humble myself also,' — the old regex r',[.)]$'
+    only matched ',.' and ',)', missing the bare comma '$,' pattern.
+    """
+    w = make_word(
+        word="humble",
+        sentence="I resolved to <b>humble</b> myself also,",
+    )
+    errors = _validate_word_entries([w])
+    assert has_error(errors, "humble", "punctuation artifact"), \
+        f"Should detect bare comma ending\nErrors: {errors}"
+
+
+def test_old_regex_still_catches_comma_period():
+    """Regression: old ',.' pattern still caught by extended check."""
+    w = make_word(
+        word="breeze",
+        sentence="The flower swayed in the <b>breeze</b>,.",
+    )
+    errors = _validate_word_entries([w])
+    assert has_error(errors, "breeze", "punctuation artifact"), \
+        f"Should still detect ',.' artifact\nErrors: {errors}"
+
+
+# ── exempt_from_150 flag ──
+
+
+def test_exempt_sentence_passes_length_check():
+    """exempt_from_150 flag downgrades >150 from hard error to soft warning."""
+    w = make_word(
+        word="veritable",
+        sentence="I will tell you that before the invention of electricity "
+                "it was necessary to maintain a <b>veritable</b> army of 462,511 "
+                "lamplighters for the street lamps.",
+        exempt_from_150=True,
+    )
+    errors = _validate_word_entries([w])
+    assert not has_error(errors, "veritable", "sentence too long"), \
+        f"Exempt sentence should pass length check\nErrors: {errors}"
+
+
+def test_non_exempt_sentence_fails_length_check():
+    """Sentence >150 without exempt flag is still a hard error."""
+    w = make_word(
+        word="veritable",
+        sentence="I will tell you that before the invention of electricity "
+                "it was necessary to maintain a <b>veritable</b> army of 462,511 "
+                "lamplighters for the street lamps.",
+        # no exempt_from_150
+    )
+    errors = _validate_word_entries([w])
+    assert has_error(errors, "veritable", "sentence too long"), \
+        f"Non-exempt long sentence should be hard error\nErrors: {errors}"

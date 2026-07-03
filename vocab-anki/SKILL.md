@@ -171,7 +171,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 
 ## 共享工作流（Step 3.0–4）
 
-> Steps 3.0（句子匹配）、3.0f（DeepL 翻译）、3（生成内容）、3.5（预下载音频）、4（同步）与 vocab-book 共享。
+> Steps 3.0（句子匹配）、3A（句子选择）、3B（生成内容）、3C（内容验证）、3.0f（DeepL 翻译）、3.5（预下载音频）、4（同步）与 vocab-book 共享。
 > **详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`**——Claude 执行到对应步骤时必须 Read 该文件获取完整指令。
 
 共享步骤中的关键路径（`<skill_dir>/lib/` 前缀）：
@@ -312,11 +312,21 @@ fi
 - 翻译写回 `translation_cn` 字段
 - 打印字符用量（对照 500,000/月配额）
 
-**完成后进入 Step 3**——句子已提取并截断，翻译已由 DeepL 完成。Claude 工作收窄为：IPA + 释义 + 翻译质量抽查。
+**完成后进入 Step 3A**——候选句已提取，Claude 工作分为三步：3A 句子选择 → 3B 生成释义 → 3C 内容验证 → DeepL 翻译。
 
-### Step 3: 生成内容（Claude 知识工作，范围收窄）
+> 完整工作流参见 `<skill_dir>/lib/SHARED_WORKFLOW.md`。
 
-仅对 Step 1 筛出的 C 个单词生成内容。句子已在 Step 3.0 从源文本提取并截断，翻译已在 Step 3.0f 由 DeepL 完成（若 API key 未设置则由 Claude 在此步骤完成）。此步骤聚焦 IPA、释义、翻译质量抽查。对每个单词提供：
+### Step 3A: 句子选择 + 完整性校验（Claude，1 agent，先于 3B 执行）
+
+从 match_sentences.py 输出的 candidates 中选句、校验完整性、极端长句截断。参见 SHARED_WORKFLOW.md Step 3A。
+
+### Step 3B: 生成内容（Claude，N agents 并行）
+
+用 3A 确定的句子，为每个词生成 `definition_cn` + IPA。**不自查**（自查移至 3C）。
+
+**分批策略**：≤25 词/agent。≤30→1, 31–80→4, 81–200→8, 200+→10+。
+
+对每个单词提供：
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
@@ -401,12 +411,12 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
 >
 > **执行铁律**：读完 pipeline 输出后，**先执行 Step 3.0 拉取源文本**，从源文本中机械匹配所有单词的句子。然后在写入 JSON 时直接填入已提取的句子。不要在 thinking block 中回忆例句——句子已从源文本检索到。
 
-**批次规则：**
-- ≤20 词：单批写入
-- 21-40 词：分 2 批，每批 ~20 词
-- 41-60 词：分 3 批，每批 ~20 词
-- 60+ 词：分 4+ 批，每批 ~15 词
-- 每批按字母序排列该批单词
+**批次规则（Step 3B）：**
+- ≤30 词：单批
+- 31–80 词：4 批，每批 ~20 词
+- 81–200 词：8 批，每批 ~25 词
+- 200+ 词：10+ 批，每批 ~25 词
+- 每批按字母序排列
 
 **派生形容词 COCA 复查：**
 
@@ -419,30 +429,7 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
 
 > 例：`blundering`(adj) 不在 Nation 词族 → 排除。`distinguished`(adj) 在 Nation 词族 → 生成
 
-**每批自查清单（写入 JSON 后、下一批开始前必做）：**
-
-每批写入完成后，逐词检查以下四项，发现错误立即修正：
-
-1. **lemma 正确性**：脑中过一遍 `lemmatize_word(word)` 的返回结果。结果词性与句中实际用法一致（屈折变化、比较级）→ `lemma` **留空**，脚本自动还原；不一致（派生 adj 被当屈折）→ 必须显式覆写 `lemma`。比较级现已正确处理：`higher`→`high`、`faster`→`fast`。派生形容词仍需覆写：`blundering`(adj)→lemmatize→`blunder`(v) 词性不对，覆写 `lemma: "blundering"`；`distinguished`(adj)→lemmatize→`distinguish`(v) 词性不对，覆写 `lemma: "distinguished"`；`pondered`(v)→lemmatize→`ponder`(v) 正确，`lemma` 留空。**绝不在 `lemma` 字段中填写与 `word` 相同的表面词形**——留空让脚本处理，填表面词形反而阻止自动还原
-2. **IPA 对应性**：每个 IPA 是否对应 `lemma`（卡片展示词）的正确发音？异读词（如 `intimate`）必须根据释义选择 `/ˈɪntɪmət/`(adj) 或 `/ˈɪntɪmeɪt/`(v)
-3. **释义词性对齐**：`definition_cn` 是否反映了句中实际用法的词性？`blundering` adj→"笨拙的"（非"犯大错"）；`conceited` adj→"自负的"（非"自负"）
-   - **被动语态 vs 形容词检查**：`-ed` 分词在句中可以是动词过去分词（被动语态）或形容词（情感/状态）。判断标准分三层：
-     1. **`by` + 施事者** → 被动语态，动词。例：`His back was <b>bent</b> with the weight` → `bent` 是 `bend` 的过去分词，`v. 被压弯`（**不标** `adj. 弯曲的`）
-     2. **`be X-ed to <verb>`** → 形容词。情感形容词 + to-infinitive 是英语中固定模式，无施事者。例：`your friends will be properly <b>astonished</b> to see you laughing` → `adj. 惊讶的，吃惊的`（**不标** `v. 使惊讶`）。同类：`surprised to hear`、`delighted to learn`、`disappointed to find`
-     3. **`be X-ed` 无施事者、无 to-infinitive** → 酌情判断：描述情感/状态（`He was <b>embarrassed</b>.` → adj），或描述动作结果（`The window was <b>broken</b>.` → v.）。若有后续从句说明原因（`that…`、`because…`），通常为形容词
-     4. **X-ed 直接修饰名词** → 形容词（如 `a <b>distinguished</b> fisherman`）
-4. **word 字段一致**：`word` 是否 = `<b>` 包裹的文本 = 句中出现的形式？
-5. **语义情境对齐（多义词义项验证）**：对每个词，重读 sentence 中的上下文，确认 `definition_cn` 和 `translation_cn` 选择了该词在此句中的正确义项，而非其最常见词典义。执行以下验证：
-   - **代入验证法**：将 `definition_cn`（去除"的/地/了"等标记）代入原英文句替换原词，看代入后的概念是否通顺合理。若替换后句子意思不通或产生逻辑矛盾，说明义项选错。例如 "he must be treated thriftily" → "节俭地对待他" 不通（对人不能"节俭"），说明应换义项
-   - **义项枚举法**：脑中快速列出该词你知道的 2-3 个义项，逐一用代入验证法测试，选出最合理的一个
-   - **跨句一致性检查**：若同一词在牌组中多次出现（不同句子），确认每个句子中该词的义项独立判断——前一句是"节俭"不意味着本句也是"节俭"
-   - 发现定义/翻译与句子语境冲突时，修正后继续，不要遗留到下一批
-6. **sentence-translation 对齐**：逐词检查 `sentence` 的英文语义单元，确认 `translation_cn` 中**每个中文语义元素在英文句中都有对应**。若翻译中出现英文句子里不存在的内容（如中文有「共同构成了我所收到礼物的光芒」但英文只有 `…the tenderness of smiling faces…`）→ 句子截断有误或翻译凭空添加。立即修正句子或同步裁切翻译，直到二者语义完全对齐
-   - **截断后翻译同步更新**：句子经 3.0e 截断后，**必须重新审视翻译**——原翻译基于完整长句，截断后句子变短、信息减少，翻译也须同步裁剪。**禁止**截断后保留原翻译——会出现翻译信息多于句子实际内容的情况（如 `alternately` 的句子只剩 `swinging with each arm alternately on the…` 但翻译包含"他喊了一声，双手猛击，收回一码线"等已裁掉的内容）。正确做法：截断后立即重新翻译截断句
-   - **双向对齐验证**（每句必做，不仅是截断句）：
-     1. **英→中**：圈出英文句中的实词（名词、动词、形容词、副词），确认每个在中文翻译中都有对应或合理省略（如代词、冠词可省）。**禁止**翻译漏掉整个分句（如 `and he carried the fish in his right hand` 完全消失）。
-     2. **中→英**：圈出中文翻译中的实词，确认每个在英文句中都有对应。**禁止**翻译出现英文中没有的具体事物/动作（如英文无 `head` 但翻译出现"头"——`aboard` 案例）。
-     3. 任方向不匹配 → 修正翻译或重新截断句子，直到双向对齐
+**自查清单**：已移至 Step 3C（独立验证 agent）。3B 生成 agent 只生成、不自查。
 
 **写入流程：**
 
@@ -462,7 +449,18 @@ curl -s http://localhost:8765 -d '{"action":"findNotes","version":6,"params":{"q
 
 **注意**：第一批之前仍需 `rm -f + touch + Read limit=3` 初始化文件。后续批次只需 Read + Edit/Write。
 
-- **不再使用 SubAgent**：SubAgent 启动慢（权限确认、模型初始化），常误触发 WebSearch 浪费额度，多个 agent 的协调开销远超串行生成的实际耗时
+- **Agent 使用策略**：Step 3B 使用 N 个 Agent 并行生成（≤25 词/agent），Step 3A 和 3C 各使用 1 个 Agent 串行处理。Agent 之间通过临时 JSON 文件传递数据，无实时协调开销
+
+### Step 3C: 内容验证（Claude，1 agent）
+
+Step 3B 全部完成后，合并所有 batch 输出，由 1 个 agent 逐词验证：
+
+| 检查 | 说明 |
+|------|------|
+| POS 对齐 | def 词性 vs lemma 词性？沿用 passive-vs-adjective 判定标准 |
+| 释义准确 | 代入验证法 + 义项枚举 + 跨句一致性检查 |
+
+发现问题 → 直接修正。机械检查（word=`<b>`、IPA 格式、功能词结尾）由 match_sentences.py 和 sync_anki.py 纵深防御执行，不在 3C。
 - **句子来源**：所有例句均通过 Step 3.0 从源文本机械提取。源文本不可用 → 跳过该批次所有单词，Step 4 汇总中标明
 
 **性能说明：**

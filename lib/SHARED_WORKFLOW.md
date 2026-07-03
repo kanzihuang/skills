@@ -84,7 +84,7 @@ wc -c /tmp/<book>-full.txt
 
 ## Step 3.0f: DeepL 翻译
 
-**前置条件**：Step 3.0e 截断已完成，所有 sentence ≤150 字符。
+在 **3A→3B→3C 完成之后**执行，翻译的是 3A 已确定的最终句子。
 
 前置条件：`DEEPL_API_KEY` 环境变量。
 
@@ -100,63 +100,86 @@ fi
 - 翻译写回 `translation_cn`
 - 打印字符用量
 
-若 DEEPL_API_KEY 未设置 → 跳过，翻译由 Claude 在 Step 3 完成。
+若 DEEPL_API_KEY 未设置 → 跳过，翻译由 Claude 在 Step 3B 中完成。
 
-## Step 3: 生成内容（Claude 知识工作）
+## Step 3A: 句子选择 + 完整性校验（Claude，1 agent）
 
-仅对筛选出的单词生成内容。句子已从源文本提取，翻译已由 DeepL 完成（若可用）。
+**在 3B 生成释义之前执行**，避免为会被排除的词浪费 3B 时间。
+
+从 match_sentences.py 输出的 candidates 中为每个词选句、做语义完整性校验、仅极端长句做语义截断。
+
+### 输入
+
+- `candidates` 数组（含 `<b>` 标签，按原文出现顺序，≤5 句）
+- `char_offset`（词在源文本中的字符位置）
+- `source_text_path`（源文本路径）
+- 书上下文（书名 + 2-3 句情节简介，由主流程启动 agent 时写入 prompt）
+
+### 执行流程
+
+```
+对每个 word:
+  for sent in candidates:
+    1. C1–C3 语义校验（Claude）：
+       C1. 有主语 + 定式动词谓语？
+       C2. 无悬空从句？（if/when/because 从句有对应主句）
+       C3. 无悬空指代？（代词/指示词先行词未落在被截部分）
+       → 任一违反 → 跳过，下一个 candidate
+
+    2. 极端长句判断（满足任一 → 语义截断）：
+       a. 去标签后 > 250 字符
+       b. 含 3+ 并列独立分句（`, and` / `, but` / `;` 连接）
+       → 不满足 → 直接选用（>150 则标记 exempt_from_150）
+       → 满足 → 三阶段语义截断：
+         Phase 1 贪婪：从句末向句首，逐边界往前尝试，第一个完整句 → 选用
+         Phase 2 硬停止：下一个边界越过 <b> 标签或主句主干 → 不再往前
+         Phase 3 回退：回到 Phase 2 前的边界 → 句子长但完整 → exempt
+
+  全部 candidate 失败 →
+    4. 回源文本手动提取（Read source_text_path offset=char_offset±500）
+       → 目视完整句边界 → 手动切出 → 跑步骤 1-3
+    5. 仍然失败 → excluded
+```
+
+C3 中置信度——不确定就跳过此 candidate。截断宁长勿碎。
+
+### 输出
+
+为每个词确定 `sentence`（含 `<b>` 标签）或排除。
+
+---
+
+## Step 3B: 生成释义 + IPA（Claude，N agents 并行）
+
+用 3A 确定的最终句子逐词生成 `definition_cn` 和 IPA。
+
+**分批**：≤25 词/agent。≤30→1, 31–80→4, 81–200→8, 200+→10+。
+**不自查**——自查职责移至 3C。
 
 ### 字段说明
 
 | 字段 | 说明 |
 |------|------|
-| `word` | 书中表面词形 — `<b>` 包裹什么就写什么 |
+| `word` | `<b>` 包裹的表面词形 |
 | `lemma` | 派生形容词必填，常规屈折留空 |
-| `coca_level` | 从 filter 输出 JSON **原样透传** |
-| `sentence` | 含 `<b>…</b>` 的完整句子 |
-| `ipa` | 对应 lemma 的 IPA（cmudict 自动生成；多发音词时 Claude 投票） |
+| `coca_level` | 从 filter 输出原样透传 |
+| `sentence` | 含 `<b>…</b>` 的完整句子（3A 已确定） |
+| `ipa` | cmudict 自动生成；多发音词时 Claude 投票 |
 | `definition_cn` | 按句中实际用法释义 |
-| `translation_cn` | 整句中文翻译（优先 DeepL） |
+| `translation_cn` | DeepL 翻译（Step 3.0f，在 3C 之后执行） |
 
-### 例句规则
+---
 
-- 必须是书中真实句子，来自 3.0c 源文本机械匹配
-- 禁止凭记忆编造；源文本没有 → 不生成卡片
-- `<b>` 必须包裹句中完整的表面词形
-- 例句 ≤150 字符
+## Step 3C: 内容验证（Claude，1 agent）
 
-### 翻译规则
+POS 对齐 + 释义准确。仅校验 Claude 产出，不涉及翻译。发现问题 → 直接修正。
 
-- **必须翻译机械匹配到的具体句子**，禁止从记忆中调取其他段落的译文
-- 即使认出句子出自著名段落，也必须逐句翻译当前匹配结果，不得替换
-- 翻译应与英文句子**语义严格对应**，不得出现英文说 A 中文翻 B 的情况
-- 优先使用 DeepL（Step 3.0f）；Claude 翻译时更需警惕记忆干扰
+| 检查 | 说明 |
+|------|------|
+| POS 对齐 | def 词性 vs lemma 词性？ |
+| 释义准确 | 代入验证法 + 义项枚举 |
 
-### 分批策略
-
-- ≤20 词 → 单批；21-40 → 2 批；41-60 → 3 批；60+ → 4+ 批
-- 每批按字母序排列
-
-### 每批自查清单
-
-1. lemma 正确性（派生 adj 覆写，屈折留空）
-2. IPA 对应性
-3. 释义词性对齐
-4. word 字段一致
-5. 语义情境对齐（多义词义项验证）
-6. sentence-translation 双向对齐
-
-### 写入流程
-
-优先 Python `json.dump`（避免 Write 工具 Unicode 归一化问题）：
-```bash
-python3 << 'PYEOF'
-import json
-data = { ... }
-with open('/tmp/vocab-anki-input-<tmp_id>.json', 'w', encoding='utf-8') as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
-PYEOF
-```
+机械检查（word=`<b>` 标签、IPA 格式、功能词结尾等）由 match_sentences.py 和 sync_anki.py 纵深防御执行，不在 3C。
 
 ### JSON 格式
 
@@ -166,7 +189,7 @@ PYEOF
   "book_author": "作者",
   "deck_name": "牌组名",
   "words": [
-    {"word": "pondered", "lemma": "ponder", "coca_level": 3, "ipa": "/.../", "sentence": "...", "definition_cn": "...", "translation_cn": "..."}
+    {"word": "pondered", "lemma": "ponder", "coca_level": 3, "ipa": "/.../", "sentence": "...", "definition_cn": "...", "translation_cn": "...", "exempt_from_150": false}
   ],
   "excluded": [
     {"word": "abash", "reason": "不在 BNC/COCA 25000 词族中"}
@@ -174,7 +197,7 @@ PYEOF
 }
 ```
 
-> IPA 由 cmudict 自动生成；Claude 仅多发音词时提供投票。此步骤不展示样卡，不询问用户。
+> IPA 由 cmudict 自动生成；Claude 仅多发音词时提供投票。
 
 ## Step 3.5: 预下载音频
 

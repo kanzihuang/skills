@@ -2,10 +2,13 @@
 """Translate sentences via DeepL API.
 
 Reads a vocab-anki JSON file, strips <b> tags from sentences, translates
-them via DeepL, and writes the translations back into the JSON.
+them via DeepL, and writes the result to an output file (default: overwrites
+input file).
 
 Usage:
-    python scripts/translate_deepl.py /tmp/vocab-anki-input-xxx.json
+    python scripts/translate_deepl.py input.json
+    python scripts/translate_deepl.py input.json --output output.json
+    python scripts/translate_deepl.py input.json --book-context "Title: ..."
 
 Requires DEEPL_API_KEY environment variable (free key from deepl.com/pro-api).
 Free tier: 500,000 chars/month, api-free.deepl.com endpoint.
@@ -14,6 +17,7 @@ DeepL does not support <b> tags natively. We strip them before sending,
 then DeepL's output naturally includes the word in translation context.
 """
 
+import argparse
 import json
 import os
 import re
@@ -67,13 +71,35 @@ def translate_batch(texts: list[str]) -> list[str]:
 
 
 def main():
-    json_path = sys.argv[1] if len(sys.argv) > 1 else None
-    if not json_path or not os.path.exists(json_path):
-        print(f"Usage: {sys.argv[0]} <vocab-anki-input.json>", file=sys.stderr)
+    parser = argparse.ArgumentParser(
+        description="Translate sentences via DeepL API"
+    )
+    parser.add_argument("input_file", help="JSON input file with word entries")
+    parser.add_argument(
+        "--output", "-o", type=str, default=None,
+        help="Output JSON file (default: overwrite input file)",
+    )
+    parser.add_argument(
+        "--book-context", type=str, default="",
+        help="Book title and brief description for reference. "
+             "Stored in JSON; NOT sent to DeepL API (free tier does "
+             "not support context parameters).",
+    )
+    args = parser.parse_args()
+    json_path = args.input_file
+
+    if not os.path.exists(json_path):
+        print(f"Error: file not found: {json_path}", file=sys.stderr)
         sys.exit(1)
 
     with open(json_path, encoding="utf-8") as f:
         data = json.load(f)
+
+    # Store book context in JSON for downstream reference (3A, documentation).
+    # DeepL free tier does not support context hints, so this is NOT sent to
+    # the DeepL API — it is metadata for the JSON only.
+    if args.book_context:
+        data["book_context"] = args.book_context
 
     words = data.get("words", [])
     if not words:
@@ -135,8 +161,9 @@ def main():
 
     print(file=sys.stderr)
 
-    # Write back
-    with open(json_path, "w", encoding="utf-8") as f:
+    # Write output (to --output file if specified, otherwise overwrite input)
+    output_path = args.output if args.output else json_path
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     char_count = sum(len(t[1]) for t in to_translate)
