@@ -135,7 +135,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 
 - `--anki-dedup same-book`：启用同书 Anki 去重（查已有卡片）；若 Step 0b 确认全库 0 张 Vocabulary Card 笔记，可省略此 flag 跳过 Anki 查询
 - `--book-id <bookId>`：bookId 标识，用于 WordId 构建 + 同书去重目标
-- `--json-out <path>`：将过滤结果写入结构化 JSON 文件，供 Step 3 Claude 直接读取填充 `excluded` 数组，避免手动转录
+- `--json-out <path>`：将过滤结果写入结构化 JSON 文件，供 Step 3A/3B Claude 读取填充 `excluded` 数组，避免手动转录
 
 输出分为四段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表、`---ANKI_SKIPPED---` 表（Anki 已有卡片，仅当存在时出现）。同时写入对应的结构化 JSON 到 `--json-out` 路径。
 
@@ -300,7 +300,7 @@ wc -c /tmp/<book>-full.txt
 **前置条件**：`DEEPL_API_KEY` 环境变量（免费 key 从 https://www.deepl.com/pro-api 获取，500,000 字符/月）。
 
 ```bash
-# 若 DEEPL_API_KEY 未设置 → 跳过此步，翻译仍由 Claude 在 Step 3 完成
+# 若 DEEPL_API_KEY 未设置 → 跳过此步，翻译仍由 Claude 在 Step 3B 完成
 if [ -n "$DEEPL_API_KEY" ]; then
     <skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/translate_deepl.py /tmp/vocab-anki-input-<bookId>.json
 fi
@@ -585,7 +585,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/lib/sync_anki.
 7. **已有卡片完全不动**，保留复习进度和调度数据
 8. **触发 AnkiWeb 同步**：卡片添加完成后自动触发 `sync` 操作，将新卡片同步到 AnkiWeb。此操作为 fire-and-forget——成功响应仅表示 Anki 已接受请求，不代表 AnkiWeb 已收到数据。若 Anki 弹出冲突解决对话框，同步可能静默排队。使用 `--no-ankiweb-sync` 跳过此步骤
 
-牌组名优先从 JSON `deck_name` 字段读取（Claude 在 Step 3 从 Step 0b 的 `{牌组名: bookId}` 映射反查填入）。未提供时回退 `--deck` 参数；都未提供才自动拼接。
+牌组名优先从 JSON `deck_name` 字段读取（Claude 在 Step 3B 从 Step 0b 的 `{牌组名: bookId}` 映射反查填入）。未提供时回退 `--deck` 参数；都未提供才自动拼接。
 
 ## 卡片格式
 
