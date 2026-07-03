@@ -72,7 +72,7 @@ curl -sL --max-time 60 '<URL>' -o /tmp/<safe_title>-full.txt
 head -c 500 /tmp/<safe_title>-full.txt
 ```
 
-> 文件 >20KB 且包含书中实际文本。**必须使用英文原版**——双语版中的中文翻译、西里尔字母、guillemet（«»）等非英文内容会污染句子匹配。`match_sentences.py` 遇到此类文本直接拒绝。优先选择 Project Gutenberg（英文版）、Standard Ebooks、Internet Archive 英文原版。
+> 文件 >20KB 且包含书中实际文本。**必须使用英文原版**——双语版中的中文翻译、西里尔字母、guillemet（«»）等非英文内容会污染句子匹配。`match_sentences.py` 遇到此类文本直接拒绝。优先选择 Project Gutenberg（英文版）、Standard Ebooks、Internet Archive 英文原版。**不要使用 ESL 简化版或双语对照版替代**——改写后的句子与原文不符。
 
 ### Step 2: 运行 filter_fulltext.py
 
@@ -116,7 +116,7 @@ cat /tmp/<safe_title>-full.txt | \
 
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
-- WordId = `{lemma}_{suffix}`，音频文件 = `{lemma}_{suffix}_word.mp3` / `{lemma}_{suffix}_sent.mp3`
+- WordId = `{safe_filename(surface_form)}_{suffix}`（词形变体如 asteroid/asteroids 各自独立卡片），音频文件使用 lemma 命名 = `{safe_filename(lemma)}_{suffix}_word.mp3` / `{safe_filename(lemma)}_{suffix}_sent.mp3`
 - 同步时自动频次分级（`compute_bands()`）：COCA 级别 → ≤5 段 → `{书名} ({作者}) - 分级词汇::{书名} ({作者}) - COCA X-Y`
 - **不做 Anki 去重**（filter_fulltext.py 不连接 AnkiConnect）
 

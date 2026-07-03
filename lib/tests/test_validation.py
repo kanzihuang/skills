@@ -99,28 +99,31 @@ def test_b_tag_content_vs_word_field():
 # ── Hard error: sentence too long ──
 
 def test_sentence_too_long():
-    """Sentence >150 chars (with tags) is a hard error."""
-    base = "He adjusted the sack and carefully worked the line so that it came across a new part of his shoulders and, holding it anchored with his shoulders"
-    tagged = base.replace("anchored", "<b>anchored</b>")  # +7 chars for tags
-    assert len(tagged) > 150, f"Test sentence should be >150 chars: got {len(tagged)}"
+    """Sentence >250 chars (with tags) is a hard error."""
+    base = ("He adjusted the sack and carefully worked the line so that it came "
+            "across a new part of his shoulders and, holding it anchored with his "
+            "shoulders, he leaned forward and braced himself against the weight "
+            "of the fish as it pulled with tremendous force against the line that "
+            "he had so carefully prepared")
+    tagged = base.replace("anchored", "<b>anchored</b>")
+    assert len(tagged) > 250, f"Test sentence should be >250 chars: got {len(tagged)}"
     w = make_word(word="anchored", sentence=tagged)
     errors = _validate_word_entries([w])
     assert has_error(errors, "anchored", "too long"), \
-        f"Should reject >150 char sentence\nErrors: {errors}"
+        f"Should reject >250 char sentence\nErrors: {errors}"
 
 
 def test_sentence_at_limit_ok():
-    """Sentence exactly at or under 150 chars with tags should pass."""
-    # Use a realistic sentence that's under 150 chars with tags
+    """Sentence at or under 250 chars with tags should pass."""
     tagged = ('He adjusted the sack and carefully worked the line so that it came '
               'across a new part of his shoulders, holding it <b>anchored</b>.')
-    assert len(tagged) < 150, f"Precondition failed: {len(tagged)}"
+    assert len(tagged) < 250, f"Precondition failed: {len(tagged)}"
     w = make_word(word="anchored", sentence=tagged,
                   ipa="/ˈæŋkərd/", definition_cn="固定住",
                   translation_cn="他调整了麻袋，小心地把线移过肩膀新位置，把它固定住。")
     errors = _validate_word_entries([w])
     assert not has_error(errors, "anchored", "too long"), \
-        f"Under-150 sentence should pass\nErrors: {errors}"
+        f"Under-250 sentence should pass\nErrors: {errors}"
 
 
 # ── Hard error: missing required fields ──
@@ -428,14 +431,16 @@ def test_exempt_sentence_passes_length_check():
 
 
 def test_non_exempt_sentence_fails_length_check():
-    """Sentence >150 without exempt flag is still a hard error."""
+    """Sentence >250 without exempt flag is still a hard error."""
     w = make_word(
         word="veritable",
         sentence="I will tell you that before the invention of electricity "
                 "it was necessary to maintain a <b>veritable</b> army of 462,511 "
-                "lamplighters for the street lamps.",
+                "lamplighters for the street lamps throughout the entire world, "
+                "which required a vast logistical operation of truly unprecedented scale.",
         # no exempt_from_150
     )
+    assert len(w["sentence"]) > 250, f"Precondition: sentence must be >250 chars"
     errors = _validate_word_entries([w])
     assert has_error(errors, "veritable", "sentence too long"), \
         f"Non-exempt long sentence should be hard error\nErrors: {errors}"

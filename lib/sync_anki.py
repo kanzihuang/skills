@@ -194,21 +194,21 @@ def compute_bands(
             if cnt < min_band_size and len(bands) >= 2:
                 if i == 0:
                     # First band: merge into next
-                    bands[1] = (bands[i][0], bands[1][2],
+                    bands[1] = (bands[i][0], bands[1][1],
                                 cnt + bands[1][2])
                     bands.pop(i)
                 elif i == len(bands) - 1:
                     # Last band: merge into previous
-                    bands[i - 1] = (bands[i - 1][0], bands[i][2],
+                    bands[i - 1] = (bands[i - 1][0], bands[i][1],
                                     bands[i - 1][2] + cnt)
                     bands.pop(i)
                 else:
                     # Middle band: merge into smaller neighbor
                     if bands[i - 1][2] <= bands[i + 1][2]:
-                        bands[i - 1] = (bands[i - 1][0], bands[i][2],
+                        bands[i - 1] = (bands[i - 1][0], bands[i][1],
                                         bands[i - 1][2] + cnt)
                     else:
-                        bands[i + 1] = (bands[i][0], bands[i + 1][2],
+                        bands[i + 1] = (bands[i][0], bands[i + 1][1],
                                         cnt + bands[i + 1][2])
                     bands.pop(i)
                 changed = True
@@ -793,18 +793,22 @@ def build_note_entry(
     If lemma is provided, it's used for the card Word field, audio filenames,
     and WordId. The original form is only preserved in the sentence.
     """
-    display = (lemma or word_data["word"]).strip().lower()
-    safe = safe_filename(display)
-    word_audio_ref = f"[sound:{safe}_{book_id}_word.mp3]"
-    sent_audio_ref = f"[sound:{safe}_{book_id}_sent.mp3]"
-    word_id = f"{display}_{book_id}"
+    # WordId uses the surface form — no lemmatize merging of variants.
+    # Audio filenames still use lemma (shared across variants, generated once).
+    surface = word_data["word"].strip().lower()
+    safe_surface = safe_filename(surface)
+    word_id = f"{safe_surface}_{book_id}"
+
+    safe_lemma = safe_filename(lemma) if lemma else safe_surface
+    word_audio_ref = f"[sound:{safe_lemma}_{book_id}_word.mp3]"
+    sent_audio_ref = f"[sound:{safe_lemma}_{book_id}_sent.mp3]"
 
     return {
         "deckName": "",  # filled in later by caller
         "modelName": MODEL_NAME,
         "fields": {
             "WordId": word_id,
-            "Word": display,
+            "Word": surface,
             "Sentence": word_data["sentence"],
             "IPA": ipa or word_data.get("ipa", ""),
             "DefinitionCN": word_data["definition_cn"],
@@ -863,12 +867,13 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                 f"'{word}' not in '{clean_sentence[:80]}{'...' if len(clean_sentence) > 80 else ''}'"
             )
 
-        # 3. Sentence length ≤ 150 chars — hard error unless 3A has explicitly
+        # 3. Sentence length ≤ 250 chars — hard error unless 3A has explicitly
         #    exempted this sentence (exempt_from_150 flag).
-        if len(sentence) > 150:
+        #    250 matches Step 3A's "extreme long sentence" trigger (3A rule 2a).
+        if len(sentence) > 250:
             if not w.get("exempt_from_150"):
                 errors.append(
-                    f"[{word}] sentence too long: {len(sentence)} chars (max 150)"
+                    f"[{word}] sentence too long: {len(sentence)} chars (max 250)"
                 )
             else:
                 print(
@@ -1031,21 +1036,6 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                     file=sys.stderr,
                 )
 
-            # 8b. Sentence-translation length ratio: English (chars) vs
-            #     Chinese (chars).  Typical ratio is 0.5–2.5.  Values
-            #     outside this range suggest a mismatch.
-            en_len = len(clean)
-            cn_len = len(translation.strip())
-            if en_len > 0 and cn_len > 0:
-                ratio = cn_len / en_len
-                if ratio < 0.3 or ratio > 3.0:
-                    print(
-                        f"  [WARN] [{word}] unusual EN→ZH length ratio "
-                        f"({en_len}→{cn_len} chars, ratio {ratio:.1f}) — "
-                        f"possible sentence/translation mismatch",
-                        file=sys.stderr,
-                    )
-
     return errors
 
 
@@ -1206,73 +1196,23 @@ def sync(
     else:
         existing = {}  # prefetch: no Anki connection, skip dedup
 
-    # 5. Identify new words (check lemma-based WordId, fallback to original).
-    #    Repair cards whose WordId still uses the surface form instead of
-    #    the resolved lemma (e.g. crossing_xxx → cross_xxx).
+    # 5. Identify new words (WordId = safe_filename(surface_form)_book_id).
     new_words = []
     skipped_words = []
-    repaired = 0
     for idx, w in enumerate(words):
-        json_lemma = w.get("lemma", "").strip()
-        lemma = resolve_lemma(w["word"], json_lemma)
         original_id = f"{w['word'].strip().lower()}_{book_id}"
-        lemma_id = f"{lemma}_{book_id}"
 
         # Only dedup against this word's target deck
         target_deck = band_assignment.get(idx, deck_name)
         deck_cards = existing.get(target_deck, {})
-        if lemma_id in deck_cards or original_id in deck_cards:
-            skipped_words.append(w)
-            # Repair: if the card exists under the surface-form WordId
-            # but the resolved lemma differs, update ALL dependent fields
-            # AND re-upload audio under the new filename.
-            if ac and original_id in deck_cards and lemma_id != original_id:
-                old_nid = deck_cards[original_id]
-                safe = safe_filename(lemma)
-                fields = {
-                    "WordId": lemma_id,
-                    "Word": lemma,
-                    "WordAudio": f"[sound:{safe}_{book_id}_word.mp3]",
-                    "SentenceAudio": f"[sound:{safe}_{book_id}_sent.mp3]",
-                }
-                # IPA from cmudict if available
-                cmu = _cmu_ipa(lemma)
-                if cmu:
-                    fields["IPA"] = cmu
-                ac.update_note_fields(old_nid, fields)
-
-                # Re-upload audio with new filenames (word + sentence)
-                _repair_audio(ac, lemma, w.get("sentence", ""), book_id)
-                repaired += 1
-                if verbose:
-                    print(f"  REPAIR {w['word']} → {lemma} (WordId, audio, IPA updated)")
-            elif verbose:
+        if original_id in deck_cards:
+            if verbose:
                 print(f"  SKIP {w['word']} (already in deck)")
+            skipped_words.append(w)
         else:
             new_words.append(w)
 
-    if repaired:
-        print(f"  Repaired: {repaired} card(s) (surface-form WordId → lemma)")
 
-    # 5b. Detect duplicate WordIds within the batch itself (e.g. fed + feeding
-    #     both lemmatize to feed).  Keep the first occurrence, warn about rest.
-    seen_ids: set[str] = set()
-    deduped_new: list[dict] = []
-    intra_dupes = 0
-    for w in new_words:
-        jl2 = w.get("lemma", "").strip()
-        lm = resolve_lemma(w["word"], jl2)
-        wid = f"{lm}_{book_id}"
-        if wid in seen_ids:
-            intra_dupes += 1
-            if verbose:
-                print(f"  SKIP {w['word']} (duplicate WordId in batch: {wid})")
-        else:
-            seen_ids.add(wid)
-            deduped_new.append(w)
-    if intra_dupes:
-        print(f"  Intra-batch duplicates removed: {intra_dupes}")
-    new_words = deduped_new
 
     # Rebuild band_assignment for new_words (0-based indices after dedup)
     if bands:
