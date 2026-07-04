@@ -97,7 +97,14 @@ Naming convention: `YYYY-Www.md` / `YYYY-Www.html` (e.g., `2026-W26.md`)
 
 ### Step 5: Copy to Windows Clipboard and Open Browser
 
-The PowerShell script must be accessible from the Windows filesystem. Copy both the HTML file and the script to Windows first, then invoke:
+Copy the HTML file to a Windows-accessible path, then invoke the PowerShell script from WSL:
+
+```bash
+cp [html-file] /mnt/c/Users/Public/Downloads/[html-file-name]
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File "\\\\wsl.localhost\\Ubuntu\\home\\agent\\github\\kanzihuang\\skills\\weekly-report\\scripts\\to-clipboard.ps1" -htmlPath "C:\\Users\\Public\\Downloads\\[html-file-name]"
+```
+
+Alternatively, copy the script to Windows first and invoke locally:
 
 ```bash
 cp [html-file] /mnt/c/Users/Public/Downloads/[html-file-name]
@@ -105,7 +112,9 @@ cp skills/weekly-report/scripts/to-clipboard.ps1 /mnt/c/Users/Public/Downloads/t
 /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File "C:\Users\Public\Downloads\to-clipboard.ps1" -htmlPath "C:\Users\Public\Downloads\[html-file-name]"
 ```
 
-The script copies HTML to the Windows clipboard in proper HTML clipboard format (with Version:0.9 headers and fragment markers) so it pastes directly into browser rich text editors, then opens the file in Edge for preview.
+Both approaches copy HTML to the Windows clipboard in proper HTML clipboard format (with Version:0.9 headers and fragment markers) so it pastes directly into browser rich text editors, then open the file in Edge for preview.
+
+**Troubleshooting:** If `powershell.exe` is not found, use the full path `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe`. On WSL 2, the bare `powershell.exe` command may not resolve without the full Windows path.
 
 ## Example
 
