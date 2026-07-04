@@ -31,6 +31,7 @@ import time
 
 from .ankiconnect import AnkiConnect, AnkiConnectError
 from .utils import (
+    EDGE_TTS_MAX_RETRIES,
     edge_tts_bytes,
     lemmatize_word,
     print_progress,
@@ -767,6 +768,11 @@ def _process_one_word(
             tts = edge_tts_bytes(lemma, ipa=ipa)
             if tts:
                 audio_uploads.append((f"{safe}_{book_id}_word.mp3", tts))
+            else:
+                raise RuntimeError(
+                    f"Word audio generation failed for '{lemma}' "
+                    f"(TTS returned no data after {EDGE_TTS_MAX_RETRIES + 1} attempts)"
+                )
 
         # Sentence audio: Edge TTS on cleaned sentence.
         #   Include book_id in filename — different books have different
@@ -775,6 +781,11 @@ def _process_one_word(
         sent_tts = edge_tts_bytes(clean)
         if sent_tts:
             audio_uploads.append((f"{safe}_{book_id}_sent.mp3", sent_tts))
+        else:
+            raise RuntimeError(
+                f"Sentence audio generation failed for '{word}' "
+                f"(TTS returned no data after {EDGE_TTS_MAX_RETRIES + 1} attempts)"
+            )
 
     note = build_note_entry(w, ipa, book_id, lemma=lemma)
     # Preserve original index in new_words for correct band assignment.
@@ -1387,7 +1398,11 @@ def sync(
             print(f"  Word audio:  {word_ok}/{total}")
             print(f"  Sentence:    {sent_ok}/{total}")
             if failed_words:
-                print(f"  Failed:      {len(failed_words)} ({', '.join(failed_words)})")
+                raise RuntimeError(
+                    f"Audio generation failed for {len(failed_words)} word(s) "
+                    f"after {EDGE_TTS_MAX_RETRIES + 1} attempts each: "
+                    f"{', '.join(failed_words)}"
+                )
             print(f"\nAUDIO_DIR={prefetch_dir}")
             return {
                 "added": 0,
@@ -1495,8 +1510,11 @@ def sync(
     if data.get("excluded"):
         print(f"  Excluded (COCA):  {len(data.get('excluded', []))} word(s)")
     if failed_words:
-        print(f"  Failed:           {len(failed_words)} word(s)")
-        print(f"     ({', '.join(failed_words)})")
+        raise RuntimeError(
+            f"Audio generation failed for {len(failed_words)} word(s) "
+            f"after {EDGE_TTS_MAX_RETRIES + 1} attempts each: "
+            f"{', '.join(failed_words)}"
+        )
     print(f"{'='*50}")
 
     return {
