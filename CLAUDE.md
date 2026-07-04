@@ -50,7 +50,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 | `lib/scripts/match_sentences.py` | Mechanical sentence matching with `<b>` tagging |
 | `lib/scripts/translate_deepl.py` | DeepL batch translation with context support and sentence dedup |
 | `lib/scripts/audit_deck.py` | Deck quality audit |
-| `lib/SHARED_WORKFLOW.md` | Shared workflow steps (3.0–4) with vocab-book |
+| `lib/SHARED_WORKFLOW.md` | Shared workflow steps (2A–2H) with vocab-book |
 
 **Dependencies:** `weread-skills`, Python: `edge-tts`, `lemminflect`
 
@@ -90,8 +90,8 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 
 See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principles:
 
-- **Separation of concerns**: Claude does knowledge work (sentences, definitions, translations, IPA), Python does mechanical work (lemmatization, TTS, Anki sync).
-- **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 3.0). No fabricated or dictionary sentences. Source text unavailable → skip the batch.
+- **Separation of concerns**: Claude does knowledge work (sentences, definitions, IPA heteronym voting), DeepL does mechanical translation, Python does mechanical work (lemmatization, TTS, Anki sync).
+- **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 2A). No fabricated or dictionary sentences. Source text unavailable → skip the batch.
 - **Source-truth-only translations**: Translations must be of the mechanically matched sentence. Never substitute a translation from memory even if you recognize the passage — this causes sentence/translation mismatch.
 - **Incremental safety**: sync mode only adds, never modifies existing cards.
 - **Graceful degradation**: audio failures don't block card generation.
@@ -110,7 +110,7 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 - **Python code bugs** are tested directly with parametrized input/output assertions.
 - Run all tests before committing:
   ```bash
-  cd lib && ../vocab-anki/.venv/bin/python -m pytest tests/ -v && \
+  cd lib && /home/agent/.claude/skills/vocab-anki/.venv/bin/python -m pytest tests/ -v && \
   cd ../vocab-ani && .venv/bin/python -m pytest tests/ -v && \
   cd ../vocab-book && ../vocab-anki/.venv/bin/python -m pytest tests/ -v
   ```

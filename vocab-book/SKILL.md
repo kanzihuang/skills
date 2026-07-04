@@ -7,7 +7,8 @@ description: >
   "全量词汇", "按词族等级", "词频范围", "全文", "vocabulary from
   entire book", "all words from this book", or specifies a book
   text file/URL directly. Claude handles knowledge work (sentences,
-  translations), Python scripts handle filtering, audio, and sync.
+  definitions, IPA), DeepL handles translation, Python scripts handle
+  filtering, audio, and sync.
 ---
 
 # vocab-book — 英文书全文词汇 Anki 牌组生成
@@ -108,17 +109,18 @@ cat /tmp/<safe_title>-full.txt | \
 4. 生成 UUID 后缀（`uuid.uuid4().hex[:12]`），写入 JSON `suffix` 字段
 5. JSON 输出（含 `in_coca[]`、`excluded[]`、`suffix`、`summary`）
 
-### Steps 3.0–4: 句子匹配 / 内容生成 / 翻译 / 音频 / 同步
+### Steps 2A–2H: 句子匹配 / 内容生成 / 翻译 / 音频 / 同步
 
 > 以下步骤与 vocab-anki 共享。详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`。
 
 关键路径（`<skill_dir>` 内 `lib/` 前缀）：
-- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配（Step 3.0，PySBD 分句 + candidates）
-- **Step 3A**: 句子选择 + 完整性校验（Claude，1 agent）
-- **Step 3B**: 生成释义 + IPA（Claude，N agents 并行，≤25 词/agent）
-- **Step 3C**: 内容验证 — POS 对齐 + 释义准确（Claude，1 agent）
-- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 3.0f，3C 之后），支持 `--source-text` 上下文参数和自动去重
-- `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步（Step 3.5 + Step 4）
+- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配（Step 2A，PySBD 分句 + candidates）
+- **Step 2B**: 句子选择 + 完整性校验（Claude，1 agent）
+- **Step 2C**: IPA 预填充（cmudict 批量生成）
+- **Step 2D**: 生成释义 + IPA（Claude，N agents 并行，≤25 词/agent）
+- **Step 2E**: 内容验证 — POS 对齐 + 释义准确（Claude，1 agent）
+- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2F，2E 之后），支持 `--source-text` 上下文参数和自动去重
+- `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步（Step 2G + Step 2H）
 
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
