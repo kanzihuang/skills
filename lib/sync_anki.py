@@ -873,10 +873,12 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                 f"'{word}' not in '{clean_sentence[:80]}{'...' if len(clean_sentence) > 80 else ''}'"
             )
 
-        # 3. Sentence length check (hard error).
-        if len(sentence) > MAX_SENTENCE_LENGTH:
+        # 3. Sentence length check — measured without <b> tags, matching
+        #    Step 3A rule 2a ("去标签后 > 250 字符").
+        clean_len = len(re.sub(r"</?b>", "", sentence))
+        if clean_len > MAX_SENTENCE_LENGTH:
             errors.append(
-                f"[{word}] sentence too long: {len(sentence)} chars "
+                f"[{word}] sentence too long: {clean_len} chars "
                 f"(max {MAX_SENTENCE_LENGTH})"
             )
 
