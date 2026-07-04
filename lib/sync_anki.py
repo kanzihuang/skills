@@ -380,9 +380,12 @@ def _arpabet_to_ipa(arpa: str, stress_digit: str = "") -> str:
 
     *stress_digit* is the original CMU stress marker ("" , "0", "1", "2").
     ER0 (unstressed) → /ər/;  ER1/ER2 (stressed) → /ɜːr/.
+    AH0 (unstressed) → /ə/;  AH1/AH2 (stressed) → /ʌ/.
     """
     if arpa == "ER":
         return "ər" if stress_digit == "0" else "ɜːr"
+    if arpa == "AH":
+        return "ə" if stress_digit == "0" else "ʌ"
     return _ARPABET_TO_IPA.get(arpa, arpa.lower())
 
 
@@ -1706,11 +1709,11 @@ def _test_arpabet_to_ipa() -> None:
 
     # ── Multi-syllable stress ──
     check("hunting", "/ˈhʌntɪŋ/")
-    check("accomplished", "/ʌˈkɑːmplɪʃt/")
+    check("accomplished", "/əˈkɑːmplɪʃt/")
     check("distinguished", "/dɪˈstɪŋɡwɪʃt/")
-    check("beautiful", "/ˈbjuːtʌfʌl/")
+    check("beautiful", "/ˈbjuːtəfəl/")
     check("blundering", "/ˈblʌndərɪŋ/")
-    check("comfortable", "/ˈkʌmfərtʌbʌl/")
+    check("comfortable", "/ˈkʌmfərtəbəl/")
 
     if failures:
         print(f"\n  {failures} ARPAbet→IPA test(s) FAILED", file=sys.stderr)
