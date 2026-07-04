@@ -186,7 +186,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 - WordId = `{lemma}_{bookId}`，音频文件 = `{lemma}_{bookId}_word.mp3` / `{lemma}_{bookId}_sent.mp3`
 - 句子匹配时利用 JSON 中 `in_coca[].chapters` 字段做章节优先匹配
 - Anki 去重已在 Step 1d 完成（同书去重）
-- 牌组名：`{title} ({author})`（无分级后缀）
+- 牌组名：`{English Title} ({Author})`（无分级后缀）。**书名和作者必须用英文**——若微信读书返回中文标题（如"小王子（英文版）"），改用英文原版标题。vocab-book 的分级后缀（`- COCA X-Y`）天然与此区分，不会重名
 
 ## 异常处理
 
