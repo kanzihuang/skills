@@ -97,14 +97,14 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 - **Graceful degradation**: audio failures don't block card generation.
 - **Filter-first**: all mechanical filtering happens BEFORE Claude generates content.
 - **POS-gated lemmatization (vocab-book)**: spaCy provides POS tags; lemminflect provides lemmatization. Per-token POS→channel matching (ADJ/VERB/NOUN) — spaCy's lemma output is never used. Proper nouns and derivational adjectives are kept as-is. VBG+amod (participial adjectives like "bewildering") are guarded against reduction.
-- **Truncate before translate**: sentence truncation (≤150 chars) must complete before DeepL/Claude translation. Never translate then truncate — causes sentence/translation mismatch. Verification: Chinese translation must not end with conjunctions like "然后"/"但是".
+- **Truncate before translate**: sentence truncation (≤250 chars) must complete before DeepL/Claude translation. Never translate then truncate — causes sentence/translation mismatch. Verification: Chinese translation must not end with conjunctions like "然后"/"但是".
 - **bookId bridging (vocab-anki)**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching.
 - **IPA from cmudict**: IPA is generated mechanically from the CMU Pronouncing Dictionary. Stress placement follows Maximal Onset Principle. ER0 (unstressed) → /ər/, ER1/ER2 → /ɜːr/. Claude only votes on heteronym disambiguation.
 
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 237 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Shared tests** live in `lib/tests/` (pytest, 259 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 23 tests), `vocab-book/tests/` (filter_fulltext, 10 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.
