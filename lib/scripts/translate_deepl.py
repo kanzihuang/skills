@@ -147,25 +147,39 @@ def main():
         print("No words to translate.", file=sys.stderr)
         return
 
-    # Collect sentences (without <b> tags) and track which need translation
-    to_translate: list[tuple[int, str, str]] = []  # (index, plain_text, context)
+    # Collect unique sentences (dedup by plain text without <b> tags).
+    # Multiple words may share the same sentence — translate once, apply to all.
+    unique: dict[str, tuple[list[int], str]] = {}  # plain → ([indices], context)
+    sentence_order: list[str] = []  # preserve order
     for i, w in enumerate(words):
-        sentence = w.get("sentence", "")
-        plain = strip_tags(sentence).strip()
+        plain = strip_tags(w.get("sentence", "")).strip()
         if not plain:
             continue
-        context = ""
-        if source_sentences:
-            pattern = re.compile(_build_sentence_regex(plain), re.IGNORECASE)
-            for si, src_s in enumerate(source_sentences):
-                if pattern.search(src_s):
-                    start = max(0, si - CONTEXT_SENTENCES)
-                    ctx_sents = source_sentences[start:si]
-                    if ctx_sents:
-                        context = " ".join(ctx_sents)
-                    break
-        to_translate.append((i, plain, context))
+        if plain not in unique:
+            sentence_order.append(plain)
+            context = ""
+            if source_sentences:
+                pattern = re.compile(
+                    _build_sentence_regex(plain), re.IGNORECASE,
+                )
+                for si, src_s in enumerate(source_sentences):
+                    if pattern.search(src_s):
+                        start = max(0, si - CONTEXT_SENTENCES)
+                        ctx_sents = source_sentences[start:si]
+                        if ctx_sents:
+                            context = " ".join(ctx_sents)
+                        break
+            unique[plain] = ([i], context)
+        else:
+            unique[plain][0].append(i)
 
+    to_translate = [
+        (plain, context) for plain in sentence_order
+        if plain in unique
+    ]
+    deduped = len(words) - len(to_translate)
+    if deduped:
+        print(f"  (deduplicated {deduped} sentences)", file=sys.stderr)
     total = len(to_translate)
     if total == 0:
         print("No sentences to translate.", file=sys.stderr)
@@ -179,60 +193,62 @@ def main():
 
     for batch_start in range(0, total, BATCH_SIZE):
         batch = to_translate[batch_start:batch_start + BATCH_SIZE]
-        texts = [t[1] for t in batch]
-        indices = [t[0] for t in batch]
+        texts = [t[0] for t in batch]
         # Split: items with context go individually, items without
         # go as a batch for speed.
-        ctx_items = [(idx, txt, ctx) for idx, txt, ctx in batch if ctx]
-        no_ctx_items = [(idx, txt, ctx) for idx, txt, ctx in batch if not ctx]
+        ctx_batch = [(txt, ctx) for txt, ctx in batch if ctx]
+        no_ctx_batch = [(txt, ctx) for txt, ctx in batch if not ctx]
 
         # Batch items without context
-        if no_ctx_items:
+        if no_ctx_batch:
             try:
-                no_ctx_texts = [t[1] for t in no_ctx_items]
+                no_ctx_texts = [t[0] for t in no_ctx_batch]
                 translations = translate_batch(no_ctx_texts)
-                for j, (idx, _, _) in enumerate(no_ctx_items):
-                    words[idx]["translation_cn"] = translations[j]
+                for (plain, _), trans in zip(no_ctx_batch, translations):
+                    for idx in unique[plain][0]:
+                        words[idx]["translation_cn"] = trans
                     translated_count += 1
             except Exception as e:
                 errors += 1
                 print(f"  Batch failed: {e}", file=sys.stderr)
 
         # Individual items with context
-        for (idx, plain_text, context) in ctx_items:
+        for (plain_text, context) in ctx_batch:
             try:
                 results = translate_batch([plain_text], context=context)
-                words[idx]["translation_cn"] = results[0]
+                for idx in unique[plain_text][0]:
+                    words[idx]["translation_cn"] = results[0]
                 translated_count += 1
             except Exception:
                 errors += 1
                 # Retry without context
                 try:
                     results = translate_batch([plain_text])
-                    words[idx]["translation_cn"] = results[0]
+                    for idx in unique[plain_text][0]:
+                        words[idx]["translation_cn"] = results[0]
                     translated_count += 1
                 except Exception:
                     errors += 1
-                    print(f"  [{words[idx].get('word', '?')}] translation failed",
+                    print(f"  [{words[unique[plain_text][0][0]].get('word', '?')}] translation failed",
                           file=sys.stderr)
 
         # Progress
         progress = min(batch_start + BATCH_SIZE, total)
         print(f"\r  {progress}/{total} sentences", end="", file=sys.stderr, flush=True)
 
-        # Rate limiting: free tier has no strict rate limit but be polite
+        # Rate limiting
         if batch_start + BATCH_SIZE < total:
             time.sleep(0.2)
 
     print(file=sys.stderr)
 
-    # Write output (to --output file if specified, otherwise overwrite input)
+    # Write output
     output_path = args.output if args.output else json_path
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-    char_count = sum(len(t[1]) for t in to_translate)
-    print(f"Done: {translated_count} translated, {errors} failed, "
+    char_count = sum(len(t[0]) for t in to_translate)
+    print(f"Done: {translated_count} unique translated, {errors} failed, "
           f"~{char_count} chars used of 500,000 monthly quota",
           file=sys.stderr)
 
