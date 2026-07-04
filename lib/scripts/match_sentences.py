@@ -21,7 +21,7 @@ HARD_CUTOFF = 500
 
 def _get_segmenter() -> pysbd.Segmenter:
     """Return a cached PySBD segmenter (lazy init)."""
-    return pysbd.Segmenter(language="en", clean=False)
+    return pysbd.Segmenter(language="en", clean=True)
 
 
 def split_sentences(text: str) -> list[str]:
@@ -39,6 +39,16 @@ def split_sentences(text: str) -> list[str]:
     sentences = seg.segment(text)
     sentences = [_clean_quote_artifact(s.strip()) for s in sentences]
     return [s for s in sentences if s]
+
+
+def _strip_non_alpha(text: str) -> str:
+    """Strip all non-letter characters for source-text verification.
+
+    Only the letter sequence matters for matching — whitespace,
+    punctuation, and newline differences from PySBD clean=True
+    processing are irrelevant to correctness.
+    """
+    return re.sub(r'[^a-zA-Z]', '', text.lower())
 
 
 def _clean_quote_artifact(sentence: str) -> str:
@@ -81,7 +91,7 @@ def find_all_sentences(
     Only candidates that pass source-text verification are included.
     """
     sentences = split_sentences(text)
-    text_normalized = ' '.join(text.split())
+    text_normalized = _strip_non_alpha(text)
 
     seen = set()  # deduplicate identical sentences
     results = []
@@ -99,10 +109,11 @@ def find_all_sentences(
             matched_text = m.group(0)
             tagged = sent[:m.start()] + f'<b>{matched_text}</b>' + sent[m.end():]
 
-            # Source-text verification
+            # Source-text verification: compare letter sequences only.
+            # Whitespace, punctuation, and newline differences from
+            # PySBD clean=True don't affect the match.
             clean = re.sub(r'<[^>]+>', '', tagged)
-            clean_normalized = ' '.join(clean.split())
-            if clean_normalized not in text_normalized:
+            if _strip_non_alpha(clean) not in text_normalized:
                 continue
 
             # <b> tag verification: tagged text must match the word form
