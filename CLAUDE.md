@@ -124,10 +124,6 @@ Internet Archive `.txt` files often contain double-space OCR artifacts. `match_s
 
 For -ive, -ous, -ful derived adjectives (reflective, tremendous, beautiful), `resolve_lemma` may reduce them to verb stems. When the word IS in COCA as-is, set `lemma` explicitly to prevent reduction. IPA must match the card-displayed lemma, not the reduced stem — always verify with `_cmu_ipa(lemma)` after setting lemma.
 
-### Inflected form mismatch
-
-When a user highlights a base form ("arouse") but the source text only has inflected forms ("aroused"), `match_sentences.py` now expands forms with common inflectional suffixes (-s, -es, -ed, -d, -ing). If no sentence is found, check the text for inflected variants before declaring the word unmatched.
-
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.

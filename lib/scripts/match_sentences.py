@@ -96,46 +96,11 @@ def find_all_sentences(
     seen = set()  # deduplicate identical sentences
     results = []
 
-    # Combine given forms with common inflectional variants.
-    # When the user highlights a base form (e.g. "arouse") but the
-    # source text only has inflected forms ("aroused"), the exact-form
-    # search would miss it.  Expanding with regular inflectional suffixes
-    # (-s, -es, -ed, -d, -ing) catches these without introducing
-    # derivational false positives.
-    expanded_forms = list(word_forms)
-    for form in word_forms:
-        fl = form.lower()
-        # present 3rd-person
-        expanded_forms.append(form + 's')
-        if fl.endswith(('s', 'x', 'z', 'ch', 'sh', 'o')):
-            expanded_forms.append(form + 'es')
-        # past / past participle
-        expanded_forms.append(form + 'ed')
-        if fl.endswith('e'):
-            expanded_forms.append(form + 'd')
-        # present participle
-        expanded_forms.append(form + 'ing')
-        if fl.endswith('e'):
-            expanded_forms.append(fl[:-1] + 'ing')
-        # consonant doubling: CVC pattern (e.g. stop→stopped, stopping)
-        if (len(fl) >= 3 and fl[-1] not in 'aeiou'
-                and fl[-2] in 'aeiou' and fl[-3] not in 'aeiouy'):
-            expanded_forms.append(form + fl[-1] + 'ed')
-            expanded_forms.append(form + fl[-1] + 'ing')
-    # Deduplicate while preserving order
-    seen_forms = set()
-    all_forms = []
-    for f in expanded_forms:
-        lf = f.lower()
-        if lf not in seen_forms:
-            seen_forms.add(lf)
-            all_forms.append(f)
-
     for sent in sentences:
         if len(results) >= MAX_CANDIDATES:
             break
 
-        for form in all_forms:
+        for form in word_forms:
             pattern = re.compile(r'\b' + re.escape(form) + r'\b', re.IGNORECASE)
             m = pattern.search(sent)
             if not m:
