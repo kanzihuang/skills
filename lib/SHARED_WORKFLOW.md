@@ -205,6 +205,78 @@ cmudict 未覆盖的词由 Claude 在 2D 中手动补充。
 **分批**：≤25 词/agent。≤30→1, 31–80→4, 81–200→8, 200+→10+。每批按字母序排列。
 **不自查**——自查职责移至 2E。
 
+### 2D-0. lemma 判定（生成内容前必做）
+
+对每个 `-ed`/`-ing` 结尾的词，**先跑 spaCy 把标注写进 JSON，Claude 拿着标注读句子判断**：
+
+```bash
+cd <skill_dir> && .venv/bin/python3 << 'PYEOF'
+import json, sys
+sys.path.insert(0, '.')
+from lib.sync_anki import _get_spacy
+nlp = _get_spacy()
+
+with open('/tmp/vocab-anki-input-<tmp_id>.json') as f:
+    data = json.load(f)
+
+for w in data['words']:
+    wl = w['word'].lower()
+    if not wl.endswith(('ed', 'ing')):
+        continue
+    sent = w.get('sentence', '')
+    if not sent:
+        continue
+    doc = nlp(sent)
+    for token in doc:
+        if token.text.lower() == wl:
+            lemma_self = token.lemma_.lower() == wl
+            be_to = False
+            if token.tag_ == 'VBN':
+                be_forms = {'am','is','are','was','were','be','been','being'}
+                has_be = any(
+                    doc[i].text.lower() in be_forms
+                    for i in range(max(0, token.i - 3), token.i)
+                )
+                if has_be:
+                    for j in range(token.i + 1, min(token.i + 3, len(doc))):
+                        if doc[j].text.lower() == 'to' and j + 1 < len(doc):
+                            be_to = doc[j + 1].pos_ == 'VERB'
+                            break
+            w['_spacy'] = {
+                'pos': token.pos_, 'tag': token.tag_, 'dep': token.dep_,
+                'spacy_lemma': token.lemma_,
+                'self_lemma': lemma_self, 'be_to': be_to,
+            }
+            break
+
+with open('/tmp/vocab-anki-input-<tmp_id>.json', 'w', encoding='utf-8') as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+print("spaCy annotations written to JSON")
+PYEOF
+```
+
+脚本在每个 `-ed`/`-ing` 词上写入 `_spacy` 字段，JSON 变为：
+
+```json
+{"word": "disheartened", ..., "_spacy": {"pos": "VERB", "tag": "VBN", "dep": "ROOT", "spacy_lemma": "dishearten", "self_lemma": false, "be_to": false}}
+```
+
+**Claude 逐词判断**（Step 2D 生成每个词时，读它的 `_spacy` + `sentence`）：
+
+```
+对每个 -ed/-ing 词：
+  看 _spacy 标注：
+    pos=ADJ 或 dep=acomp/amod → 确定是形容词 → lemma = word
+    self_lemma=true           → spaCy 拒绝还原    → lemma = word
+    be_to=true                → 情感形容词模式    → lemma = word
+    以上都不满足               → 读 sentence 判断：
+      描述状态/性质 → lemma = word
+      描述动作     → lemma 留空
+      不确定       → lemma = word（保守）
+```
+
+> `_spacy` 是参考数据，**不是最终判定**。Claude 必须读句子确认——spaCy 可能把形容词标为 VERB（如 disheartened）。最终 `lemma` 写入 JSON 的 `lemma` 字段，`resolve_lemma` 无条件信任。
+
 ### 字段说明
 
 | 字段 | 说明 | 示例 |

@@ -151,11 +151,8 @@ def test_missing_translation_cn():
 # ── Hard error: suspicious lemma (commit 68be62e) ──
 
 def test_suspicious_lemma_unrelated():
-    """lemma='beautifully' for word='beautiful' — hard error.
+    """lemma='beautifully' for word='beautiful' — hard error."""
 
-    Historical: Claude set lemma="beautifully" for the word "beautiful".
-    The lemma differs from both the surface form AND lemmatize_word() result.
-    """
     w = make_word(word="beautiful", lemma="beautifully")
     errors = _validate_word_entries([w])
     assert has_error(errors, "beautiful", "suspicious lemma"), \
@@ -167,8 +164,34 @@ def test_valid_lemma_override_ok():
     w = make_word(word="blundering", lemma="blundering",
                   sentence="I felt awkward and <b>blundering</b>.")
     errors = _validate_word_entries([w])
-    assert not has_error(errors, "blundering", "suspicious"), \
+    assert not has_error(errors, "blundering", "-ed/-ing"), \
         f"Valid derivational adj override should pass\nErrors: {errors}"
+
+
+# ── Hard error: -ed/-ing word with lemma that differs from surface form ──
+
+@pytest.mark.parametrize("word,lemma,sentence,should_fail", [
+    # lemma ≠ word on -ed/-ing → blocked
+    ("disheartened", "dishearten",
+     "I had been <b>disheartened</b> by the failure.", True),
+    ("blundering", "blunder",
+     "I felt awkward and <b>blundering</b>.", True),
+    # lemma == word on derivational adj → OK
+    ("accomplished", "accomplished",
+     "He was an <b>accomplished</b> pianist.", False),
+    # empty lemma on regular inflection → OK
+    ("pondered", "",
+     "I <b>pondered</b> deeply.", False),
+])
+def test_ed_ing_lemma_validation(word, lemma, sentence, should_fail):
+    w = make_word(word=word, lemma=lemma, sentence=sentence)
+    errors = _validate_word_entries([w])
+    if should_fail:
+        assert has_error(errors, word, "-ed/-ing"), \
+            f"Should reject\nErrors: {errors}"
+    else:
+        assert not has_error(errors, word, "-ed/-ing"), \
+            f"Should pass\nErrors: {errors}"
 
 
 # ── Soft warnings (these go to stderr, not returned as errors) ──

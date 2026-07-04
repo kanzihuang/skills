@@ -710,22 +710,27 @@ def _process_one_word(
     # Safety net: for -ed/-ing words that resolve_lemma reduced away from
     # the surface form, verify with spaCy's sentence-context parse.
     #
-    # Three signals that the surface form is a derivational adjective
-    # (keep it) rather than a verb inflection (reduce to stem):
+    # Four signals that the surface form is a derivational adjective
+    # (keep it) rather than a verb inflection (reduce to stem),
+    # ordered by reliability — most confident first, broader heuristics later:
     #
-    #   1. Dependency-based: the word has an adjectival grammatical function
-    #      (acomp/oprd/attr/amod).  This encodes "be/seem + adjective"
-    #      structurally and is more reliable than POS tags alone.
+    #   1. POS tag: spaCy directly tags the token as ADJ — most precise,
+    #      near-zero false positives.  Fires first.
+    #      — catches: blundering (JJ), interesting (JJ)
+    #
+    #   2. Dependency: the token has an adjectival grammatical function
+    #      (acomp/oprd/attr/amod).  Broader than POS — catches adjectives
+    #      spaCy tagged as VERB but parsed as adjectival modifiers.
     #      — catches: surprised (acomp), disappointed (oprd), distinguished (amod)
     #
-    #   2. Lemma-based: spaCy returns the surface form as its own lemma
-    #      (belt & suspenders for signal 1; also catches conj like embarrassed).
-    #      — catches: embarrassed (conj, but lemma=embarrassed)
+    #   3. Lemma: spaCy returns the surface form as its own lemma — the
+    #      lemmatizer itself refuses to reduce.  Belt & suspenders.
+    #      — catches: embarrassed (lemma=embarrassed)
     #
-    #   3. be-to pattern: "be VBN to <verb>" — syntactic hallmark of emotional
-    #      adjectives.  Needed because spaCy sometimes misparses this as ROOT
-    #      (passive) instead of acomp, e.g. "be astonished to see".
-    #      — catches: astonished (ROOT, but be-to pattern matches)
+    #   4. be-to pattern: "be VBN to <verb>" — emotional adjective with
+    #      to-infinitive complement.  spaCy often misparses this as ROOT
+    #      (passive) instead of acomp.
+    #      — catches: astonished ("was astonished to see")
     wl = word.lower()
     if lemma != wl and wl.endswith(("ed", "ing")):
         sent = w.get("sentence", "")
@@ -736,15 +741,19 @@ def _process_one_word(
                     doc = nlp(sent)
                     for token in doc:
                         if token.text.lower() == wl:
-                            # Signal 1: adjectival dependency relation
+                            # Signal 1: POS tag — most precise, fires first
+                            if token.pos_ == "ADJ":
+                                lemma = wl
+                                break
+                            # Signal 2: adjectival dependency relation
                             if token.dep_ in ("acomp", "oprd", "attr", "amod"):
                                 lemma = wl
                                 break
-                            # Signal 2: spaCy lemma == surface form
+                            # Signal 3: spaCy lemma == surface form
                             if token.lemma_.lower() == wl:
                                 lemma = wl
                                 break
-                            # Signal 3: be VBN to <verb> structural pattern
+                            # Signal 4: be VBN to <verb> structural pattern
                             if token.tag_ == "VBN" and _has_be_to_pattern(doc, token.i):
                                 lemma = wl
                                 break
@@ -906,16 +915,34 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
         #     True positives (beautiful→beautifully) go TO a longer form.
         json_lemma = w.get("lemma", "").strip()
         if json_lemma:
-            resolved = resolve_lemma(word, "")
-            machine = lemmatize_word(word)
-            if (json_lemma.lower() != word.lower()
-                    and json_lemma.lower() != machine.lower()
-                    and len(json_lemma) > len(word)):  # longer = true error
-                errors.append(
-                    f"[{word}] suspicious lemma '{json_lemma}': differs from both "
-                    f"surface form '{word}' and lemmatize_word() result '{machine}'. "
-                    f"Leave lemma empty for regular inflection (auto-correct → '{resolved}')"
-                )
+            wl = word.lower()
+            # Rule: for -ed/-ing words, Claude must NOT set lemma to a
+            # different, reduced form.  Derivational adjectives keep the
+            # surface form (lemma == word); regular inflections leave
+            # lemma empty.  Setting lemma != word implies a wrong
+            # classification — the -ed/-ing form is either an adjective
+            # (keep it) or a regular inflection (let resolve_lemma handle
+            # it).  Neither case warrants an explicit reduced lemma.
+            if wl.endswith(("ed", "ing")):
+                if json_lemma.lower() != wl:
+                    errors.append(
+                        f"[{word}] -ed/-ing word with lemma '{json_lemma}' "
+                        f"that differs from surface form. "
+                        f"See SHARED_WORKFLOW.md Step 2D-0 lemma 判定: "
+                        f"if adjective → set lemma='{word}'; "
+                        f"if regular inflection → leave lemma empty."
+                    )
+            else:
+                resolved = resolve_lemma(word, "")
+                machine = lemmatize_word(word)
+                if (json_lemma.lower() != wl
+                        and json_lemma.lower() != machine.lower()
+                        and len(json_lemma) > len(word)):
+                    errors.append(
+                        f"[{word}] suspicious lemma '{json_lemma}': differs from both "
+                        f"surface form '{word}' and lemmatize_word() result '{machine}'. "
+                        f"Leave lemma empty for regular inflection (auto-correct → '{resolved}')"
+                    )
 
         # --- Soft warnings (stderr only, do not block sync) ---
 
