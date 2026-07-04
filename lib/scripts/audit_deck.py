@@ -60,6 +60,7 @@ def audit_deck(deck_name: str) -> dict:
     missing_ipa = []
     missing_def = []
     missing_trans = []
+    meta_count = 0
 
     for n in all_notes:
         f = n["fields"]
@@ -71,6 +72,7 @@ def audit_deck(deck_name: str) -> dict:
 
         # Skip meta card
         if word == "__META__":
+            meta_count += 1
             continue
 
         # Extract <b> text
@@ -103,7 +105,7 @@ def audit_deck(deck_name: str) -> dict:
             missing_trans.append(word)
 
     # 4. Report
-    total = len(all_notes) - 1  # exclude meta
+    total = len(all_notes) - meta_count
     print(f"Deck: {deck_name}")
     print(f"Cards: {total}")
     print()
