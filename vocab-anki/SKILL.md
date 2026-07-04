@@ -176,7 +176,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 
 共享步骤中的关键路径（`<skill_dir>/lib/` 前缀）：
 - `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配
-- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译
+- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译，支持 `--source-text` 上下文和句子去重
 - `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步
 - `<skill_dir>/lib/scripts/audit_deck.py` — 同步后审计
 
@@ -300,17 +300,21 @@ wc -c /tmp/<book>-full.txt
 **前置条件**：`DEEPL_API_KEY` 环境变量（免费 key 从 https://www.deepl.com/pro-api 获取，500,000 字符/月）。
 
 ```bash
-# 若 DEEPL_API_KEY 未设置 → 跳过此步，翻译仍由 Claude 在 Step 3B 完成
+# 若 DEEPL_API_KEY 未设置 → 告知用户，请用户确认是否由 Claude 代为翻译
 if [ -n "$DEEPL_API_KEY" ]; then
-    <skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/translate_deepl.py /tmp/vocab-anki-input-<bookId>.json
+    <skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/translate_deepl.py \
+      /tmp/vocab-anki-input-<bookId>.json \
+      --source-text /tmp/<book>-full.txt
 fi
 ```
 
 脚本行为：
 - 读 JSON 中所有 `sentence`，剥离 `<b>` 标签后发送 DeepL（`target_lang=ZH`）
-- 每批 50 句，遇批次失败逐句重试
+- **自动去重**：相同句子只翻译一次，译文回填所有共享该句的词
+- **上下文（`--source-text`）**：提供源文本路径后，自动查找目标句在原文位置，取前 2 句作为 DeepL `context` 参数——上下文不翻译不收费
+- 每批 50 句（有上下文时逐句请求），遇失败逐句重试
 - 翻译写回 `translation_cn` 字段
-- 打印字符用量（对照 500,000/月配额）
+- 打印去重数量、字符用量（对照 500,000/月配额）
 
 **完成后进入 Step 3A**——候选句已提取，Claude 工作分为三步：3A 句子选择 → 3B 生成释义 → 3C 内容验证 → DeepL 翻译。
 
@@ -659,7 +663,7 @@ timeout $SYNC_TIMEOUT <skill_dir>/.venv/bin/python -u <skill_dir>/lib/sync_anki.
 | `lib/utils.py` | 共享工具 — lemmatize_word, edge_tts_bytes/file, safe_filename, print_progress | — | 工具函数 |
 | `lib/coca.py` | BNC/COCA 词族等级查询（Nation 2017）| 单词 | 在 25000 词族中 + 等级 + 族归属 |
 | `lib/scripts/match_sentences.py` | 机械句子匹配 — `<b>` 标签标记 | 过滤 JSON + 源文本 | 带 `<b>` 标签的句子 |
-| `lib/scripts/translate_deepl.py` | DeepL 批量翻译 | vocab JSON | 翻译写回 `translation_cn` |
+| `lib/scripts/translate_deepl.py` | DeepL 翻译，支持 context 上下文和去重 | vocab JSON + 源文本 | 翻译写回 `translation_cn` |
 | `lib/scripts/audit_deck.py` | 牌组质量审计 | Anki 牌组名 | 审计报告 |
 | `lib/data/bnc_cova/basewrd1.txt–25.txt` | BNC/COCA 词族数据（Nation 2017）| — | `word→level` + `word→headword` |
 | `tests/` | pytest 单元测试套件 | — | 回归防护 |
