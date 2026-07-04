@@ -89,15 +89,19 @@ wc -c /tmp/<book>-full.txt
 
 ```bash
 if [ -n "$DEEPL_API_KEY" ]; then
-    <skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/translate_deepl.py /tmp/vocab-anki-input-<tmp_id>.json
+    <skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/translate_deepl.py \
+      /tmp/vocab-anki-input-<tmp_id>.json \
+      --source-text /tmp/<book>-full.txt
 fi
 ```
 
 脚本行为：
 - 剥离 `<b>` 标签 → DeepL（`target_lang=ZH`）
-- 每批 50 句，遇失败逐句重试
+- **自动去重**：相同句子（去标签后）只翻译一次，译文回填所有共享该句的词
+- **上下文（`--source-text`）**：提供源文本路径后，自动查找目标句在原文中的位置，取前 2 句作为 DeepL `context` 参数——帮助 DeepL 理解截断句的语境，上下文不翻译不收费
+- 有上下文的句子逐句请求（各自 context 不同），无上下文的句子按 50 句一批
 - 翻译写回 `translation_cn`
-- 打印字符用量
+- 打印去重数量、字符用量
 
 若 DEEPL_API_KEY 未设置 → 跳过，翻译由 Claude 在 Step 3B 中完成。
 
