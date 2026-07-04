@@ -891,10 +891,13 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
         word = w.get("word", "")
         sentence = w.get("sentence", "")
 
-        # 1. <b> content must match word field (hard error)
+        # 1. <b> content must match word field (case-insensitive).
+        #    Sentence-initial capitalization (e.g. "<b>Absurd</b> as it
+        #    might seem…") vs lowercase word ("absurd") is a legitimate
+        #    difference — the word field represents the canonical form.
         b_match = re.search(r"<b>(.*?)</b>", sentence)
         b_text = b_match.group(1) if b_match else ""
-        if b_text != word:
+        if b_text.lower() != word.lower():
             errors.append(f"[{word}] <b> mismatch: <b>{b_text}</b> ≠ word '{word}'")
 
         # 1b. <b> must wrap the COMPLETE surface word — detect tag-split

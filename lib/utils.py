@@ -2,6 +2,14 @@
 """Shared utilities for vocab-anki scripts.
 
 Provides constants, filename helpers, lemmatization, and Edge TTS audio synthesis.
+
+lemmatize_word() uses three-tier lemmatization:
+  1. VERB + NOUN via lemminflect (inflectional: -ing, -ed, -s, -es)
+  2. ADJ channel via lemminflect (comparatives/superlatives: -er, -est)
+     Gated by spaCy POS — nouns (baker, walker) are NOT reduced.
+  3. ADV channel via lemminflect — ONLY for -ly adverbs.
+     Non-ly words are rejected because lemminflect ADV produces false
+     positives: "absurd"→"absur", "reflective"→"reflect".
 """
 
 import os
@@ -91,8 +99,22 @@ def lemmatize_word(word: str) -> str:
         except Exception:
             pass
 
-    for pos in ("ADJ", "ADV"):
-        lemmas = lemminflect.getLemma(w, pos)
+    # ADJ channel: comparatives (-er) and superlatives (-est)
+    lemmas = lemminflect.getLemma(w, "ADJ")
+    if lemmas:
+        lemma = lemmas[0].lower()
+        if lemma != w and len(lemma) < len(w):
+            return lemma
+
+    # ADV channel: ONLY trust for -ly adverbs.
+    # lemminflect ADV channel produces false positives for non-adverb
+    # words: "absurd"→"absur" (treats 'd' as comparative suffix),
+    # "reflective"→"reflect" (treats 'ive' as adverb suffix).
+    # Genuine adverb reductions (slowly→slow, happily→happy) all end
+    # in -ly.  Reject any ADV reduction where the input doesn't end in
+    # -ly to prevent false positives.
+    if w.endswith("ly") and len(w) > 3:
+        lemmas = lemminflect.getLemma(w, "ADV")
         if lemmas:
             lemma = lemmas[0].lower()
             if lemma != w and len(lemma) < len(w):

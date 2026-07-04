@@ -101,6 +101,33 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 - **bookId bridging (vocab-anki)**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching.
 - **IPA from cmudict**: IPA is generated mechanically from the CMU Pronouncing Dictionary. Stress placement follows Maximal Onset Principle. ER0 (unstressed) → /ər/, ER1/ER2 → /ɜːr/. Claude only votes on heteronym disambiguation.
 
+## Known Pitfalls & Troubleshooting
+
+Common failure modes discovered through production use. Reference when debugging deck quality issues.
+
+### Lemmatizer false positives (ADV channel)
+
+`lemmatize_word()` uses lemminflect's VERB → NOUN → ADJ → ADV channels. The ADV channel produces false positives for non-adverb words: "absurd"→"absur" (treats 'd' as comparative suffix), "reflective"→"reflect" (treats 'ive' as adverb suffix). **Fix (2026-07-05)**: ADV channel now gated to words ending in -ly only.
+
+Symptom: COCA-valid words get excluded by filter_pipeline (absurd→absur not in COCA) or get wrong IPA (reflective→reflect IPA).
+Check: `python3 -c "import lemminflect; print(lemminflect.getLemma('WORD', 'ADV'))"` — if it returns a shorter non-word, it's this bug.
+
+### Source text OCR artifacts (double spaces)
+
+Internet Archive `.txt` files often contain double-space OCR artifacts. `match_sentences.py` now normalizes whitespace, but if sentences from other sources have double spaces, verify the source text quality first. Use `grep -c '  ' source.txt` to check.
+
+### `<b>` case sensitivity
+
+`<b>Absurd</b>` (sentence-initial capital) vs `word="absurd"` (lowercase) is a legitimate difference. The validation is case-insensitive. When a word appears at sentence start, set `word` to the canonical lowercase form; the `<b>` tag preserves the sentence-surface capitalization.
+
+### Derived adjectives and IPA
+
+For -ive, -ous, -ful derived adjectives (reflective, tremendous, beautiful), `resolve_lemma` may reduce them to verb stems. When the word IS in COCA as-is, set `lemma` explicitly to prevent reduction. IPA must match the card-displayed lemma, not the reduced stem — always verify with `_cmu_ipa(lemma)` after setting lemma.
+
+### Inflected form mismatch
+
+When a user highlights a base form ("arouse") but the source text only has inflected forms ("aroused"), `match_sentences.py` now expands forms with common inflectional suffixes (-s, -es, -ed, -d, -ing). If no sentence is found, check the text for inflected variants before declaring the word unmatched.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.

@@ -52,6 +52,10 @@ from lib.utils import lemmatize_word, safe_filename
         ("fiber", "fiber"),             # NOUN, not reduced
         # ── Cross-POS same-length — NOT reduced ──
         ("abode", "abode"),             # len(abide) == len(abode), guard rejects
+        # ── Words ending in non-ly suffixes that lemminflect ADV would
+        #     falsely reduce.  ADV channel is now gated to -ly only. ──
+        ("absurd", "absurd"),           # was "absur" — lemminflect ADV treats 'd' as suffix
+        ("reflective", "reflective"),   # was "reflect" — lemminflect ADV treats 'ive' as suffix
         # ── Words already base form ──
         ("fish", "fish"),
         ("water", "water"),

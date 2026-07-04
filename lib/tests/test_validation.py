@@ -75,17 +75,19 @@ def test_tag_splits_are_hard_errors():
     assert len(errors) > 0, "Tag split should be a hard error"
 
 
-# ── Hard errors: <b> mismatch (case sensitivity) ──
+# ── Hard errors: <b> mismatch ──
 
-def test_b_tag_case_mismatch():
-    """<b>Any</b> but word='any' — hard error.
+def test_b_tag_case_match():
+    """<b>Any</b> with word='any' — case-insensitive, should pass.
 
-    Historical: Claude wrote <b>Any</b> but set word='any' (lowercase).
+    Sentence-initial capitalization (e.g. <b>Absurd</b> vs word='absurd')
+    is a legitimate difference — the word field stores the canonical
+    lowercase form, while the <b> tag wraps the sentence-surface form.
     """
     w = make_word(word="any", sentence="<b>Any</b> man could do it.")
     errors = _validate_word_entries([w])
-    assert has_error(errors, "any", "mismatch"), \
-        f"Should detect case mismatch\nErrors: {errors}"
+    assert not errors, \
+        f"Case difference should be allowed\nErrors: {errors}"
 
 
 def test_b_tag_content_vs_word_field():
