@@ -103,7 +103,7 @@ fi
 - 翻译写回 `translation_cn`
 - 打印去重数量、字符用量
 
-若 DEEPL_API_KEY 未设置 → 跳过，翻译由 Claude 在 Step 3B 中完成。
+若 DEEPL_API_KEY 未设置 → 告知用户 DeepL 不可用、Claude 翻译的代价（token 消耗 + 质量波动），请用户确认是否由 Claude 代为翻译。
 
 ## Step 3A: 句子选择 + 完整性校验（Claude，1 agent）
 
