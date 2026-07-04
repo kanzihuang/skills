@@ -1211,7 +1211,7 @@ def sync(
     new_words = []
     skipped_words = []
     for idx, w in enumerate(words):
-        original_id = f"{w['word'].strip().lower()}_{book_id}"
+        original_id = f"{safe_filename(w['word'].strip().lower())}_{book_id}"
 
         # Only dedup against this word's target deck
         target_deck = band_assignment.get(idx, deck_name)

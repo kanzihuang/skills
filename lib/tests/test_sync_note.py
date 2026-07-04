@@ -222,26 +222,9 @@ class TestIncrementalSafety:
         assert len(skipped_words) == 2
         assert {w["word"] for w in skipped_words} == {"boa", "consequence"}
 
-    @pytest.mark.xfail(
-        reason=(
-            "sync_anki.py line 1203 dedup check uses "
-            "f\"{w['word'].strip().lower()}_{book_id}\" without safe_filename, "
-            "but build_note_entry (line 805-806) applies safe_filename to the "
-            "surface form. Words with hyphens (good-bye), apostrophes (it's), "
-            "or other non-alphanumeric chars produce mismatched WordIds, "
-            "causing dedup misses and potential duplicate card creation."
-        ),
-        strict=True,
-    )
     def test_dedup_uses_safe_filename_for_special_chars(self):
-        """The dedup check must apply safe_filename to match build_note_entry.
+        """Dedup check must apply safe_filename to match build_note_entry WordId."""
 
-        Currently sync_anki.py line 1203 uses raw word.strip().lower() but
-        build_note_entry uses safe_filename(surface). For 'good-bye':
-          - build_note_entry → WordId = 'good_bye_12345'
-          - dedup check       → dedup_id = 'good-bye_12345'
-          → MISMATCH → existing card not found → duplicate created.
-        """
         word = "good-bye"
         book_id = "12345"
 
@@ -250,10 +233,9 @@ class TestIncrementalSafety:
             make_word(word), ipa="/tɛst/", book_id=book_id,
         )
 
-        # What the dedup check at line 1203 currently computes
-        dedup_id = f"{word.strip().lower()}_{book_id}"
+        # The dedup check (line 1214) now uses safe_filename — must match
+        dedup_id = f"{safe_filename(word.strip().lower())}_{book_id}"
 
-        # These should be identical — but currently aren't for special chars
         assert note["fields"]["WordId"] == dedup_id, (
             f"Mismatch: build_note_entry={note['fields']['WordId']} "
             f"vs dedup={dedup_id}"
