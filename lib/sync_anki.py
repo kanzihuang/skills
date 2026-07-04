@@ -1225,7 +1225,7 @@ def sync(
     )
 
     # Format band names with book prefix for share-friendly naming.
-    # e.g. "COCA 4" → "The Little Prince (Author) - COCA 4"
+    # e.g. "COCA 4" → "Book Title (Author) - COCA 4"
     if bands:
         author = data.get("book_author", "")
         book_prefix = f"{book_title} ({author})" if author else book_title

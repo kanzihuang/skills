@@ -146,8 +146,14 @@ def find_all_sentences(
 
 
 def main():
-    json_path = sys.argv[1] if len(sys.argv) > 1 else '/tmp/vocab-anki-filtered-3300144556.json'
-    text_path = sys.argv[2] if len(sys.argv) > 2 else '/tmp/oldmansea_full.txt'
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} <filter_json> <source_text>", file=sys.stderr)
+        print("  filter_json : JSON from filter_pipeline.py / filter_fulltext.py", file=sys.stderr)
+        print("  source_text : plain text of the book (English, full text)", file=sys.stderr)
+        sys.exit(1)
+
+    json_path = sys.argv[1]
+    text_path = sys.argv[2]
 
     with open(json_path) as f:
         data = json.load(f)

@@ -10,7 +10,7 @@ Checks:
   2. Missing IPA / definition / translation
 
 Usage:
-  python scripts/audit_deck.py "小王子（英文版） (圣埃克絮佩里)"
+  python scripts/audit_deck.py "Deck Name (Author)"
 """
 
 import json
@@ -149,5 +149,8 @@ def audit_deck(deck_name: str) -> dict:
 
 
 if __name__ == "__main__":
-    deck = sys.argv[1] if len(sys.argv) > 1 else "小王子（英文版） (圣埃克絮佩里)"
-    audit_deck(deck)
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <deck_name>", file=sys.stderr)
+        print("  deck_name : Anki deck name (e.g. 'The Little Prince (Author)')", file=sys.stderr)
+        sys.exit(1)
+    audit_deck(sys.argv[1])

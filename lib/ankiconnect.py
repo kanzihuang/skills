@@ -10,7 +10,7 @@ Usage:
 
     ac = AnkiConnect()
     decks = ac.list_decks()
-    notes = ac.find_notes_in_deck("The Little Prince Vocabulary")
+    notes = ac.find_notes_in_deck("My Deck Name")
 """
 
 import base64
@@ -93,8 +93,8 @@ class AnkiConnect:
         """Find note IDs matching a search query.
 
         Examples:
-            "deck:The Little Prince Vocabulary"
-            "deck:English Word:pondered"
+            "deck:My Deck Name"
+            "deck:English Word:example"
         """
         return self._call("findNotes", query=query)
 
