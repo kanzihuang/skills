@@ -8,7 +8,6 @@ Checks:
   1. Word ≠ lemmatize_word(<b> text) AND Word ≠ <b> text
      → lemma is neither the mechanical reduction NOR a deliberate adj override
   2. Missing IPA / definition / translation
-  3. Sentence > 150 chars (with tags)
 
 Usage:
   python scripts/audit_deck.py "小王子（英文版） (圣埃克絮佩里)"
@@ -61,7 +60,6 @@ def audit_deck(deck_name: str) -> dict:
     missing_ipa = []
     missing_def = []
     missing_trans = []
-    too_long = []
 
     for n in all_notes:
         f = n["fields"]
@@ -104,10 +102,6 @@ def audit_deck(deck_name: str) -> dict:
         if not translation:
             missing_trans.append(word)
 
-        # Sentence length (with tags, as sync_anki.py validates)
-        if len(sentence) > 150:
-            too_long.append((word, len(sentence)))
-
     # 4. Report
     total = len(all_notes) - 1  # exclude meta
     print(f"Deck: {deck_name}")
@@ -138,15 +132,8 @@ def audit_deck(deck_name: str) -> dict:
     else:
         print("Translations: ✅")
 
-    if too_long:
-        print(f"\nSentence > 150 chars ({len(too_long)}):")
-        for w, l in too_long:
-            print(f"  {w}: {l} chars")
-    else:
-        print("Sentence length: ✅")
-
     print(f"\n{'═' * 40}")
-    issues = len(lemma_mismatches) + len(missing_ipa) + len(missing_def) + len(too_long)
+    issues = len(lemma_mismatches) + len(missing_ipa) + len(missing_def)
     print(f"{'✅ All clear!' if issues == 0 else f'❌ {issues} issue(s) found'}")
     print(f"{'═' * 40}")
 
@@ -156,7 +143,6 @@ def audit_deck(deck_name: str) -> dict:
         "missing_ipa": missing_ipa,
         "missing_def": missing_def,
         "missing_trans": missing_trans,
-        "too_long": too_long,
     }
 
 
