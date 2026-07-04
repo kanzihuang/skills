@@ -376,7 +376,7 @@ cmudict 未覆盖的词由 Claude 在 3C 中手动补充。
 | `coca_level` | **从 Step 1 JSON 输出透传**。`filter_pipeline.py --json-out` 的 `in_coca[].coca_level` 值原样写入 | `5` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹 | `I felt awkward and <b>blundering</b>.` |
 | `ipa` | 对应 **lemma** 的 IPA 音标。**cmudict 自动生成，Claude 仅在多发音词时用作投票参考**。未登录词时 Claude 提供兜底 | 单发音词留空；异读词填正确发音如 `/riːd/`（非 `/red/`） |
-| `definition_cn` | **按句中实际用法释义**，不按原形常见义项，也不自动选择最常见的词典义。特别注意多义词的含义选择：同一个词在不同句子中可能是完全不同的意思。即使卡片展示原形，释义反映句中词性 | `blundering` 在 "awkward and blundering" 中→"笨拙的，跌跌撞撞的"（**不写**"犯大错"）；`conceited`→"自负的"（**不写**"自负"）；`thriftily` 在 "he must be treated thriftily" 中→"有节制地，有所保留地"（**不写**"节俭地"）|
+| `definition_cn` | **格式**：`[词性] 释义`。词性用英文缩写：`[n.]` `[v.]` `[adj.]` `[adv.]` `[prep.]` `[conj.]`。释义**按句中实际用法**，不自动选最常见义项。**禁止**在释义后加括号补充说明（如"（小王子…）"）| `inquiry` 在 "came a timid inquiry" 中→`[n.] 询问，提问`（**不写**`询问，提问（小王子怯生生地询问能否坐下）`）；`thriftily`→`[adv.] 有节制地，有所保留地`（**不写**`节俭地`）|
 | `translation_cn` | 整句的中文翻译，由 Step 2F DeepL 提供。`DEEPL_API_KEY` 未设置时留空 | `我于是对丛林中的冒险深深思索起来。` |
 
 **例句规则（不变）：**
