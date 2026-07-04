@@ -434,13 +434,14 @@ def test_sentence_under_250_passes():
 
 
 def test_sentence_over_250_fails_length_check():
-    """Sentence >250 chars is a hard error."""
+    """Sentence >250 chars (clean, without tags) is a hard error."""
     w = make_word(
         word="veritable",
         sentence="I will tell you that before the invention of electricity "
                 "it was necessary to maintain a <b>veritable</b> army of 462,511 "
                 "lamplighters for the street lamps throughout the entire world, "
-                "which required a vast logistical operation of truly unprecedented scale.",
+                "which required a vast logistical operation of truly unprecedented "
+                "scale and complexity beyond anything ever attempted before.",
     )
     assert len(w["sentence"]) > MAX_SENTENCE_LENGTH, \
         f"Precondition: sentence must be >{MAX_SENTENCE_LENGTH} chars"
