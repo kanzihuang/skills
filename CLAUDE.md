@@ -124,6 +124,10 @@ Internet Archive `.txt` files often contain double-space OCR artifacts. `match_s
 
 For -ive, -ous, -ful derived adjectives (reflective, tremendous, beautiful), `resolve_lemma` may reduce them to verb stems. When the word IS in COCA as-is, set `lemma` explicitly to prevent reduction. IPA must match the card-displayed lemma, not the reduced stem — always verify with `_cmu_ipa(lemma)` after setting lemma.
 
+### Exact-form-only sentence matching
+
+`match_sentences.py` searches for the **exact surface forms** from the `forms` array in the source text. No inflectional expansion (-s/-es/-ed/-ing). If a user highlights the base form ("arouse") but the text only has inflected forms ("aroused"), the word gets no sentence → excluded from the deck. This is by design: the card's `<b>` tag must wrap the exact word the user highlighted. Do not manually expand forms to force a match.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
