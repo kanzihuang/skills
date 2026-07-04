@@ -125,7 +125,7 @@ cat /tmp/<safe_title>-full.txt | \
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
 - WordId = `{safe_filename(surface_form)}_{suffix}`（词形变体如 asteroid/asteroids 各自独立卡片），音频文件使用 lemma 命名 = `{safe_filename(lemma)}_{suffix}_word.mp3` / `{safe_filename(lemma)}_{suffix}_sent.mp3`
-- 同步时自动频次分级（`compute_bands()`）：COCA 级别 → ≤5 段 → `{English Title} ({Author}) - 分级词汇::{English Title} ({Author}) - COCA X-Y`。**书名和作者必须用英文**；分级后缀 `- COCA X-Y` 天然与 vocab-anki 扁平牌组名区分，不会重名
+- 同步时自动频次分级（`compute_bands()`）：COCA 级别 → ≤5 段 → `{English Title} ({Author}) - 分级词汇::{English Title} ({Author}) - COCA X-Y`。**书名和作者必须用英文**。词汇量不足（<100）或仅 1 个 COCA 级别时退回无分级，所有卡片进入父牌组 `{English Title} ({Author}) - 分级词汇`——后缀 ` - 分级词汇` 仍然存在，与 vocab-anki 扁平牌组名区分，不会重名
 - **不做 Anki 去重**（filter_fulltext.py 不连接 AnkiConnect）
 
 ## 异常处理
