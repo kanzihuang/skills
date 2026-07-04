@@ -74,10 +74,11 @@ head -c 500 /tmp/<safe_title>-full.txt
 
 > 文件 >20KB 且包含书中实际文本。**必须使用英文原版**——双语版中的中文翻译、西里尔字母、guillemet（«»）等非英文内容会污染句子匹配。`match_sentences.py` 遇到此类文本直接拒绝。优先选择 Project Gutenberg（英文版）、Standard Ebooks、Internet Archive 英文原版。**不要使用 ESL 简化版或双语对照版替代**——改写后的句子与原文不符。
 
-拉取后做质量控制：
-- **OCR 损坏检查**：`grep -oE '\b[a-z]+ [a-z]+\b'` 排查字母间异常空格（如 `fig ures`）。此类损坏导致 DeepL 误译
-- **章节标题粘连**：`grep -P '^[a-z]'` 排查小写开头行。章节导航文本若与正文粘连无句号分隔，PySBD 无法正确切分
-- 若文本含严重 OCR 损坏或标题粘连 → 换源重新拉取，不用于句子匹配
+拉取后做质量验证（`head -c 500`）：
+- 正文句子是否完整（非章节摘要片段）
+- 有无明显 OCR 损坏（如 `fig ures` → 字母间多余空格）
+- 首句是否与公认经典译本一致（排除 ESL 简化版）
+- 有问题 → 换源重新拉取，不要用损坏文本
 
 ### Step 2: 运行 filter_fulltext.py
 

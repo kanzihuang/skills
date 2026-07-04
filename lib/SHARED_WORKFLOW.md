@@ -29,15 +29,21 @@ wc -c /tmp/<book>-full.txt
 - 验证：`head -c 500` 确认是英文原版书中文本，不含双语对照或非英文元数据
 - 搜一句书中知名台词，与公认的经典译本比对。若首句或知名段落与已知译文不符（如《小王子》首句不是 "Once when I was six years old..." 而是 "ONCE WHEN I was six..." 这类简化改写），则为 ESL 版或改编版，不可用
 
-### 3.0b-1. 源文本质量控制
+### 3.0b-1. 源文本版本选择
 
-拉取后必做三项检查，避免污染句子匹配：
+**选对源文本版本是最有效的质量控制**——坏的源文本（OCR 扫描版、带章节导航的网页提取版）导致的句子污染无法通过机械规则批量修复，只能逐句人工修正。
 
-1. **OCR 损坏**：`grep -E '\b[a-z]+ [a-z]+\b'` 查找字母间异常空格（如 `fig ures` → 应为 `figures`）。此类损坏导致 DeepL 误译
-2. **章节标题粘连**：`grep -P '^[a-z]'` 查找小写开头行。章节导航文本（`the little prince makes the acquaintance of the snake`）若与正文粘连无句号分隔，PySBD 无法切分 → 句子头尾混入导航文本
-3. **优先选干净版本**：Internet Archive 扫描版常有 OCR 问题；优先选 Project Gutenberg / Standard Ebooks 的校对版纯文本
+**优先顺序**：
+1. Project Gutenberg / Standard Ebooks 的校对版纯文本（`.txt`）
+2. Internet Archive 的扫描版（可能含 OCR 错误，如 `fig ures` → `figures`）
+3. 网页逐章提取版（可能含章节导航标题粘连正文，如 `the little prince makes the acquaintance of the snake When one wishes to...`）
 
-若源文本含严重 OCR 损坏或章节标题粘连 → 换源重新拉取，不用此文本
+**拉取后验证**：`head -c 500` 查看前几段，检查：
+- 正文句子是否完整（有主语+谓语，非章节摘要片段）
+- 有无明显 OCR 损坏（字母间多余空格、标点缺失）
+- 首句是否与公认经典译本一致（排除 ESL 简化版/改编版）
+
+源文本有问题 → 换源重新拉取，不要勉强用损坏的文本生成例句
 
 ### 3.0c. 句子匹配
 
