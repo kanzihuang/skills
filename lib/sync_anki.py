@@ -666,6 +666,33 @@ def resolve_lemma(word: str, json_lemma: str) -> str:
     return jl or w
 
 
+def _make_word_id(word_data: dict, book_id: str,
+                   resolved_lemma: str | None = None) -> str:
+    """Compute the canonical WordId for a word entry.
+
+    WordId = {safe_filename(resolved_lemma)}_{book_id}
+
+    This is the single source of truth for WordId construction, used by
+    both the dedup check and build_note_entry.  Using the resolved lemma
+    (not the surface form) ensures cross-book dedup consistency: variants
+    like "pondered" and "pondering" from different books all map to the
+    same lemma "ponder", preventing duplicate cards for the same root word.
+
+    When *resolved_lemma* is provided (by the caller who already resolved
+    it), it is used directly.  Otherwise, resolve_lemma() is called on
+    the word_data to compute it — used by the dedup check where the lemma
+    hasn't been resolved yet.
+    """
+    if resolved_lemma:
+        resolved = resolved_lemma
+    else:
+        resolved = resolve_lemma(
+            word_data["word"],
+            word_data.get("lemma", ""),
+        )
+    return f"{safe_filename(resolved)}_{book_id}"
+
+
 def _has_be_to_pattern(doc, vbn_idx: int) -> bool:
     """Check if the VBN at vbn_idx is part of a "be VBN to <verb>" pattern.
 
@@ -818,17 +845,17 @@ def build_note_entry(
     Audio files are referenced as [sound:filename.mp3] — the actual
     media files must be uploaded separately via store_media_file().
 
-    If lemma is provided, it's used for the card Word field and audio
-    filenames. WordId always uses the surface form for variant deduplication.
-    The original form is only preserved in the sentence.
+    If lemma is provided, it's used for the card Word field, audio
+    filenames, and WordId.  WordId uses the resolved lemma for
+    cross-book dedup consistency (see _make_word_id).
     """
-    # WordId uses the surface form — no lemmatize merging of variants.
-    # Audio filenames still use lemma (shared across variants, generated once).
+    # WordId uses the resolved lemma — variants like "pondered" and
+    # "pondering" map to the same WordId "ponder_{book_id}".
+    # Use _make_word_id (single source of truth) so build_note_entry
+    # and the dedup check always compute the same WordId.
     surface = word_data["word"].strip().lower()
-    safe_surface = safe_filename(surface)
-    word_id = f"{safe_surface}_{book_id}"
-
-    safe_lemma = safe_filename(lemma) if lemma else safe_surface
+    safe_lemma = safe_filename(lemma) if lemma else safe_filename(surface)
+    word_id = _make_word_id(word_data, book_id, resolved_lemma=lemma)
     word_audio_ref = f"[sound:{safe_lemma}_{book_id}_word.mp3]"
     sent_audio_ref = f"[sound:{safe_lemma}_{book_id}_sent.mp3]"
 
@@ -1237,11 +1264,11 @@ def sync(
     else:
         existing = {}  # prefetch: no Anki connection, skip dedup
 
-    # 5. Identify new words (WordId = safe_filename(surface_form)_book_id).
+    # 5. Identify new words (WordId = safe_filename(resolved_lemma)_book_id).
     new_words = []
     skipped_words = []
     for idx, w in enumerate(words):
-        original_id = f"{safe_filename(w['word'].strip().lower())}_{book_id}"
+        original_id = _make_word_id(w, book_id)
 
         # Only dedup against this word's target deck
         target_deck = band_assignment.get(idx, deck_name)
@@ -1390,6 +1417,23 @@ def sync(
                     print_progress(completed, total, word)
 
         print()
+
+        # Mechanical check: verify every note's WordId matches _make_word_id.
+        # This catches drift between build_note_entry and the dedup check —
+        # both must use the same resolved-lemma WordId format.
+        for note in notes_to_add:
+            wid = note["fields"]["WordId"]
+            # Reconstruct expected WordId from the same input that
+            # build_note_entry received.  We don't have the original
+            # word_data here, so validate by checking the WordId uses
+            # the safe_filename(Word) pattern (Word field = resolve_lemma result).
+            card_word = note["fields"]["Word"]
+            expected_prefix = safe_filename(card_word)
+            if not wid.startswith(expected_prefix + "_"):
+                raise AssertionError(
+                    f"WordId mismatch: note WordId={wid!r} but card Word={card_word!r} "
+                    f"(expected WordId to start with {expected_prefix!r}_)"
+                )
 
         # If prefetch mode: save to temp dir with manifest, then exit
         if prefetch:

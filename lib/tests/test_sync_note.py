@@ -4,8 +4,10 @@ incremental safety dedup matching, and audio failure blocking.
 Key lessons from the 老人与海 case study:
   - Audio filenames must include bookId to prevent global media conflicts
     (e.g. "wound" pronounced differently in different books).
-  - WordId = {safe_filename(surface_form)}_{bookId} — the bookId suffix
+  - WordId = {safe_filename(resolved_lemma)}_{bookId} — the bookId suffix
     is the only reliable Anki ↔ WeRead bridge; title matching is fragile.
+    Using the resolved lemma (not surface form) ensures cross-book dedup
+    consistency: "pondered" and "pondering" map to the same WordId.
   - Incremental safety: existing cards must NOT be modified — sync only
     adds new cards, preserving review progress and scheduling data.
   - Audio failure: retry (edge_tts_bytes has 3 attempts), then block
@@ -92,28 +94,28 @@ class TestAudioFilenameFormat:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 2. WordId / bookId bridging — {safe_filename(surface_form)}_{bookId}
+# 2. WordId / bookId bridging — {safe_filename(resolved_lemma)}_{bookId}
 # ═══════════════════════════════════════════════════════════════════
 
 class TestWordIdBookIdBridging:
-    """WordId = {safe_filename(surface)}_{bookId} enables precise
-    Anki ↔ WeRead matching. The bookId suffix is the reliable bridge;
-    title matching is fragile and not used."""
+    """WordId = {safe_filename(resolved_lemma)}_{bookId} enables precise
+    Anki ↔ WeRead matching and cross-book dedup. The bookId suffix is the
+    reliable bridge; title matching is fragile and not used."""
 
     def test_word_id_includes_book_id(self):
         note = build_note_entry(make_word("test"), ipa="/tɛst/", book_id="12345")
         assert "test_12345" == note["fields"]["WordId"]
 
-    def test_word_id_uses_surface_form_not_lemma(self):
-        """WordId uses surface form for variant deduplication —
-        different surface forms (asteroid/asteroids) get different WordIds."""
+    def test_word_id_uses_lemma_not_surface_form(self):
+        """WordId uses the resolved lemma for cross-book dedup consistency —
+        "pondered" with lemma="ponder" gets WordId "ponder_22720170"."""
         note = build_note_entry(
             make_word("pondered"), ipa="/ˈpɑːndər/",
             book_id="22720170", lemma="ponder",
         )
-        # WordId should use surface "pondered", not lemma "ponder"
-        assert "pondered_22720170" == note["fields"]["WordId"]
-        # But Word field should show the lemma
+        # WordId should use lemma "ponder", not surface "pondered"
+        assert "ponder_22720170" == note["fields"]["WordId"]
+        # Word field should also show the lemma
         assert "ponder" == note["fields"]["Word"]
 
     def test_word_id_lowercases_surface_form(self):
@@ -138,8 +140,12 @@ class TestWordIdBookIdBridging:
         ("it's", "it_s"),               # apostrophe → underscore
     ])
     def test_word_id_safe_filenames_special_chars(self, word, expected):
-        """WordId applies safe_filename to handle non-alphanumeric characters."""
-        note = build_note_entry(make_word(word), ipa="/tɛst/", book_id="12345")
+        """WordId applies safe_filename to handle non-alphanumeric characters.
+        Explicit lemma prevents resolve_lemma from reducing the surface form."""
+        note = build_note_entry(
+            make_word(word), ipa="/tɛst/", book_id="12345",
+            lemma=word,  # pass surface form as lemma to prevent auto-reduction
+        )
         assert note["fields"]["WordId"] == f"{expected}_12345"
 
 
@@ -152,25 +158,23 @@ class TestIncrementalSafety:
     This preserves review progress and scheduling data."""
 
     def test_dedup_id_matches_build_note_entry_word_id(self):
-        """The WordId produced by build_note_entry must be predictable
-        so that the sync dedup check (line 1203) correctly identifies
-        cards already in the deck."""
+        """The WordId produced by build_note_entry must match what
+        _make_word_id computes for the dedup check (single source of truth)."""
+        from lib.sync_anki import _make_word_id
+
         for word in ["test", "boa", "pondered", "disheartened"]:
-            note = build_note_entry(
-                make_word(word), ipa="/tɛst/", book_id="12345",
-            )
-            # The dedup check at sync time computes:
-            expected_id = f"{word.strip().lower()}_12345"
+            wd = make_word(word)
+            note = build_note_entry(wd, ipa="/tɛst/", book_id="12345")
+            expected_id = _make_word_id(wd, "12345")
             assert note["fields"]["WordId"] == expected_id, (
                 f"WordId mismatch for {word}: "
                 f"build_note_entry={note['fields']['WordId']} "
-                f"vs dedup_check={expected_id}"
+                f"vs _make_word_id={expected_id}"
             )
 
-    def test_lemma_change_does_not_affect_word_id(self):
-        """Changing the lemma (e.g. fixing a mis-lemmatization) should not
-        change the WordId — WordId is tied to the surface form, so existing
-        cards can still be found for dedup."""
+    def test_lemma_change_does_affect_word_id(self):
+        """Changing the lemma (e.g. fixing a mis-lemmatization) changes
+        the WordId — WordId is tied to the resolved lemma for dedup consistency."""
         note1 = build_note_entry(
             make_word("disheartened"), ipa="/dɪsˈhɑːrtən/",
             book_id="22720170", lemma="dishearten",
@@ -179,8 +183,18 @@ class TestIncrementalSafety:
             make_word("disheartened"), ipa="/dɪsˈhɑːrtənd/",
             book_id="22720170", lemma="disheartened",
         )
-        # WordId stable despite lemma change
-        assert note1["fields"]["WordId"] == note2["fields"]["WordId"]
+        # WordId reflects the lemma — different lemmas = different WordIds
+        assert note1["fields"]["WordId"] == "dishearten_22720170"
+        assert note2["fields"]["WordId"] == "disheartened_22720170"
+
+    def test_explicit_lemma_in_word_id(self):
+        """When Claude sets lemma explicitly (adj override), WordId uses it."""
+        note = build_note_entry(
+            make_word("blundering"), ipa="/ˈblʌndərɪŋ/",
+            book_id="12345", lemma="blundering",
+        )
+        assert "blundering_12345" == note["fields"]["WordId"]
+        assert "blundering" == note["fields"]["Word"]
 
     def test_word_id_ignores_sentence_changes(self):
         """Changing the sentence (e.g. selecting a better candidate) should
@@ -197,7 +211,9 @@ class TestIncrementalSafety:
 
     def test_existing_word_ids_are_skipped(self):
         """Simulate the dedup logic: words whose WordId is already in the deck
-        are placed in skipped_words, not new_words."""
+        are placed in skipped_words, not new_words.  Uses _make_word_id."""
+        from lib.sync_anki import _make_word_id
+
         words_data = [
             make_word("boa"),
             make_word("consequence"),
@@ -211,7 +227,7 @@ class TestIncrementalSafety:
         new_words = []
         skipped_words = []
         for w in words_data:
-            dedup_id = f"{w['word'].strip().lower()}_{book_id}"
+            dedup_id = _make_word_id(w, book_id)
             if dedup_id in existing_ids:
                 skipped_words.append(w)
             else:
@@ -224,21 +240,21 @@ class TestIncrementalSafety:
 
     def test_dedup_uses_safe_filename_for_special_chars(self):
         """Dedup check must apply safe_filename to match build_note_entry WordId."""
+        from lib.sync_anki import _make_word_id
 
         word = "good-bye"
         book_id = "12345"
+        wd = make_word(word)
 
         # What build_note_entry produces
-        note = build_note_entry(
-            make_word(word), ipa="/tɛst/", book_id=book_id,
-        )
+        note = build_note_entry(wd, ipa="/tɛst/", book_id=book_id)
 
-        # The dedup check (line 1214) now uses safe_filename — must match
-        dedup_id = f"{safe_filename(word.strip().lower())}_{book_id}"
+        # _make_word_id computes the same thing (single source of truth)
+        dedup_id = _make_word_id(wd, book_id)
 
         assert note["fields"]["WordId"] == dedup_id, (
             f"Mismatch: build_note_entry={note['fields']['WordId']} "
-            f"vs dedup={dedup_id}"
+            f"vs _make_word_id={dedup_id}"
         )
 
 
