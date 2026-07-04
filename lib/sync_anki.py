@@ -43,6 +43,7 @@ from .utils import (
 
 MODEL_NAME = "Vocabulary Card (WeRead)"
 WORD_TIMEOUT = 30  # default seconds per word (audio generation)
+MAX_SENTENCE_LENGTH = 250  # chars — sentences longer than this must be truncated by Step 3A
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -776,6 +777,10 @@ def _process_one_word(
             audio_uploads.append((f"{safe}_{book_id}_sent.mp3", sent_tts))
 
     note = build_note_entry(w, ipa, book_id, lemma=lemma)
+    # Preserve original index in new_words for correct band assignment.
+    orig_idx = w.get("_idx")
+    if orig_idx is not None:
+        note["_idx"] = orig_idx
     return note, audio_uploads, ipa
 
 
@@ -790,8 +795,9 @@ def build_note_entry(
     Audio files are referenced as [sound:filename.mp3] — the actual
     media files must be uploaded separately via store_media_file().
 
-    If lemma is provided, it's used for the card Word field, audio filenames,
-    and WordId. The original form is only preserved in the sentence.
+    If lemma is provided, it's used for the card Word field and audio
+    filenames. WordId always uses the surface form for variant deduplication.
+    The original form is only preserved in the sentence.
     """
     # WordId uses the surface form — no lemmatize merging of variants.
     # Audio filenames still use lemma (shared across variants, generated once).
@@ -808,7 +814,7 @@ def build_note_entry(
         "modelName": MODEL_NAME,
         "fields": {
             "WordId": word_id,
-            "Word": surface,
+            "Word": lemma if lemma else surface,
             "Sentence": word_data["sentence"],
             "IPA": ipa or word_data.get("ipa", ""),
             "DefinitionCN": word_data["definition_cn"],
@@ -823,7 +829,7 @@ def build_note_entry(
 def _validate_word_entries(words: list[dict]) -> list[str]:
     """Validate word entries before sync. Returns list of error messages (empty = pass).
 
-    Checks sentence length (≤150 chars), <b> tag matches word field,
+    Checks sentence length (≤MAX_SENTENCE_LENGTH), <b> tag matches word field,
     word actually appears in sentence text (after stripping tags),
     and required fields (ipa, definition_cn, translation_cn) are non-empty.
 
@@ -867,20 +873,12 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                 f"'{word}' not in '{clean_sentence[:80]}{'...' if len(clean_sentence) > 80 else ''}'"
             )
 
-        # 3. Sentence length ≤ 250 chars — hard error unless 3A has explicitly
-        #    exempted this sentence (exempt_from_150 flag).
-        #    250 matches Step 3A's "extreme long sentence" trigger (3A rule 2a).
-        if len(sentence) > 250:
-            if not w.get("exempt_from_150"):
-                errors.append(
-                    f"[{word}] sentence too long: {len(sentence)} chars (max 250)"
-                )
-            else:
-                print(
-                    f"  [WARN] [{word}] sentence too long ({len(sentence)} chars) "
-                    f"but exempted by 3A",
-                    file=sys.stderr,
-                )
+        # 3. Sentence length check (hard error).
+        if len(sentence) > MAX_SENTENCE_LENGTH:
+            errors.append(
+                f"[{word}] sentence too long: {len(sentence)} chars "
+                f"(max {MAX_SENTENCE_LENGTH})"
+            )
 
         # 4. Required fields non-empty (hard error)
         for field in ["ipa", "definition_cn", "translation_cn"]:
@@ -1281,9 +1279,13 @@ def sync(
             sys.exit(1)
         with open(manifest_path, "r", encoding="utf-8") as mf:
             manifest = json.load(mf)
-        # Restore notes (without deckName — fill in below)
-        for idx, note in enumerate(manifest["notes"]):
-            note["deckName"] = band_assignment.get(idx, deck_name)
+        # Restore notes (without deckName — fill in below).
+        # Use _idx (original position in new_words) for correct band
+        # assignment, because manifest notes are in completion order
+        # (ThreadPoolExecutor) not submission order.
+        for i, note in enumerate(manifest["notes"]):
+            orig_idx = note.get("_idx", i)  # fallback: old manifests lack _idx
+            note["deckName"] = band_assignment.get(orig_idx, deck_name)
             notes_to_add.append(note)
         # Load audio files from disk
         for filename, filepath in manifest["audio_files"].items():
@@ -1298,6 +1300,11 @@ def sync(
         max_workers = min(16, len(new_words))
         if verbose:
             print(f"  ({max_workers} workers)")
+
+        # Inject _idx before thread pool so each note preserves its
+        # original position for correct band assignment.
+        for idx, w in enumerate(new_words):
+            w["_idx"] = idx
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {
@@ -1441,6 +1448,9 @@ def sync(
     if not dry_run and notes_to_add:
         print(f"\nAdding {len(notes_to_add)} new cards to Anki...")
         try:
+            # Strip internal _idx before sending to AnkiConnect
+            for note in notes_to_add:
+                note.pop("_idx", None)
             result = ac.add_notes(notes_to_add)
             added_count = sum(1 for r in result if r is not None)
             duped_count = sum(1 for r in result if r is None)

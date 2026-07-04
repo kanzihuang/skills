@@ -19,7 +19,7 @@ Historical LLM errors covered:
 
 import re
 import pytest
-from lib.sync_anki import _validate_word_entries
+from lib.sync_anki import _validate_word_entries, MAX_SENTENCE_LENGTH
 
 
 # ── Helper ──
@@ -99,14 +99,15 @@ def test_b_tag_content_vs_word_field():
 # ── Hard error: sentence too long ──
 
 def test_sentence_too_long():
-    """Sentence >250 chars (with tags) is a hard error."""
+    """Sentence >MAX_SENTENCE_LENGTH is a hard error."""
     base = ("He adjusted the sack and carefully worked the line so that it came "
             "across a new part of his shoulders and, holding it anchored with his "
             "shoulders, he leaned forward and braced himself against the weight "
             "of the fish as it pulled with tremendous force against the line that "
             "he had so carefully prepared")
     tagged = base.replace("anchored", "<b>anchored</b>")
-    assert len(tagged) > 250, f"Test sentence should be >250 chars: got {len(tagged)}"
+    assert len(tagged) > MAX_SENTENCE_LENGTH, \
+        f"Test sentence should be >{MAX_SENTENCE_LENGTH} chars: got {len(tagged)}"
     w = make_word(word="anchored", sentence=tagged)
     errors = _validate_word_entries([w])
     assert has_error(errors, "anchored", "too long"), \
@@ -114,10 +115,11 @@ def test_sentence_too_long():
 
 
 def test_sentence_at_limit_ok():
-    """Sentence at or under 250 chars with tags should pass."""
+    """Sentence at or under MAX_SENTENCE_LENGTH should pass."""
     tagged = ('He adjusted the sack and carefully worked the line so that it came '
               'across a new part of his shoulders, holding it <b>anchored</b>.')
-    assert len(tagged) < 250, f"Precondition failed: {len(tagged)}"
+    assert len(tagged) <= MAX_SENTENCE_LENGTH, \
+        f"Precondition failed: {len(tagged)} > {MAX_SENTENCE_LENGTH}"
     w = make_word(word="anchored", sentence=tagged,
                   ipa="/ˈæŋkərd/", definition_cn="固定住",
                   translation_cn="他调整了麻袋，小心地把线移过肩膀新位置，把它固定住。")
@@ -413,34 +415,35 @@ def test_old_regex_still_catches_comma_period():
         f"Should still detect ',.' artifact\nErrors: {errors}"
 
 
-# ── exempt_from_150 flag ──
+# ── sentence length check ──
 
 
-def test_exempt_sentence_passes_length_check():
-    """exempt_from_150 flag downgrades >150 from hard error to soft warning."""
+def test_sentence_under_250_passes():
+    """Sentence ≤250 chars passes length validation."""
     w = make_word(
         word="veritable",
         sentence="I will tell you that before the invention of electricity "
                 "it was necessary to maintain a <b>veritable</b> army of 462,511 "
                 "lamplighters for the street lamps.",
-        exempt_from_150=True,
     )
+    assert len(w["sentence"]) <= MAX_SENTENCE_LENGTH, \
+        f"Precondition: sentence must be ≤{MAX_SENTENCE_LENGTH} chars"
     errors = _validate_word_entries([w])
     assert not has_error(errors, "veritable", "sentence too long"), \
-        f"Exempt sentence should pass length check\nErrors: {errors}"
+        f"Sentence ≤250 should pass length check\nErrors: {errors}"
 
 
-def test_non_exempt_sentence_fails_length_check():
-    """Sentence >250 without exempt flag is still a hard error."""
+def test_sentence_over_250_fails_length_check():
+    """Sentence >250 chars is a hard error."""
     w = make_word(
         word="veritable",
         sentence="I will tell you that before the invention of electricity "
                 "it was necessary to maintain a <b>veritable</b> army of 462,511 "
                 "lamplighters for the street lamps throughout the entire world, "
                 "which required a vast logistical operation of truly unprecedented scale.",
-        # no exempt_from_150
     )
-    assert len(w["sentence"]) > 250, f"Precondition: sentence must be >250 chars"
+    assert len(w["sentence"]) > MAX_SENTENCE_LENGTH, \
+        f"Precondition: sentence must be >{MAX_SENTENCE_LENGTH} chars"
     errors = _validate_word_entries([w])
     assert has_error(errors, "veritable", "sentence too long"), \
-        f"Non-exempt long sentence should be hard error\nErrors: {errors}"
+        f"Long sentence should be hard error\nErrors: {errors}"

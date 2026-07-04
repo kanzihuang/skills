@@ -37,7 +37,18 @@ def split_sentences(text: str) -> list[str]:
 
     seg = _get_segmenter()
     sentences = seg.segment(text)
-    return [s.strip() for s in sentences if s.strip()]
+    sentences = [_clean_quote_artifact(s.strip()) for s in sentences]
+    return [s for s in sentences if s]
+
+
+def _clean_quote_artifact(sentence: str) -> str:
+    """Remove PySBD dangling-quote artifacts from dialogue splitting.
+
+    PySBD splits at ." boundaries, leaving a closing quote from the
+    previous dialogue as a leading character on the next sentence.
+    E.g. '\" \"No,' → '\"No,'
+    """
+    return re.sub(r'^\"\s+\"', '"', sentence)
 
 
 def hard_truncate(sentence: str, max_len: int = HARD_CUTOFF) -> tuple[str, bool]:

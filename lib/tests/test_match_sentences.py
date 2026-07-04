@@ -12,6 +12,7 @@ from lib.scripts.match_sentences import (
     split_sentences,
     find_all_sentences,
     hard_truncate,
+    _clean_quote_artifact,
 )
 
 
@@ -114,3 +115,21 @@ def test_duplicate_sentences_deduplicated():
     text = "He was abashed. He was abashed."
     results = find_all_sentences(text, ["abashed"], "abash")
     assert len(results) == 1
+
+
+# ── _clean_quote_artifact ──
+
+def test_quote_artifact_no_leading_whitespace():
+    """'\" \"X' → '\"X' (no leading whitespace)."""
+    assert _clean_quote_artifact('" "No,') == '"No,'
+
+
+def test_quote_artifact_with_leading_whitespace():
+    """'  \" \"X' stripped first, then cleaned → '\"X'."""
+    # This is what split_sentences does: strip() then _clean_quote_artifact()
+    assert _clean_quote_artifact('  " "No,'.strip()) == '"No,'
+
+
+def test_quote_artifact_clean_sentence_unchanged():
+    """Normal dialogue is untouched."""
+    assert _clean_quote_artifact('"Hello," he said.') == '"Hello," he said.'
