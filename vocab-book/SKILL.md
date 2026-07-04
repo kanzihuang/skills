@@ -117,7 +117,7 @@ cat /tmp/<safe_title>-full.txt | \
 - **Step 3A**: 句子选择 + 完整性校验（Claude，1 agent）
 - **Step 3B**: 生成释义 + IPA（Claude，N agents 并行，≤25 词/agent）
 - **Step 3C**: 内容验证 — POS 对齐 + 释义准确（Claude，1 agent）
-- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 3.0f，3C 之后）
+- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 3.0f，3C 之后），支持 `--source-text` 上下文参数和自动去重
 - `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步（Step 3.5 + Step 4）
 
 **全文模式特有**：

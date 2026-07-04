@@ -48,7 +48,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 | `lib/ankiconnect.py` | AnkiConnect JSON-RPC client library |
 | `lib/utils.py` | Shared utilities: lemmatize_word, edge_tts_bytes/file, safe_filename, print_progress |
 | `lib/scripts/match_sentences.py` | Mechanical sentence matching with `<b>` tagging |
-| `lib/scripts/translate_deepl.py` | DeepL batch translation |
+| `lib/scripts/translate_deepl.py` | DeepL batch translation with context support and sentence dedup |
 | `lib/scripts/audit_deck.py` | Deck quality audit |
 | `lib/SHARED_WORKFLOW.md` | Shared workflow steps (3.0–4) with vocab-book |
 
