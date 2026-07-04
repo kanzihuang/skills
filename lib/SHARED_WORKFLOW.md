@@ -303,7 +303,7 @@ PYEOF
 
 | 字段 | 说明 | 示例 |
 |------|------|------|
-| `word` | 书中出现的**表面词形**——`<b>` 包裹什么就写什么。**绝不**填原形 | `blundering`（不是 `blunder`），`pondered`（不是 `ponder`）|
+| `word` | 书中出现的**表面词形**——`<b>` 包裹什么就写什么。JSON 中始终为表面词形，用于 `sync_anki.py` 校验 `<b>` 文本一致性。卡片正面 `Word` 字段由 `resolve_lemma()` 另行决定：规则屈折还原为原形，派生形容词保留表面词形 | `pondered`（JSON `word`=`pondered`，卡片正面显示 `ponder`）；`blundering`（JSON `word`=`blundering`，`lemma`=`blundering`，卡片正面显示 `blundering`）|
 | `lemma` | **派生形容词时必填，常规屈折变化可留空**。三层防护：(1) Claude 显式设置的 `lemma` **无条件信任**；(2) 若留空，`resolve_lemma()` 用 lemminflect + COCA 守卫自动还原；(3) spaCy 读原句校验——对 `-ed`/`-ing` 词判定为形容词则阻止还原 | `pondered`→留空；`accomplished`(adj)→`"accomplished"`|
 | `coca_level` | **从 filter 输出透传** | `5` |
 | `sentence` | 书中含该词的完整句子，生词用 `<b>…</b>` 包裹（2B 已确定） | `I felt awkward and <b>blundering</b>.` |
@@ -317,7 +317,7 @@ PYEOF
 - **禁止凭记忆编造特定书的句子**——2A-c 机械匹配会校验词形是否存在于句中，编造的句子无法通过此检查
 - **禁止使用词典例句替代**——词典例句脱离书中语境，对阅读理解没有帮助
 - 句子中出现的生词形式可能不同于原形，用 `<b>` 包裹书中实际出现的词形。**`<b>` 必须包裹句中完整的表面词形**——例如句中写的是 `considerably`，就写 `<b>considerably</b>`，**禁止**写 `<b>considerable</b>ly`
-- **`<b>` 目标词校验**：句子中 `<b>` 包裹的词必须是当前卡片的生词——生成后逐词确认 `<b>…</b>` 内的文本与 `word` 字段一致
+- **`<b>` 目标词校验**：句子中 `<b>` 包裹的词必须与 JSON `word` 字段（表面词形）一致——`sync_anki.py` 第 870 行自动执行此校验。卡片正面 `Word` 字段可能是原形（规则屈折还原后），这不影响 `<b>` 校验。例如 `pondered`：`<b>pondered</b>` = JSON `word`=`pondered` → 一致 ✅，卡片正面显示 `ponder` 由 `resolve_lemma()` 控制
 - 例句应简洁：1-2 句，通常 ≤250 字符
 
 ### 派生形容词 COCA 复查
