@@ -452,13 +452,15 @@ def sync(
         # 2. Create hierarchical decks (or flat deck if no bands)
         if bands:
             # Create parent deck first
-            ac.ensure_deck_and_model(deck_name, MODEL_NAME)
+            if not dry_run:
+                ac.ensure_deck_and_model(deck_name, MODEL_NAME)
             print(f'  Deck: "{deck_name}" (parent)')
 
             # Create each band sub-deck
             for band_name, _lo, _hi in bands:
                 sub_deck = f"{deck_name}::{band_name}"
-                ac.ensure_deck_and_model(sub_deck, MODEL_NAME)
+                if not dry_run:
+                    ac.ensure_deck_and_model(sub_deck, MODEL_NAME)
                 print(f'    └ "{band_name}"')
 
             # Pre-compute band assignment for all input words.
@@ -470,7 +472,8 @@ def sync(
             print(f"  Found {total_existing} existing cards across {len(existing)} decks")
         else:
             # Single flat deck
-            ac.ensure_deck_and_model(deck_name, MODEL_NAME)
+            if not dry_run:
+                ac.ensure_deck_and_model(deck_name, MODEL_NAME)
             print(f'  Deck: "{deck_name}"')
             print(f"  Model: {MODEL_NAME}")
 
