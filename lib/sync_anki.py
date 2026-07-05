@@ -386,7 +386,10 @@ def sync(
     words = data["words"]
     book_title = data["book_title"]
 
-    book_id = data.get("book_id", "")
+    # 命名空间标识，用于 WordId / 音频文件名隔离
+    #   vocab-anki: 微信读书 bookId（如 "22720170"）
+    #   vocab-book: filter_fulltext.py 生成的 UUID suffix（如 "a1b2c3d4e5f6"）
+    namespace_id = data.get("book_id", "") or data.get("suffix", "")
 
     # 1. Connect to Anki (skip for prefetch — audio-only mode)
     ac = None
@@ -407,11 +410,11 @@ def sync(
         # already exist under a different deck name, reuse that one.
         # Prevents accent / spelling drift across batches
         # (e.g. "Saint-Exupery" vs "Saint-Exupéry").
-        if book_id:
-            found_deck, count = ac.find_deck_for_book_id(book_id)
+        if namespace_id:
+            found_deck, count = ac.find_deck_for_book_id(namespace_id)
             if found_deck and found_deck != deck_name:
                 print(f'  Note: using existing deck "{found_deck}" '
-                      f'(found {count} cards with bookId={book_id})')
+                      f'(found {count} cards with bookId={namespace_id})')
                 deck_name = found_deck
 
     # Format band names with the resolved deck name as prefix.
@@ -456,7 +459,7 @@ def sync(
     new_words = []
     skipped_words = []
     for idx, w in enumerate(words):
-        original_id = _make_word_id(w, book_id)
+        original_id = _make_word_id(w, namespace_id)
 
         # Only dedup against this word's target deck
         target_deck = band_assignment.get(idx, deck_name)
@@ -566,7 +569,7 @@ def sync(
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {
-                executor.submit(_process_one_word, w, book_id, no_audio): (idx, w)
+                executor.submit(_process_one_word, w, namespace_id, no_audio): (idx, w)
                 for idx, w in enumerate(new_words)
             }
 
@@ -806,8 +809,8 @@ def main() -> None:
     if not data.get("book_title"):
         print("Error: missing 'book_title' in input", file=sys.stderr)
         sys.exit(1)
-    if not data.get("book_id"):
-        print("Error: missing 'book_id' in input", file=sys.stderr)
+    if not data.get("book_id") and not data.get("suffix"):
+        print("Error: missing 'book_id' or 'suffix' in input", file=sys.stderr)
         sys.exit(1)
     if not data.get("words"):
         print("Error: 'words' array is empty", file=sys.stderr)

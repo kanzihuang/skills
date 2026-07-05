@@ -184,6 +184,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 
 **划线模式特有调整**：
 - `<tmp_id>` 使用微信读书 `bookId`
+- JSON 传入 `"book_id"` 字段，sync_anki.py 将其作为命名空间标识用于 WordId 构建和音频文件命名
 - WordId = `{lemma}_{bookId}`，音频文件 = `{lemma}_{bookId}_word.mp3` / `{lemma}_{bookId}_sent.mp3`
 - 句子匹配时利用 JSON 中 `in_coca[].chapters` 字段做章节优先匹配
 - Anki 去重已在 Step 1d 完成（同书去重）
@@ -220,5 +221,5 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 | `lib/scripts/match_sentences.py` | 机械句子匹配 |
 | `lib/scripts/translate_deepl.py` | DeepL 翻译 |
 | `lib/scripts/audit_deck.py` | 牌组质量审计 |
-| `lib/data/bnc_cova/` | BNC/COCA 词族数据 |
+| `lib/data/bnc_coca/` | BNC/COCA 词族数据 |
 | `tests/` | pytest 单元测试套件 |

@@ -353,11 +353,21 @@ PYEOF
 ```bash
 python3 << 'PYEOF'
 import json
-data = { ... }
+data = {
+    "book_title": "...",
+    "book_author": "...",
+    "deck_name": "...",
+    "book_id": "<bookId>",     # 划线模式（与 suffix 二选一）
+    # "suffix": "<uuid>",      # 全文模式（与 book_id 二选一）
+    "words": [...],
+    "excluded": [...],
+}
 with open('/tmp/vocab-anki-input-<tmp_id>.json', 'w', encoding='utf-8') as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
 PYEOF
 ```
+
+> **`book_id` 与 `suffix` 二选一**：划线模式传入微信读书 `bookId`，全文模式传入 `filter_fulltext.py` 生成的 `suffix`。sync_anki.py 自动识别两个字段，用于 WordId 构建和音频文件命名。
 
 > Write 工具备用方案：第一批前 `rm -f + touch + Read limit=3` 初始化；后续批次 `Read limit=5` 定位 + `Edit` 追加。
 
@@ -590,6 +600,8 @@ timeout $SYNC_TIMEOUT bash -c "cd <skill_dir> && .venv/bin/python -u -m lib.sync
   "book_title": "书名",
   "book_author": "作者",
   "deck_name": "牌组名",
+  "book_id": "微信读书 bookId（划线模式；与 suffix 二选一）",
+  "suffix": "UUID 后缀（全文模式；与 book_id 二选一）",
   "words": [
     {"word": "pondered", "lemma": "ponder", "coca_level": 3, "ipa": "/.../", "sentence": "...", "definition_cn": "...", "translation_cn": "..."}
   ],
@@ -598,6 +610,8 @@ timeout $SYNC_TIMEOUT bash -c "cd <skill_dir> && .venv/bin/python -u -m lib.sync
   ]
 }
 ```
+
+- `book_id` 和 `suffix` 二选一，不可同时为空。划线模式使用 WeRead bookId，全文模式使用 filter_fulltext.py 生成的 UUID suffix。sync_anki.py 自动识别两个字段。
 
 - `ipa` 由 cmudict 自动生成；Claude 仅在多发音词时提供投票参考
 - `coca_level` 从 filter 输出原样透传

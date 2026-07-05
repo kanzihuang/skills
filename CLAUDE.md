@@ -83,7 +83,7 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 | `scripts/` | Shared entry-point scripts (match_sentences, translate_deepl, audit_deck) |
 | `data/bnc_coca/` | Nation (2017) word family lists (25 levels × ~1000 families) |
 | `data/cmudict.dict` | CMU Pronouncing Dictionary (135K entries) |
-| `tests/` | Shared pytest suite (~237 tests) for lib modules |
+| `tests/` | Shared pytest suite (~325 tests) for lib modules |
 | `SHARED_WORKFLOW.md` | Shared Claude workflow steps (3.0–4) referenced by both SKILL.md files |
 
 ## Shared Design Principles
@@ -131,8 +131,8 @@ For -ive, -ous, -ful derived adjectives (reflective, tremendous, beautiful), `re
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 259 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
-- **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 23 tests), `vocab-book/tests/` (filter_fulltext, 10 tests).
+- **Shared tests** live in `lib/tests/` (pytest, 325 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.
 - Run all tests before committing:

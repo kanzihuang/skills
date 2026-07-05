@@ -30,7 +30,7 @@ description: >
 ## 前置条件
 
 - Python 3 + venv（脚本自动创建并安装依赖）
-- Anki 正在运行 + [AnkiConnect 插件](https://ankiweb.net/simplified/info/2055492159) 已安装
+- Anki 正在运行 + [AnkiConnect 插件](https://ankiweb.net/shared/info/2055492159) 已安装
 - 书籍文本文件（用户提供路径 / 可下载的 URL）
 
 > **云主机/远程环境**：若 Claude Code 在远程而 Anki 在本地，需 SSH 反向隧道：
@@ -124,7 +124,8 @@ cat /tmp/<safe_title>-full.txt | \
 
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
-- WordId = `{safe_filename(surface_form)}_{suffix}`（词形变体如 asteroid/asteroids 各自独立卡片），音频文件使用 lemma 命名 = `{safe_filename(lemma)}_{suffix}_word.mp3` / `{safe_filename(lemma)}_{suffix}_sent.mp3`
+- JSON 传入 `"suffix"` 字段（**不需要** `"book_id"`），sync_anki.py 自动识别并作为命名空间标识用于 WordId 构建和音频文件命名
+- WordId = `{safe_filename(lemma)}_{suffix}`（原形去重，同词不同屈折形式映射到同一张卡片），音频文件命名 = `{safe_filename(lemma)}_{suffix}_word.mp3` / `{safe_filename(lemma)}_{suffix}_sent.mp3`
 - 同步时自动频次分级（`compute_bands()`）：COCA 级别 → ≤5 段 → `{English Title} ({Author}) - 分级词汇::{English Title} ({Author}) - COCA X-Y`。**书名和作者必须用英文**。词汇量不足（<100）或仅 1 个 COCA 级别时退回无分级，所有卡片进入父牌组 `{English Title} ({Author}) - 分级词汇`——后缀 ` - 分级词汇` 仍然存在，与 vocab-anki 扁平牌组名区分，不会重名
 - **不做 Anki 去重**（filter_fulltext.py 不连接 AnkiConnect）
 

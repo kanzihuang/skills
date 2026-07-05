@@ -94,6 +94,13 @@ class TestBuildNoteEntry:
         note = build_note_entry(word, ipa="/doʊnt/", book_id="12345678")
         assert "don_t_12345678" in note["fields"]["WordId"]
 
+    def test_make_word_id_with_suffix(self):
+        """_make_word_id should work with suffix as namespace."""
+        from lib.sync_anki import _make_word_id
+        word = _build_word("test")
+        wid = _make_word_id(word, "a1b2c3d4e5f6")
+        assert wid == "test_a1b2c3d4e5f6"
+
 
 class TestSyncEmpty:
     def test_empty_words(self):
@@ -102,3 +109,12 @@ class TestSyncEmpty:
         result = sync(_build_input([]), deck_name="Test", dry_run=True, no_audio=True)
         assert result is not None
         assert result.get("words_skipped") is not None or result.get("error") is not None
+
+    def test_sync_accepts_suffix_instead_of_book_id(self):
+        """sync() should work when input has 'suffix' but no 'book_id'."""
+        from lib.sync_anki import sync
+        data = _build_input([])
+        del data["book_id"]
+        data["suffix"] = "a1b2c3d4e5f6"
+        result = sync(data, deck_name="Test", dry_run=True, no_audio=True)
+        assert result is not None
