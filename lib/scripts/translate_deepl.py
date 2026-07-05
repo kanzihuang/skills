@@ -11,7 +11,7 @@ Usage:
     python scripts/translate_deepl.py input.json --book-context "Title: ..."
 
 Requires DEEPL_API_KEY environment variable (free key from deepl.com/pro-api).
-Free tier: 500,000 chars/month, api-free.deepl.com endpoint.
+Free tier: 500,000 chars/month. Endpoint auto-detected by deepl SDK.
 
 DeepL does not support <b> tags natively. We strip them before sending,
 then DeepL's output naturally includes the word in translation context.

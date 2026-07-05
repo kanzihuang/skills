@@ -52,7 +52,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 | `lib/scripts/audit_deck.py` | Deck quality audit |
 | `lib/SHARED_WORKFLOW.md` | Shared workflow steps (2A–2H) with vocab-book |
 
-**Dependencies:** `weread-skills`, Python: `edge-tts`, `lemminflect`
+**Dependencies:** `weread-skills`, Python: `edge-tts`, `lemminflect`, `deepl`
 
 ### vocab-book (`vocab-book/`)
 
@@ -67,7 +67,7 @@ Extract vocabulary from any English book's full text, generate Anki flashcard de
 
 **Shared scripts:** Same `lib/` scripts as vocab-anki.
 
-**Dependencies:** Python: `edge-tts`, `lemminflect`, `spacy`
+**Dependencies:** Python: `edge-tts`, `lemminflect`, `spacy`, `deepl`
 
 ### lib (`lib/`)
 
