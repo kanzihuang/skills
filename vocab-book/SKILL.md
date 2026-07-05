@@ -65,12 +65,12 @@ Anki 去重**不做**——每次运行独立，UUID 后缀确保不与其他牌
 
 ```bash
 # 用户直接提供文件
-cp /path/to/book.txt /tmp/<safe_title>-full.txt
+cp /path/to/book.txt /tmp/<safe_title>-$(python3 -c "import uuid;print(uuid.uuid4().hex[:8])")-full.txt
 
 # 或 curl 下载
-curl -sL --max-time 60 '<URL>' -o /tmp/<safe_title>-full.txt
+curl -sL --max-time 60 '<URL>' -o /tmp/<safe_title>-$(python3 -c "import uuid;print(uuid.uuid4().hex[:8])")-full.txt
 # 验证：必须是英文原版，不含双语对照/非英文元数据
-head -c 500 /tmp/<safe_title>-full.txt
+head -c 500 /tmp/<safe_title>-*-full.txt
 ```
 
 > 文件 >20KB 且包含书中实际文本。**必须使用英文原版**——双语版中的中文翻译、西里尔字母、guillemet（«»）等非英文内容会污染句子匹配。`match_sentences.py` 遇到此类文本直接拒绝。优先选择 Project Gutenberg（英文版）、Standard Ebooks、Internet Archive 英文原版。**不要使用 ESL 简化版或双语对照版替代**——改写后的句子与原文不符。
@@ -90,8 +90,8 @@ if [ ! -d <skill_dir>/.venv ]; then
     <skill_dir>/.venv/bin/pip install -q -r <skill_dir>/requirements.txt
 fi
 
-# 提取 + 过滤全文词汇
-cat /tmp/<safe_title>-full.txt | \
+# 提取 + 过滤全文词汇（缓存文件路径已记录在记忆中，可直接 cat）
+cat /tmp/<safe_title>-*-full.txt | \
 <skill_dir>/.venv/bin/python3 <skill_dir>/filter_fulltext.py \
   --basic-range 3-10 \
   --json-out /tmp/vocab-book-filtered.json
