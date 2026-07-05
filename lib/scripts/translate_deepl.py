@@ -22,10 +22,8 @@ import json
 import os
 import re
 import sys
-import time
-import urllib.request
-import urllib.error
 
+import deepl
 import pysbd
 
 DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY", "")
@@ -33,8 +31,7 @@ if not DEEPL_API_KEY:
     print("ERROR: DEEPL_API_KEY environment variable not set.", file=sys.stderr)
     sys.exit(1)
 
-# Free tier uses api-free.deepl.com
-DEEPL_URL = "https://api-free.deepl.com/v2/translate"
+translator = deepl.Translator(DEEPL_API_KEY)
 def _build_sentence_regex(sentence: str) -> str:
     """Build a regex from sentence words joined by \\s+ for fuzzy matching.
 
@@ -73,34 +70,16 @@ def translate_batch(
     surrounding text that helps disambiguate but is NOT translated itself
     (free, no char cost). Same context applies to all texts in the batch.
     """
-    body: dict = {
-        "text": texts,
-        "target_lang": "ZH",
-    }
+    kwargs: dict = {"target_lang": "ZH"}
     if context:
-        body["context"] = context
-
-    body_bytes = json.dumps(body).encode("utf-8")
-
-    req = urllib.request.Request(
-        DEEPL_URL,
-        data=body_bytes,
-        headers={
-            "Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+        kwargs["context"] = context
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-        return [t["text"] for t in result["translations"]]
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode("utf-8", errors="replace")
-        print(f"  DeepL HTTP {e.code}: {body_text[:200]}", file=sys.stderr)
-        raise
-    except Exception as e:
+        result = translator.translate_text(texts, **kwargs)
+        if isinstance(result, list):
+            return [r.text for r in result]
+        return [result.text]
+    except deepl.DeepLException as e:
         print(f"  DeepL error: {e}", file=sys.stderr)
         raise
 
@@ -235,10 +214,6 @@ def main():
         # Progress
         progress = min(batch_start + BATCH_SIZE, total)
         print(f"\r  {progress}/{total} sentences", end="", file=sys.stderr, flush=True)
-
-        # Rate limiting
-        if batch_start + BATCH_SIZE < total:
-            time.sleep(0.2)
 
     print(file=sys.stderr)
 

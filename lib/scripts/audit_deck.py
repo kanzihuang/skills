@@ -16,33 +16,19 @@ Usage:
 import json
 import re
 import sys
-import urllib.request
 
-# Add repo root to sys.path so lib.* imports work when run as a script
-import os
-_script_dir = os.path.dirname(os.path.abspath(__file__))      # lib/scripts/
-_package_dir = os.path.dirname(_script_dir)                    # lib/
-_repo_root = os.path.dirname(_package_dir)                     # skills/
-if _repo_root not in sys.path:
-    sys.path.insert(0, _repo_root)
-
+from lib.ankiconnect import AnkiConnect
 from lib.sync_anki import resolve_lemma
 from lib.utils import lemmatize_word
-
-ANKICONNECT = "http://localhost:8765"
-
-
-def _ankiconnect(action: str, **params) -> dict:
-    req = json.dumps({"action": action, "version": 6, "params": params})
-    with urllib.request.urlopen(ANKICONNECT, req.encode(), timeout=30) as resp:
-        return json.loads(resp.read())
 
 
 def audit_deck(deck_name: str) -> dict:
     """Run audit and return results dict."""
 
+    ac = AnkiConnect()
+
     # 1. Find all notes in the deck
-    note_ids = _ankiconnect("findNotes", query=f'deck:"{deck_name}"')["result"]
+    note_ids = ac.find_notes_in_deck(deck_name)
     if not note_ids:
         print(f"No cards found in deck: {deck_name}")
         return {}
@@ -52,7 +38,7 @@ def audit_deck(deck_name: str) -> dict:
     for i in range(0, len(note_ids), 100):
         batch = note_ids[i : i + 100]
         all_notes.extend(
-            _ankiconnect("notesInfo", notes=batch)["result"]
+            ac.notes_info(note_ids=batch)
         )
 
     # 3. Classify each card

@@ -5,7 +5,7 @@ Covers historical errors:
 """
 
 import json
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import pytest
 
 # Import the module under test
@@ -40,6 +40,14 @@ def _make_note(note_id, word, sentence, ipa="/test/", definition="[n.] test",
     }
 
 
+def _patch_ac(find_result, notes_result):
+    """Mock AnkiConnect constructor to return a stub with fake methods."""
+    mock_ac = MagicMock()
+    mock_ac.find_notes_in_deck.return_value = find_result
+    mock_ac.notes_info.return_value = notes_result
+    return patch.object(_audit.AnkiConnect, "__new__", return_value=mock_ac)
+
+
 # ── Card counting (the meta-count bug fix) ──
 
 
@@ -51,14 +59,7 @@ def test_total_without_meta_card():
         _make_note(3, "devote", "and <b>devote</b> myself"),
     ]
 
-    def fake_ac(action, **params):
-        if action == "findNotes":
-            return {"result": [1, 2, 3], "error": None}
-        if action == "notesInfo":
-            return {"result": notes, "error": None}
-        return {"result": None, "error": "unexpected"}
-
-    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+    with _patch_ac([1, 2, 3], notes):
         result = _audit.audit_deck("Test Deck")
 
     assert result["total"] == 3, f"Expected 3, got {result['total']}"
@@ -73,14 +74,7 @@ def test_total_with_meta_card():
         _make_note(4, "devote", "and <b>devote</b> myself"),
     ]
 
-    def fake_ac(action, **params):
-        if action == "findNotes":
-            return {"result": [1, 2, 3, 4], "error": None}
-        if action == "notesInfo":
-            return {"result": notes, "error": None}
-        return {"result": None, "error": "unexpected"}
-
-    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+    with _patch_ac([1, 2, 3, 4], notes):
         result = _audit.audit_deck("Test Deck")
 
     assert result["total"] == 3, f"Expected 3, got {result['total']}"
@@ -88,12 +82,7 @@ def test_total_with_meta_card():
 
 def test_total_empty_deck():
     """Empty deck: total should be 0."""
-    def fake_ac(action, **params):
-        if action == "findNotes":
-            return {"result": [], "error": None}
-        return {"result": None, "error": "unexpected"}
-
-    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+    with _patch_ac([], []):
         result = _audit.audit_deck("Empty Deck")
 
     assert result == {}, "Empty deck should return empty dict"
@@ -108,14 +97,7 @@ def test_total_with_two_meta_cards():
         _make_note(4, "ponder", "I <b>pondered</b> deeply"),
     ]
 
-    def fake_ac(action, **params):
-        if action == "findNotes":
-            return {"result": [1, 2, 3, 4], "error": None}
-        if action == "notesInfo":
-            return {"result": notes, "error": None}
-        return {"result": None, "error": "unexpected"}
-
-    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+    with _patch_ac([1, 2, 3, 4], notes):
         result = _audit.audit_deck("Test Deck")
 
     assert result["total"] == 2, f"Expected 2, got {result['total']}"
@@ -130,14 +112,7 @@ def test_missing_ipa_detected():
         _make_note(1, "boa", "a <b>boa</b> constrictor", ipa=""),
     ]
 
-    def fake_ac(action, **params):
-        if action == "findNotes":
-            return {"result": [1], "error": None}
-        if action == "notesInfo":
-            return {"result": notes, "error": None}
-        return {"result": None, "error": "unexpected"}
-
-    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+    with _patch_ac([1], notes):
         result = _audit.audit_deck("Test Deck")
 
     assert "boa" in result["missing_ipa"]
@@ -149,14 +124,7 @@ def test_missing_definition_detected():
         _make_note(1, "boa", "a <b>boa</b> constrictor", definition=""),
     ]
 
-    def fake_ac(action, **params):
-        if action == "findNotes":
-            return {"result": [1], "error": None}
-        if action == "notesInfo":
-            return {"result": notes, "error": None}
-        return {"result": None, "error": "unexpected"}
-
-    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+    with _patch_ac([1], notes):
         result = _audit.audit_deck("Test Deck")
 
     assert "boa" in result["missing_def"]
@@ -168,14 +136,7 @@ def test_missing_translation_detected():
         _make_note(1, "boa", "a <b>boa</b> constrictor", translation=""),
     ]
 
-    def fake_ac(action, **params):
-        if action == "findNotes":
-            return {"result": [1], "error": None}
-        if action == "notesInfo":
-            return {"result": notes, "error": None}
-        return {"result": None, "error": "unexpected"}
-
-    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+    with _patch_ac([1], notes):
         result = _audit.audit_deck("Test Deck")
 
     assert "boa" in result["missing_trans"]
@@ -187,14 +148,7 @@ def test_missing_trans_counted_in_combined_issues():
         _make_note(1, "boa", "a <b>boa</b> constrictor", ipa="", translation=""),
     ]
 
-    def fake_ac(action, **params):
-        if action == "findNotes":
-            return {"result": [1], "error": None}
-        if action == "notesInfo":
-            return {"result": notes, "error": None}
-        return {"result": None, "error": "unexpected"}
-
-    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+    with _patch_ac([1], notes):
         result = _audit.audit_deck("Test Deck")
 
     # Both issues should be present — missing_trans was historically
@@ -211,14 +165,7 @@ def test_all_clear_no_issues():
         _make_note(2, "ponder", "I <b>pondered</b> deeply"),
     ]
 
-    def fake_ac(action, **params):
-        if action == "findNotes":
-            return {"result": [1, 2], "error": None}
-        if action == "notesInfo":
-            return {"result": notes, "error": None}
-        return {"result": None, "error": "unexpected"}
-
-    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+    with _patch_ac([1, 2], notes):
         result = _audit.audit_deck("Test Deck")
 
     assert result["total"] == 2
