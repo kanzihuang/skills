@@ -213,18 +213,21 @@ def main():
     ]
     n_anki_cards = sum(1 for l in all_lemmas if _lemma_handled(l, lemma_map[l], anki_cards))
 
-    # Step 1f: COCA check
-    coca_set = load_coca()
+    # Step 1f: COCA check — defer loading until after Anki dedup.
+    # When all words are already in Anki (common on re-read), skip COCA
+    # load entirely (25 files, ~80K words parsed).
     passed = []
     rejected = []
-    for lemma in lemmas_after_anki:
-        forms = lemma_map[lemma]
-        rep = pick_rep(forms)
-        ok, detail = in_coca(lemma, coca_set)
-        if ok:
-            passed.append((lemma, rep, forms))
-        else:
-            rejected.append((lemma, rep, "不在 BNC/COCA 25000 词族中"))
+    if lemmas_after_anki:
+        coca_set = load_coca()
+        for lemma in lemmas_after_anki:
+            forms = lemma_map[lemma]
+            rep = pick_rep(forms)
+            ok, detail = in_coca(lemma, coca_set)
+            if ok:
+                passed.append((lemma, rep, forms))
+            else:
+                rejected.append((lemma, rep, "不在 BNC/COCA 25000 词族中"))
 
     n_coca_excluded = len(rejected)
     n_final = len(passed)
@@ -233,12 +236,14 @@ def main():
     print(f"SUMMARY: {n_highlights} highlights → {n_lemmas} lemmas → "
           f"{n_anki_cards} in Anki → "
           f"{n_coca_excluded} new COCA excluded → {n_final} final")
-    print("---IN_COCA---")
-    for lemma, rep, forms in passed:
-        print(f"{lemma}\t{rep}\t{','.join(forms)}")
-    print("---EXCLUDED---")
-    for lemma, rep, reason in rejected:
-        print(f"{lemma}\t{rep}\t{reason}")
+    if passed:
+        print("---IN_COCA---")
+        for lemma, rep, forms in passed:
+            print(f"{lemma}\t{rep}\t{','.join(forms)}")
+    if rejected:
+        print("---EXCLUDED---")
+        for lemma, rep, reason in rejected:
+            print(f"{lemma}\t{rep}\t{reason}")
 
     # Print Anki-skipped words for reference
     if anki_cards:

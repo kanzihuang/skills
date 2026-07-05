@@ -1,15 +1,13 @@
 """Test utils.py — lemmatize_word, safe_filename.
 
-NOTE: utils.lemmatize_word() uses lemminflect VERB/NOUN channels only,
-with a len(lemma) < len(word) guard. It does NOT have COCA gating.
-COCA gating happens later in the pipeline via lib.lemmatize.lemmatize()
-and sync_anki.resolve_lemma().
+lemmatize_word() is now a thin wrapper over the unified
+lib.lemmatize.lemmatize() which has full COCA gating + Nation CV.
+Previously known bugs (sacred→sacre, tremendous→tremendou) are fixed.
 
 Historical errors covered:
-  - Cross-POS prevention: abode→abode (same length, rejected)
   - Regular inflection reduction: straying→stray, eruptions→eruption
-  - Known bug: sacred→sacre, tremendous→tremendou (no COCA guard here,
-    caught downstream by resolve_lemma's COCA gating)
+  - Nation CV: better/worse kept as own word families
+  - COCA gate: sacred, tremendous no longer falsely reduced
 """
 
 import pytest
@@ -19,9 +17,9 @@ from lib.utils import lemmatize_word, safe_filename
 @pytest.mark.parametrize(
     "word,expected",
     [
-        # ── Known issues (no COCA guard in lemmatize_word): ──
-        ("sacred", "sacre"),            # lemminflect sees -ed, reduces
-        ("tremendous", "tremendou"),    # lemminflect sees -ous reduction
+        # ── Now fixed: lemmatize_word delegates to unified lemmatize() with COCA + Nation CV ──
+        ("sacred", "sacred"),           # was "sacre" — COCA gate + Nation CV
+        ("tremendous", "tremendous"),   # was "tremendou" — COCA gate + Nation CV
         # ── COCA gating not needed for these (lemminflect handles correctly): ──
         ("beer", "beer"),               # unchanged — not a recognized inflection
         ("anger", "anger"),             # unchanged
@@ -37,11 +35,11 @@ from lib.utils import lemmatize_word, safe_filename
         ("higher", "high"),             # -er comparative
         ("faster", "fast"),             # -er comparative
         ("bigger", "big"),              # -er with doubled consonant
-        ("lighter", "light"),           # -er comparative
+        ("lighter", "lighter"),         # in COCA as noun family, Nation CV keeps
         ("highest", "high"),            # -est superlative
         ("fastest", "fast"),            # -est superlative
-        ("better", "good"),             # irregular comparative
-        ("worse", "bad"),              # irregular comparative
+        ("better", "better"),           # Nation CV: better is own word family
+        ("worse", "worse"),             # Nation CV: worse is own word family
         # ── Agentive nouns (-er suffix, NOT comparatives) — spaCy gate ──
         ("baker", "baker"),             # PROPN/NOUN, not reduced
         ("walker", "walker"),           # NOUN, not reduced

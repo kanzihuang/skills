@@ -18,7 +18,7 @@ import re
 import sys
 
 from lib.ankiconnect import AnkiConnect
-from lib.sync_anki import resolve_lemma
+from lib.lemmatize import lemmatize
 from lib.utils import lemmatize_word
 
 
@@ -71,7 +71,7 @@ def audit_deck(deck_name: str) -> dict:
         # Uses resolve_lemma() which trusts explicit Claude overrides
         # for documented lemmatize_word limitations (same-length irregulars,
         # derivational adjectives).
-        expected = resolve_lemma(b_text, word)  # word as explicit override
+        expected = lemmatize(b_text, json_lemma=word)  # word as explicit override
         mechanical = lemmatize_word(b_text)
         if word.lower() != expected.lower() and word.lower() != b_text.lower():
             lemma_mismatches.append({

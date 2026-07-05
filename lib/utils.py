@@ -43,84 +43,42 @@ def safe_filename(word: str) -> str:
 _SPACY_NLP = None
 
 
-def _get_spacy():
-    """Lazy-load spaCy en_core_web_sm (used as POS gate for ADJ channel)."""
+def _get_spacy(enable_parser: bool = False):
+    """Lazy-load spaCy en_core_web_sm (two-slot cache).
+
+    By default disables parser and NER for speed (used as POS gate for
+    ADJ channel in lemmatize_word).  Set *enable_parser=True* when
+    dependency-parse signals are needed (e.g. _process_one_word).
+
+    The two configurations are cached independently so a fast-path caller
+    never poisons the full-pipeline cache.
+    """
     global _SPACY_NLP
     if _SPACY_NLP is None:
+        _SPACY_NLP = {}  # {enable_parser: nlp | False}
+    if enable_parser not in _SPACY_NLP:
         try:
             import spacy
 
-            _SPACY_NLP = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+            if enable_parser:
+                _SPACY_NLP[enable_parser] = spacy.load("en_core_web_sm")
+            else:
+                _SPACY_NLP[enable_parser] = spacy.load("en_core_web_sm", disable=["parser", "ner"])
         except Exception:
-            _SPACY_NLP = False
-    return _SPACY_NLP if _SPACY_NLP is not False else None
+            _SPACY_NLP[enable_parser] = False
+    nlp = _SPACY_NLP[enable_parser]
+    return nlp if nlp is not False else None
 
 
 def lemmatize_word(word: str) -> str:
     """Reduce an inflected word to its lemma (base form).
 
-    Three-tier strategy:
-      1. VERB (covers -ing, -ed, -s) then NOUN (plurals) via lemminflect.
-      2. ADJ + ADV channels for comparative/superlative forms (-er, -est),
-         gated by spaCy POS: only reduced if spaCy does NOT tag the word
-         as NOUN/PROPN.  This prevents agentive nouns (baker, walker,
-         robber) from being falsely reduced while allowing genuine
-         comparatives (higher→high, faster→fast).
-      3. Falls back to the original word.
-
-    Only accepts a lemma strictly shorter than the input word to avoid
-    same-length cross-POS errors (abode n.→abide v.).
-    Same-length irregulars (ran→run) remain unhandled — basic vocabulary
-    that rarely appears as highlighted words.
-
-    Returns the lemma, or the original word if no change.
+    Thin wrapper over the canonical :func:`lib.lemmatize.lemmatize`.
+    Kept for backward compatibility with existing callers
+    (filter_pipeline.py, audit_deck.py, validation in sync_anki.py).
     """
-    import lemminflect
-
-    w = word.strip().lower()
-
-    # Tier 1: VERB (covers -ing, -ed, -s, -es), then NOUN (plurals)
-    for pos in ("VERB", "NOUN"):
-        lemmas = lemminflect.getLemma(w, pos)
-        if lemmas:
-            lemma = lemmas[0].lower()
-            if lemma != w and len(lemma) < len(w):
-                return lemma
-
-    # Tier 2: ADJ/ADV — comparatives and superlatives (-er, -est)
-    # Gate with spaCy POS: skip if the word is a noun (baker, walker,
-    # robber) rather than a comparative adjective.
-    nlp = _get_spacy()
-    if nlp is not None:
-        try:
-            doc = nlp(w)
-            if len(doc) > 0 and doc[0].pos_ in ("NOUN", "PROPN"):
-                return w  # noun — don't apply ADJ reduction
-        except Exception:
-            pass
-
-    # ADJ channel: comparatives (-er) and superlatives (-est)
-    lemmas = lemminflect.getLemma(w, "ADJ")
-    if lemmas:
-        lemma = lemmas[0].lower()
-        if lemma != w and len(lemma) < len(w):
-            return lemma
-
-    # ADV channel: ONLY trust for -ly adverbs.
-    # lemminflect ADV channel produces false positives for non-adverb
-    # words: "absurd"→"absur" (treats 'd' as comparative suffix),
-    # "reflective"→"reflect" (treats 'ive' as adverb suffix).
-    # Genuine adverb reductions (slowly→slow, happily→happy) all end
-    # in -ly.  Reject any ADV reduction where the input doesn't end in
-    # -ly to prevent false positives.
-    if w.endswith("ly") and len(w) > 3:
-        lemmas = lemminflect.getLemma(w, "ADV")
-        if lemmas:
-            lemma = lemmas[0].lower()
-            if lemma != w and len(lemma) < len(w):
-                return lemma
-
-    return w
+    from .lemmatize import lemmatize
+    return lemmatize(word)
 
 
 # ---------------------------------------------------------------------------

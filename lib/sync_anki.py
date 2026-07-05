@@ -30,8 +30,10 @@ import tempfile
 import time
 
 from .ankiconnect import AnkiConnect, AnkiConnectError
+from .lemmatize import lemmatize
 from .utils import (
     EDGE_TTS_MAX_RETRIES,
+    _get_spacy,
     edge_tts_bytes,
     lemmatize_word,
     print_progress,
@@ -285,8 +287,6 @@ def _get_existing_per_deck(
     return result
 
 
-# Words lemminflect can't distinguish as derivational adjectives.
-_SPACY_NLP = None   # cached spaCy model
 _CMUDICT: dict[str, list[list[str]]] | None = None  # cached cmudict
 
 
@@ -503,169 +503,6 @@ def _cmu_ipa(word: str, claude_ipa: str = "") -> str | None:
     return "/" + "".join(result) + "/"
 
 
-def _get_spacy():
-    """Load spaCy model (cached)."""
-    global _SPACY_NLP
-    if _SPACY_NLP is None:
-        try:
-            import spacy
-            _SPACY_NLP = spacy.load("en_core_web_sm")
-        except Exception:
-            pass
-    return _SPACY_NLP
-
-
-def resolve_lemma(word: str, json_lemma: str) -> str:
-    """Resolve the canonical lemma for a word.
-
-    Strategy (in priority order):
-
-    1. Explicit override: *json_lemma* differs from the surface form
-       → Claude set it deliberately (e.g. derivational adj).  Trust it.
-
-    2. Auto-correct: *json_lemma* is empty or equals the surface form
-       AND the word is not a derivational adjective → run
-       lemmatize_word().
-
-    3. IRREG fallback for cases lemmatize_word() misses.
-
-    4. Otherwise keep the provided lemma (or surface form).
-
-    Claude should only set *lemma* for derivational adjectives /
-    deliberate overrides.  Regular inflectional forms should have an
-    empty *lemma* — lemmatize_word() handles those automatically.
-    """
-    w = word.lower()
-    jl = json_lemma.strip().lower() if json_lemma else ""
-
-    # 1. Explicit override: Claude set lemma → trust it unconditionally.
-    #    The quality checklist ensures Claude sets it correctly for
-    #    derivational adjectives (blundering, accomplished, etc.).
-    if jl:
-        return jl
-
-    # 2. Regular -est/-er/-ier/-iest patterns (before lemmatize_word,
-    #    which may over-reduce: lemminflect maps *happier* → *hap*).
-    #    Only apply when the word is NOT already in COCA, preventing
-    #    false reductions like beer→bee, anger→ange, sacred→sacre.
-    _coca: set[str] = set()
-    try:
-        from .coca import load_coca
-        _coca = load_coca()
-    except ImportError:
-        pass
-    # -est/-iest suffixes are reliable (superlatives, near-zero false
-    # positives).  -er/-ier can match nouns (beer, anger, fiber) so we
-    # only apply those when the word is NOT already in COCA.
-    if w not in _coca or w.endswith("est") or w.endswith("iest") or w.endswith("ier"):
-        for sfx, slen in [("iest", 4), ("est", 3), ("ier", 3), ("er", 2)]:
-            if w.endswith(sfx) and len(w) > slen + 1:
-                stem = w[:-slen]
-                if sfx.startswith("i"):
-                    cand = stem + "y"          # happiest→happy, happier→happy
-                else:
-                    cand = stem                 # smallest→small, closer→close?
-                    # Doubled consonant: biggest→big (only when the stem ends
-                    # in CVC where C is the doubled consonant & not a true
-                    # double-letter ending like -ll, -ss, -ff in the base).
-                    if len(stem) >= 3 and stem[-1] == stem[-2] and stem[-1] not in "aeiouyls":
-                        cand2 = stem[:-1]
-                        cand = cand2
-                    # Dropped-e: closest→close (only if stem doesn't already
-                    # look like a valid word, e.g. *small* from *smallest*).
-                    if cand == stem and not (
-                        len(stem) >= 2
-                        and stem[-1] == stem[-2]
-                        and stem[-1] not in "aeiouy"
-                    ):
-                        cand_e = stem + "e"
-                        if cand_e in _coca and cand_e != w:
-                            cand = cand_e
-                if cand != w and len(cand) < len(w):
-                    return cand
-                break
-
-    # 3. Auto-correct inflectional forms.
-    #    Apply COCA gate: only reduce if the word is NOT already in COCA,
-    #    OR the reduced form is also a valid COCA entry.  This prevents
-    #    false reductions like sacred→sacre where lemminflect hallucinates.
-    #    (spaCy safety net in _process_one_word catches any remaining
-    #    derivational adjective mis-reductions.)
-    #    Note: step 3 no longer returns early — it sets *reduced* and
-    #    falls through to Nation validation at step 5.
-    reduced = lemmatize_word(word)
-    if reduced != w and (w not in _coca or reduced in _coca):
-        pass  # keep reduced, fall through to validation
-    else:
-        reduced = w  # reset: no valid reduction found
-
-    # 4. lemmatize_word couldn't reduce — try lemminflect with COCA gating.
-    #    Instead of returning directly, update *reduced* and fall through
-    #    to the Nation validation at step 5.
-    try:
-        from lemminflect import getLemma
-
-        for upos in ("VERB", "NOUN"):
-            lemmas = getLemma(w, upos)
-            if lemmas:
-                for lemma in lemmas:
-                    cand = lemma.lower()
-                    if cand == w:
-                        continue
-                    # Path 1: word NOT in COCA → reduce if lemma IS in COCA
-                    if w not in _coca and cand in _coca:
-                        reduced = cand
-                        break
-                    # Path 2: both in COCA — accept the reduction.
-                    # For VERB: accept regardless of length (had→have is
-                    # longer); Nation validation at step 5 catches
-                    # cross-family false positives (abode n.→abide v.).
-                    # For NOUN: require shorter lemma (cats→cat safe;
-                    # same-length risks: abode→abide, ran→run).
-                    if w in _coca and cand in _coca:
-                        if upos == "VERB" or len(cand) < len(w):
-                            reduced = cand
-                            break
-                if reduced != w:
-                    break
-    except ImportError:
-        pass
-
-    # 5. Nation word family cross-validation:
-    #    If the reduced lemma belongs to a DIFFERENT word family than
-    #    the original word, it's a cross-family misreduction
-    #    (e.g. twined→twin, but Nation says twined belongs to twine).
-    #    Note: this does NOT catch intra-family reductions like
-    #    blundering→blunder — Claude override + spaCy POS gate
-    #    handle those.
-    #    If the reduced lemma belongs to a DIFFERENT word family than
-    #    the original word, it's a cross-family misreduction
-    #    (e.g. twined→twin, but Nation says twined belongs to twine).
-    #    Note: this does NOT catch intra-family reductions like
-    #    blundering→blunder — Claude override + spaCy POS gate
-    #    handle those.
-    if reduced != w:
-        try:
-            from .coca import get_word_headword
-            nation_head = get_word_headword(w)
-            if nation_head:
-                lemma_head = get_word_headword(reduced)
-                if lemma_head and nation_head != lemma_head:
-                    print(f"  [WARN] [{word}] lemmatize→{reduced} "
-                          f"(Nation: {lemma_head} family) but Nation says "
-                          f"'{w}' → {nation_head} family. "
-                          f"Keeping original form.",
-                          file=sys.stderr)
-                    return w
-        except ImportError:
-            pass
-
-    # Fall through: return reduced form (if valid), or keep original
-    if reduced != w:
-        return reduced
-    return jl or w
-
-
 def _make_word_id(word_data: dict, book_id: str,
                    resolved_lemma: str | None = None) -> str:
     """Compute the canonical WordId for a word entry.
@@ -686,9 +523,9 @@ def _make_word_id(word_data: dict, book_id: str,
     if resolved_lemma:
         resolved = resolved_lemma
     else:
-        resolved = resolve_lemma(
+        resolved = lemmatize(
             word_data["word"],
-            word_data.get("lemma", ""),
+            json_lemma=word_data.get("lemma", ""),
         )
     return f"{safe_filename(resolved)}_{book_id}"
 
@@ -735,7 +572,7 @@ def _process_one_word(
     """
     word = w["word"]
     json_lemma = w.get("lemma", "").strip()
-    lemma = resolve_lemma(word, json_lemma)
+    lemma = lemmatize(word, json_lemma=json_lemma)
 
     # Safety net: for -ed/-ing words that resolve_lemma reduced away from
     # the surface form, verify with spaCy's sentence-context parse.
@@ -765,7 +602,7 @@ def _process_one_word(
     if lemma != wl and wl.endswith(("ed", "ing")):
         sent = w.get("sentence", "")
         if sent:
-            nlp = _get_spacy()
+            nlp = _get_spacy(enable_parser=True)
             if nlp is not None:
                 try:
                     doc = nlp(sent)
@@ -966,7 +803,7 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
                         f"if regular inflection → leave lemma empty."
                     )
             else:
-                resolved = resolve_lemma(word, "")
+                resolved = lemmatize(word)
                 machine = lemmatize_word(word)
                 if (json_lemma.lower() != wl
                         and json_lemma.lower() != machine.lower()
@@ -985,7 +822,7 @@ def _validate_word_entries(words: list[dict]) -> list[str]:
         # 6. IPA matches lemma (not surface form): e.g. lemma=hunt
         #    but IPA=/ˈhʌntɪŋ/ (for hunting).
         json_lemma2 = w.get("lemma", "").strip()
-        resolved = resolve_lemma(word, json_lemma2)
+        resolved = lemmatize(word, json_lemma=json_lemma2)
         if ipa and resolved != word.lower() and "/ɪŋ/" in ipa and not resolved.endswith("ing"):
             print(
                 f"  [WARN] [{word}] IPA contains /ɪŋ/ but lemma '{resolved}' "

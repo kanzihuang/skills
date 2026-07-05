@@ -1,12 +1,15 @@
-"""Inflectional lemmatization engine (屈折还原，拒绝跨词性转换).
+"""Inflectional lemmatization engine.
 
-Two-tier architecture:
-1. spaCy (primary) — POS-aware, parsed once from full text, handles ALL
-   irregular/regular/comparative/derivational forms correctly.
-2. lemminflect (fallback) — fast form-based lemmatizer for when spaCy
-   is unavailable or the word isn't in the pre-computed map.
+Canonical 5-step strategy (unified from resolve_lemma + lemmatize + lemmatize_word):
 
-No hardcoded word lists. No ADJ channel workarounds.
+  1. Contractions → json_lemma explicit override (Claude-set, trusted).
+  2. Suffix rules (-est/-er/-ier/-iest) with COCA gate.
+  3. spaCy map primary source (POS-aware, pre-computed from full text).
+  4. lemminflect multi-channel (VERB/NOUN/ADJ/ADV) with COCA gate.
+  5. Nation word-family cross-validation — rejects cross-family misreductions.
+
+No hardcoded word lists.  All false-positive paths (sacred→sacre, better→good,
+tremendous→tremendou, happier→hap) are guarded by COCA + Nation gates.
 """
 
 from __future__ import annotations
@@ -24,6 +27,25 @@ _CONTRACTIONS: dict[str, str] = {
     "couldnt": "can", "wouldnt": "will", "shouldnt": "shall",
     "mustnt": "must",
 }
+
+# ============================================================================
+# Lazy COCA loader (module-level cache — loaded once then shared)
+# ============================================================================
+
+_COCA_CACHE: set[str] | None = None
+
+
+def _load_coca() -> set[str]:
+    """Return cached COCA word set, loading from disk on first call."""
+    global _COCA_CACHE
+    if _COCA_CACHE is not None:
+        return _COCA_CACHE
+    try:
+        from .coca import load_coca
+        _COCA_CACHE = load_coca()
+    except ImportError:
+        _COCA_CACHE = set()
+    return _COCA_CACHE
 
 
 # ============================================================================
@@ -107,27 +129,33 @@ def build_spacy_map(text: str) -> dict[str, str]:
 
 
 # ============================================================================
-# Public API
+# Public API — canonical lemmatize()
 # ============================================================================
 
 def lemmatize(
     word: str,
-    coca_set: set[str],
+    coca_set: set[str] | None = None,
     spacy_map: dict[str, str] | None = None,
+    json_lemma: str = "",
 ) -> str:
-    """Lemmatize *word* with COCA validation.
+    """Canonical 5-step lemmatization engine.
 
     Args:
         word: Surface form to lemmatize.
-        coca_set: COCA 20000 lemma set for validation.
+        coca_set: COCA word set for validation.  Loaded lazily when None.
         spacy_map: Pre-computed ``{surface → lemma}`` from
-                   :func:`build_spacy_map`.  When provided, used as
-                   the primary source (POS-aware, handles everything).
-                   Falls back to lemminflect when absent.
+                   :func:`build_spacy_map`.  Used as primary source
+                   when available (POS-aware, zero false positives).
+        json_lemma: Claude-set explicit lemma override.  When non-empty,
+                    returned unconditionally (trusted).
 
-    No hardcoded word lists — spaCy handles irregular comparatives
-    (better→good), derivational adjectives (distinguished→distinguished),
-    and agentive nouns (baker→baker) correctly via POS context.
+    Strategy (in priority order):
+
+    1. Contractions → explicit Claude override (trusted).
+    2. Suffix rules (-est/-er/-ier/-iest) with COCA guard.
+    3. spaCy map — POS-aware, handles irregulars and derived adjectives.
+    4. lemminflect multi-channel (VERB/NOUN/ADJ/ADV) with COCA gate.
+    5. Nation word-family cross-validation.
     """
     w = word.lower()
 
@@ -135,7 +163,49 @@ def lemmatize(
     if w in _CONTRACTIONS:
         return _CONTRACTIONS[w]
 
-    # 2. spaCy map — primary source (POS-aware, zero false positives).
+    # 2. Explicit override: Claude set lemma → trust it unconditionally.
+    #    The quality checklist ensures Claude sets it correctly for
+    #    derivational adjectives (blundering, accomplished, etc.).
+    jl = json_lemma.strip().lower() if json_lemma else ""
+    if jl:
+        return jl
+
+    # Resolve COCA set (lazy-load if not provided by caller)
+    if coca_set is None:
+        coca_set = _load_coca()
+
+    # 3. Regular -est/-er/-ier/-iest patterns.
+    #    Only apply when the word is NOT already in COCA, preventing false
+    #    reductions like beer→bee, anger→ange, sacred→sacre.
+    if w not in coca_set or w.endswith("est") or w.endswith("iest") or w.endswith("ier"):
+        for sfx, slen in [("iest", 4), ("est", 3), ("ier", 3), ("er", 2)]:
+            if w.endswith(sfx) and len(w) > slen + 1:
+                stem = w[:-slen]
+                if sfx.startswith("i"):
+                    cand = stem + "y"          # happiest→happy, happier→happy
+                else:
+                    cand = stem                 # smallest→small
+                    # Doubled consonant: biggest→big (only when the stem ends
+                    # in CVC where C is the doubled consonant & not a true
+                    # double-letter ending like -ll, -ss, -ff in the base).
+                    if len(stem) >= 3 and stem[-1] == stem[-2] and stem[-1] not in "aeiouyls":
+                        cand2 = stem[:-1]
+                        cand = cand2
+                    # Dropped-e: closest→close (only if stem doesn't already
+                    # look like a valid word, e.g. *small* from *smallest*).
+                    if cand == stem and not (
+                        len(stem) >= 2
+                        and stem[-1] == stem[-2]
+                        and stem[-1] not in "aeiouy"
+                    ):
+                        cand_e = stem + "e"
+                        if cand_e in coca_set and cand_e != w:
+                            cand = cand_e
+                if cand != w and len(cand) < len(w):
+                    return cand
+                break
+
+    # 4. spaCy map — primary source (POS-aware, zero false positives).
     #    When cand == w, spaCy has determined this is already a canonical
     #    form (e.g. "alluring" ADJ).  Return immediately — don't let the
     #    lemminflect fallback re-reduce a derived adjective to its verb stem.
@@ -143,30 +213,91 @@ def lemmatize(
         cand = spacy_map[w]
         if cand == w:
             return w  # spaCy-declared canonical — no reduction needed
-        if cand in coca_set:
+        if coca_set and cand in coca_set:
             return cand
 
-    # 3. lemminflect fallback — VERB + NOUN channels
+    # 5. lemminflect multi-channel fallback with COCA gate.
     try:
         from lemminflect import getLemma
     except ImportError:
-        return w
+        return jl or w
 
-    candidates: set[str] = set()
-    for upos in ("VERB", "NOUN"):
+    reduced = w
+
+    # Agentive-noun guard: spaCy POS check for ADJ/ADV channels.
+    # Nouns like walker, robber, baker are falsely reduced by lemminflect
+    # ADJ/ADV channels (walker→walk, robber→rob).  Gate with spaCy POS:
+    # skip ADJ/ADV reduction when the word is tagged as NOUN/PROPN.
+    _is_noun = False
+    if coca_set and w in coca_set:
+        try:
+            from .utils import _get_spacy
+            nlp = _get_spacy()
+            if nlp is not None:
+                doc = nlp(w)
+                if len(doc) > 0 and doc[0].pos_ in ("NOUN", "PROPN"):
+                    _is_noun = True
+        except Exception:
+            pass
+
+    for upos in ("VERB", "NOUN", "ADJ", "ADV"):
+        # ADV channel gate: only trust -ly adverbs.  lemminflect ADV
+        # produces false positives for non-ly words ("reflective"→"reflect",
+        # "absurd"→"absur").  Applied at both levels — w in COCA and not.
+        if upos == "ADV" and not (w.endswith("ly") and len(w) > 3):
+            continue
+        # ADJ/ADV agentive-noun gate: skip if spaCy says it's a noun
+        if upos in ("ADJ", "ADV") and _is_noun:
+            continue
+
         lemmas = getLemma(w, upos)
         if not lemmas:
             continue
         for lemma in lemmas:
             cand = lemma.lower()
-            if cand != w and cand in coca_set:
-                candidates.add(cand)
+            if cand == w:
+                continue
+            if w not in coca_set:
+                # Word not in COCA — accept any valid reduction where lemma is in COCA
+                if cand in coca_set:
+                    if upos in ("VERB", "NOUN") or len(cand) < len(w):
+                        reduced = cand
+                        break
+            else:
+                # Both in COCA — accept reduction for VERB channel regardless
+                # of length (had→have is longer), NOUN/ADJ/ADV requires shorter lemma
+                if cand in coca_set:
+                    if upos == "VERB" or len(cand) < len(w):
+                        reduced = cand
+                        break
+        if reduced != w:
+            break
 
-    if candidates:
-        return min(candidates, key=lambda x: (len(x), x))
+    # 6. Nation word family cross-validation:
+    #    If the reduced lemma belongs to a DIFFERENT word family than
+    #    the original word, it's a cross-family misreduction
+    #    (e.g. twined→twin, but Nation says twined belongs to twine).
+    #    Does NOT catch intra-family reductions like blundering→blunder
+    #    — Claude override + spaCy POS gate handle those.
+    if reduced != w:
+        try:
+            from .coca import get_word_headword
+            nation_head = get_word_headword(w)
+            if nation_head:
+                lemma_head = get_word_headword(reduced)
+                if lemma_head and nation_head != lemma_head:
+                    return w  # cross-family — keep original
+        except ImportError:
+            pass
 
-    return w
+    if reduced != w:
+        return reduced
+    return jl or w
 
+
+# ============================================================================
+# Thin helpers (backward-compatible)
+# ============================================================================
 
 def lemmatize_conservative(word: str) -> str:
     """Conservative VERB/NOUN-only lemmatization via lemminflect.

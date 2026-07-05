@@ -8,7 +8,7 @@ Covers historical errors:
 """
 
 import pytest
-from lib.sync_anki import resolve_lemma
+from lib.lemmatize import lemmatize
 
 
 @pytest.mark.parametrize("word,json_lemma,expected", [
@@ -44,16 +44,16 @@ from lib.sync_anki import resolve_lemma
     ("don't", "do", "do"),        # explicit lemma → trusted
 ])
 def test_resolve_lemma(word, json_lemma, expected):
-    result = resolve_lemma(word, json_lemma)
+    result = lemmatize(word, json_lemma=json_lemma)
     assert result == expected, \
-        f"resolve_lemma({word!r}, {json_lemma!r}) = {result!r}, expected {expected!r}"
+        f"lemmatize({word!r}, json_lemma={json_lemma!r}) = {result!r}, expected {expected!r}"
 
 
 def test_explicit_lemma_trusted():
-    result = resolve_lemma("blundering", "blundering")
+    result = lemmatize("blundering", json_lemma="blundering")
     assert result == "blundering"
 
 
 def test_empty_json_lemma_triggers_auto_resolve():
-    result = resolve_lemma("walking", "")
+    result = lemmatize("walking")
     assert result == "walk"
