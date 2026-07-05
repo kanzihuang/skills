@@ -91,7 +91,7 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principles:
 
 - **Separation of concerns**: Claude does knowledge work (sentences, definitions, IPA heteronym voting), DeepL does mechanical translation, Python does mechanical work (lemmatization, TTS, Anki sync).
-- **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 2A). No fabricated or dictionary sentences. Source text unavailable → skip the batch.
+- **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 2A). No fabricated or dictionary sentences. Source text unavailable → skip the batch. Sentence selection is also mechanical: `match_sentences.py` pre-selects the best candidate via `select_best_sentence()` (three-tier: sweet-spot 30-250 > long > very-short) before Step 2B, saving Claude context and eliminating selection variability.
 - **Source-truth-only translations**: Translations must be of the mechanically matched sentence. Never substitute a translation from memory even if you recognize the passage — this causes sentence/translation mismatch.
 - **Incremental safety**: sync mode only adds, never modifies existing cards.
 - **Graceful degradation**: audio failures don't block card generation.
@@ -131,7 +131,7 @@ For -ive, -ous, -ful derived adjectives (reflective, tremendous, beautiful), `re
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 325 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Shared tests** live in `lib/tests/` (pytest, 350 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.

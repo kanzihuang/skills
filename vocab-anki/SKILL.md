@@ -173,11 +173,11 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 
 ## 共享工作流（Step 2A–2H）
 
-> Steps 2A（句子匹配）、2B（句子选择+截断）、2C（IPA 预填充）、2D（生成释义）、2E（内容验证）、2F（DeepL 翻译）、2G（预下载音频）、2H（确认+同步）与 vocab-book 共享。
+> Steps 2A（句子匹配 + 机械预选）、2B（完整性校验 + 截断）、2C（IPA 预填充）、2D（生成释义）、2E（内容验证）、2F（DeepL 翻译）、2G（预下载音频）、2H（确认+同步）与 vocab-book 共享。
 > **详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`**——Claude 执行到对应步骤时必须 Read 该文件获取完整指令。
 
 共享步骤中关键脚本（`<skill_dir>/lib/` 前缀）：
-- `lib/scripts/match_sentences.py` — 机械句子匹配
+- `lib/scripts/match_sentences.py` — 机械句子匹配 + `select_best_sentence()` 三档预选
 - `lib/scripts/translate_deepl.py` — DeepL 翻译
 - `lib/sync_anki.py` — 音频预下载 + 同步
 - `lib/scripts/audit_deck.py` — 同步后审计

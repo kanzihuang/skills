@@ -114,8 +114,8 @@ cat /tmp/<safe_title>-*-full.txt | \
 > 以下步骤与 vocab-anki 共享。详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`。
 
 关键路径（`<skill_dir>` 内 `lib/` 前缀）：
-- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配（Step 2A，PySBD 分句 + candidates）
-- **Step 2B**: 句子选择 + 完整性校验（Claude，1 agent）
+- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配 + 预选最佳候选句（Step 2A，PySBD 分句 + `select_best_sentence()` 三档选择）
+- **Step 2B**: 完整性校验 + 语义截断（Claude，1 agent）
 - **Step 2C**: IPA 预填充（cmudict 批量生成）
 - **Step 2D**: 生成释义 + IPA（Claude，N agents 并行，≤25 词/agent）
 - **Step 2E**: 内容验证 — POS 对齐 + 释义准确（Claude，1 agent）
