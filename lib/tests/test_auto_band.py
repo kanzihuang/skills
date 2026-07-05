@@ -13,7 +13,7 @@ import os
 
 # Ensure sync_anki is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from lib.sync_anki import compute_bands
+from lib.bands import compute_bands
 
 
 # ── Edge cases ─────────────────────────────────────────────────────────────

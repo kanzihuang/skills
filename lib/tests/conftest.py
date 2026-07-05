@@ -29,6 +29,6 @@ def coca_ranked():
 @pytest.fixture(scope="session")
 def cmudict():
     """Load CMU pronunciation dictionary."""
-    from lib.sync_anki import _load_cmudict
+    from lib.ipa import _load_cmudict
 
     return _load_cmudict()

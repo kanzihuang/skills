@@ -7,7 +7,7 @@ Covers historical errors:
 """
 
 import pytest
-from lib.sync_anki import _load_cmudict, _cmu_ipa
+from lib.ipa import _load_cmudict, _cmu_ipa
 
 
 # ── cmudict loading ──
