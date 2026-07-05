@@ -128,6 +128,14 @@ For -ive, -ous, -ful derived adjectives (reflective, tremendous, beautiful), `re
 
 `match_sentences.py` searches for the **exact surface forms** from the `forms` array in the source text. No inflectional expansion (-s/-es/-ed/-ing). If a user highlights the base form ("arouse") but the text only has inflected forms ("aroused"), the word gets no sentence → excluded from the deck. This is by design: the card's `<b>` tag must wrap the exact word the user highlighted. Do not manually expand forms to force a match.
 
+### Truncation vs editing (截断 ≠ 改编)
+
+Step 2B truncation must produce **continuous substrings** of the source text — delete from beginning/end only, never replace/edit words in the middle. Editing (e.g., "And then look:" → "Look:") breaks regex matching in `translate_deepl.py`, silently losing DeepL context.
+
+**Fix (2026-07-05)**: Step 2B post-truncation self-checks now include Step 0 — `_build_sentence_regex(truncated)` must match the source text. Failure → rejection, redo the truncation.
+
+**Verify**: after truncation, run `_build_sentence_regex(sentence)` against source sentences. Match → continuous substring ✓. No match → editing detected ✗.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.

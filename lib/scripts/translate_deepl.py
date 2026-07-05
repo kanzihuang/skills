@@ -116,9 +116,10 @@ def main():
         with open(args.source_text, encoding="utf-8") as f:
             src_text = f.read()
         seg = pysbd.Segmenter(language="en", clean=True)
-        # Normalize newlines like match_sentences.py
+        # Normalize newlines and whitespace like match_sentences.py
         src_text = re.sub(r'\n{2,}', '\n\n', src_text)
         src_text = re.sub(r'(?<!\n)\n(?!\n)', ' ', src_text)
+        src_text = re.sub(r' {2,}', ' ', src_text)
         source_sentences = seg.segment(src_text)
         source_sentences = [s.strip() for s in source_sentences if s.strip()]
 
