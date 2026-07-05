@@ -63,7 +63,8 @@ wait
 
 若 AnkiConnect 可达：
 - **全库 0 张 "Vocabulary Card (WeRead)" 笔记** → Step 1e 直接得 A=0，**不查 Anki**。
-- 若有卡片 → 查普通单词卡片：`WordId` 格式 `{lemma}_{bookId}`，从 `_{bookId}` 后缀解析出 `bookId`，形成映射表：
+- 若有卡片 → 取一个 cardId → 通过 `cardsInfo` API 获取 `deckName`，形成映射表：
+- **deckName 以 Anki `cardsInfo` 返回的实际值为准**（含大小写、重音符号），不得手动修改或根据 `book_title`/`book_author` 自行构造。
 
 ```
 {牌组名: bookId}

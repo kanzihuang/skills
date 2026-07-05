@@ -399,17 +399,27 @@ def sync(
         _count_coca_levels(words), max_bands, min_band_size
     )
 
-    # Format band names with book prefix for share-friendly naming.
-    # e.g. "COCA 4" → "Book Title (Author) - COCA 4"
-    if bands:
-        author = data.get("book_author", "")
-        book_prefix = f"{book_title} ({author})" if author else book_title
-        bands = [(f"{book_prefix} - {name}", lo, hi) for name, lo, hi in bands]
-
     if not prefetch:
         print(f'Connecting to AnkiConnect...')
         ac = AnkiConnect()
 
+        # Auto-correct deck name by bookId: if cards for this book
+        # already exist under a different deck name, reuse that one.
+        # Prevents accent / spelling drift across batches
+        # (e.g. "Saint-Exupery" vs "Saint-Exupéry").
+        if book_id:
+            found_deck, count = ac.find_deck_for_book_id(book_id)
+            if found_deck and found_deck != deck_name:
+                print(f'  Note: using existing deck "{found_deck}" '
+                      f'(found {count} cards with bookId={book_id})')
+                deck_name = found_deck
+
+    # Format band names with the resolved deck name as prefix.
+    # e.g. "COCA 4" → "The Little Prince (Antoine de Saint-Exupéry) - COCA 4"
+    if bands:
+        bands = [(f"{deck_name} - {name}", lo, hi) for name, lo, hi in bands]
+
+    if not prefetch:
         # 2. Create hierarchical decks (or flat deck if no bands)
         if bands:
             # Create parent deck first
@@ -836,9 +846,12 @@ def main() -> None:
         sys.exit(1)
 
     # Deck name resolution priority:
-    #   1. JSON deck_name field (set by Claude from Step 0b {deck: bookId} mapping)
-    #   2. --deck CLI flag (explicit override)
-    #   3. Auto-derive from book_title + book_author (new deck, fallback)
+    #   1. Anki existing deck by bookId (sync() auto-corrects via
+    #      find_deck_for_book_id — prevents accent/spelling drift)
+    #   2. JSON deck_name field (set by Claude from Step 0b
+    #      {deck: bookId} mapping via cardsInfo API)
+    #   3. --deck CLI flag (explicit override)
+    #   4. Auto-derive from book_title + book_author (new deck, fallback)
     json_deck = data.get("deck_name", "").strip()
     if json_deck:
         deck_name = json_deck

@@ -351,3 +351,30 @@ class AnkiConnect:
             return set()
         except Exception:
             return set()
+
+    def find_deck_for_book_id(self, book_id: str) -> tuple[str | None, int]:
+        """Find the existing deck name for cards belonging to a given book_id.
+
+        Searches all notes whose WordId ends with ``_{book_id}``, then
+        uses ``cardsInfo`` to look up the deck name of the first match.
+        Returns ``(deck_name, note_count)``.  If no existing cards are
+        found, returns ``(None, 0)``.
+
+        Used by ``sync_anki`` to prevent deck-name drift across batches
+        (e.g. accent variations in author names).
+        """
+        try:
+            notes = self.find_notes(f"WordId:*_{book_id}")
+            if not notes:
+                return None, 0
+            count = len(notes)
+            card_ids = self.get_cards_of_notes(notes[:1])
+            if not card_ids:
+                return None, count
+            info = self._call("cardsInfo", cards=[card_ids[0]])
+            deck_name: str | None = info[0]["deckName"] if info else None
+            return deck_name, count
+        except AnkiConnectError:
+            return None, 0
+        except Exception:
+            return None, 0

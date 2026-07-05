@@ -8,6 +8,20 @@
 
 从网上拉取书中实际文本，机械匹配每个生词所在句子。
 
+### 2A-0. 检查缓存源文本（优先）
+
+**每次执行 Step 2A 前，先检查 `/tmp/` 下是否已有该书的缓存源文本。**
+
+```bash
+ls -la /tmp/*{book_slug}*.txt /tmp/*{author_lastname}*.txt 2>/dev/null
+```
+
+- 预期文件名：`/tmp/<book>-full.txt`、`/tmp/<book>-source.txt`
+- 缓存存在且 >50KB 且为英文原版（`head -c 500` 确认）→ **直接使用缓存**，跳过 2A-a 搜索和 2A-b 下载
+- 缓存不存在或版本不符 → 继续 2A-a
+
+> 同一本书多次制作牌组时，缓存避免每次都用不同来源的源文本，确保跨批次句子一致性。
+
 ### 2A-a. 搜索源文本
 
 WebSearch `<英文书名> full text` 或 `<英文书名> <作者> full text`。优先选 Internet Archive（`archive.org`）、Project Gutenberg、Standard Ebooks。搜索时留意可直链下载的纯文本 URL（`.txt` 结尾或 `/download/` 路径）。
@@ -447,7 +461,12 @@ timeout $SYNC_TIMEOUT bash -c "cd <skill_dir> && .venv/bin/python -u -m lib.sync
 5. 全文模式自动频次分级（`compute_bands()`）：COCA 级别 → 贪心分割 → 层级牌组
 6. 触发 AnkiWeb 同步（fire-and-forget）
 
-牌组名优先从 JSON `deck_name` 字段读取。未提供时回退 `--deck` 参数。
+牌组名决议优先级（`sync_anki.py` 自动执行）：
+
+1. **Anki 已有牌组**（最高优先）：`find_deck_for_book_id()` 按 bookId 搜索已有卡片，以 Anki 实际牌组名为准——防止不同批次间重音符号/拼写漂移（如 `Saint-Exupery` vs `Saint-Exupéry`）
+2. JSON `deck_name` 字段（Claude 在 Step 0b 从 `cardsInfo` API 获取）
+3. `--deck` CLI 参数
+4. 自动推导：`{book_title} ({book_author})`
 
 ---
 

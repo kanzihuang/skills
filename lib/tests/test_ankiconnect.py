@@ -151,3 +151,53 @@ class TestStoreMedia:
         _set_result(mock_requests, "word.mp3")
         ac = AnkiConnect()
         assert ac.store_media_file("word.mp3", b"\x00\x01\x02") == "word.mp3"
+
+
+class TestFindDeckForBookId:
+    """find_deck_for_book_id() — deck name resolution by bookId."""
+
+    def test_no_existing_cards(self, mock_requests):
+        """Returns (None, 0) when no notes match the bookId."""
+        # findNotes returns empty list
+        mock_requests.json.return_value = {
+            "result": [], "error": None
+        }
+        ac = AnkiConnect()
+        deck, count = ac.find_deck_for_book_id("22720170")
+        assert deck is None
+        assert count == 0
+
+    def test_cards_found_with_valid_deck(self, mock_requests):
+        """Returns (deck_name, count) when matching cards exist."""
+        # The method makes 3 calls: findNotes, findCards, cardsInfo.
+        # Mock side_effect to return different values per call.
+        mock_requests.json.side_effect = [
+            {"result": [100, 101, 102], "error": None},   # findNotes → 3 notes
+            {"result": [200], "error": None},               # findCards → card IDs
+            {"result": [{"deckName": "My Book (Author)", "note": 100}], "error": None},  # cardsInfo
+        ]
+        ac = AnkiConnect()
+        deck, count = ac.find_deck_for_book_id("12345")
+        assert deck == "My Book (Author)"
+        assert count == 3
+
+    def test_cards_found_but_no_card_ids(self, mock_requests):
+        """Returns (None, count) when notes exist but card lookup fails."""
+        mock_requests.json.side_effect = [
+            {"result": [300, 301], "error": None},  # findNotes → 2 notes
+            {"result": [], "error": None},            # findCards → empty
+        ]
+        ac = AnkiConnect()
+        deck, count = ac.find_deck_for_book_id("99999")
+        assert deck is None
+        assert count == 2
+
+    def test_anki_connect_error(self, mock_requests):
+        """Returns (None, 0) when AnkiConnect returns an error."""
+        mock_requests.json.return_value = {
+            "result": None, "error": "connection refused"
+        }
+        ac = AnkiConnect()
+        deck, count = ac.find_deck_for_book_id("22720170")
+        assert deck is None
+        assert count == 0
