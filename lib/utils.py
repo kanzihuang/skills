@@ -127,11 +127,19 @@ def edge_tts_bytes(
     Returns None on persistent failure.
     """
     import asyncio
+    import threading
+
+    # Cache one event loop per thread (ThreadPoolExecutor workers).
+    # Avoids creating+destroying a loop per asyncio.run() call
+    # (~600 cycles for 300 words × 2 audio files → ~3-6 s overhead).
+    _tl = threading.local()
+    if not hasattr(_tl, "loop"):
+        _tl.loop = asyncio.new_event_loop()
 
     ssml = _build_ssml(text, ipa, voice)
     for attempt in range(EDGE_TTS_MAX_RETRIES + 1):
         try:
-            result = asyncio.run(_edge_tts_gen(ssml, voice))
+            result = _tl.loop.run_until_complete(_edge_tts_gen(ssml, voice))
             if result:
                 return result
         except Exception:
@@ -156,6 +164,11 @@ def edge_tts_file(
     Returns True on success.
     """
     import asyncio
+    import threading
+
+    _tl = threading.local()
+    if not hasattr(_tl, "loop"):
+        _tl.loop = asyncio.new_event_loop()
 
     ssml = _build_ssml(text, ipa, voice)
 
@@ -171,7 +184,7 @@ def edge_tts_file(
 
     for attempt in range(EDGE_TTS_MAX_RETRIES + 1):
         try:
-            if asyncio.run(_gen()):
+            if _tl.loop.run_until_complete(_gen()):
                 return True
         except Exception:
             pass
