@@ -135,7 +135,7 @@ def audit_deck(deck_name: str) -> dict:
         print("Translations: ✅")
 
     print(f"\n{'═' * 40}")
-    issues = len(lemma_mismatches) + len(missing_ipa) + len(missing_def)
+    issues = len(lemma_mismatches) + len(missing_ipa) + len(missing_def) + len(missing_trans)
     print(f"{'✅ All clear!' if issues == 0 else f'❌ {issues} issue(s) found'}")
     print(f"{'═' * 40}")
 

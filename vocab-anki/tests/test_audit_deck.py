@@ -181,6 +181,29 @@ def test_missing_translation_detected():
     assert "boa" in result["missing_trans"]
 
 
+def test_missing_trans_counted_in_combined_issues():
+    """Missing translation should NOT be silently ignored when other issues exist."""
+    notes = [
+        _make_note(1, "boa", "a <b>boa</b> constrictor", ipa="", translation=""),
+    ]
+
+    def fake_ac(action, **params):
+        if action == "findNotes":
+            return {"result": [1], "error": None}
+        if action == "notesInfo":
+            return {"result": notes, "error": None}
+        return {"result": None, "error": "unexpected"}
+
+    with patch.object(_audit, "_ankiconnect", side_effect=fake_ac):
+        result = _audit.audit_deck("Test Deck")
+
+    # Both issues should be present — missing_trans was historically
+    # excluded from the issues count (line 139), making "All clear!"
+    # falsely pass when only translations were missing.
+    assert result["missing_ipa"] == ["boa"], "missing_ipa should be detected"
+    assert result["missing_trans"] == ["boa"], "missing_trans should be detected"
+
+
 def test_all_clear_no_issues():
     """Well-formed cards should produce no issues."""
     notes = [
