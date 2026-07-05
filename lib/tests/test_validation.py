@@ -20,7 +20,7 @@ Historical LLM errors covered:
 import re
 import pytest
 from lib.validation import validate_word_entries
-from lib.config import MAX_SENTENCE_LENGTH
+from lib.config import MAX_SENTENCE_LENGTH, MIN_SENTENCE_LENGTH
 
 
 # ── Helper ──
@@ -474,3 +474,50 @@ def test_sentence_over_250_fails_length_check():
     errors = validate_word_entries([w])
     assert has_error(errors, "veritable", "sentence too long"), \
         f"Long sentence should be hard error\nErrors: {errors}"
+
+
+# ── Minimum sentence length soft warning ──
+
+
+def test_sentence_too_short_is_soft_warning():
+    """Sentence < MIN_SENTENCE_LENGTH (30) triggers soft warning (stderr only).
+
+    'He blew his horn.' = 17 chars — below the 30-char threshold where
+    sentences still provide enough context like 'Good morning,' he said
+    courteously. (36 chars).
+    """
+    w = make_word(
+        word="horn",
+        sentence="He blew his <b>horn</b>.",  # 17 chars
+    )
+    errors = validate_word_entries([w])
+    # Soft warning goes to stderr — not returned as hard error
+    assert not has_error(errors, "horn", "too short"), \
+        "Short sentence should be soft warning (stderr), not hard error"
+
+
+def test_sentence_at_min_length_passes():
+    """Sentence ≥ MIN_SENTENCE_LENGTH (30) should pass without error."""
+    w = make_word(
+        word="horn",
+        sentence="He blew his <b>horn</b> loudly.",  # 30 chars
+    )
+    assert len(w["sentence"]) >= MIN_SENTENCE_LENGTH, \
+        f"Precondition: sentence must be ≥ {MIN_SENTENCE_LENGTH} chars"
+    errors = validate_word_entries([w])
+    assert not has_error(errors, "horn", "too short"), \
+        f"Sentence ≥{MIN_SENTENCE_LENGTH} chars should pass\nErrors: {errors}"
+
+
+def test_sentence_one_below_min_warns():
+    """Sentence at 29 chars (just below MIN=30) — soft warning triggers."""
+    # "He blew his horn loudly" = 29 chars (no period for exact boundary)
+    w = make_word(
+        word="horn",
+        sentence="He blew his <b>horn</b> loudl",  # exactly 29 chars
+    )
+    assert len(w["sentence"]) == MIN_SENTENCE_LENGTH - 1, \
+        f"Precondition: sentence must be exactly {MIN_SENTENCE_LENGTH - 1} chars"
+    errors = validate_word_entries([w])
+    assert not has_error(errors, "horn", "too short"), \
+        "Should be soft warning, not hard error"

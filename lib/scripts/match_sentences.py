@@ -5,6 +5,10 @@ Reads filter_fulltext.py JSON output and source text, extracts candidate
 sentences per word with <b> surface form tagging.  Uses PySBD for sentence
 segmentation (97.92% accuracy on Golden Rule set).
 
+Pre-selects the best candidate per word via select_best_sentence() —
+a three-tier mechanical rule (sweet-spot ≥ short ≥ long) that chooses
+the optimal sentence without consuming Claude context.
+
 No semantic truncation — that is handled by Step 3A (Claude).  Only a hard
 500-char cutoff guards against extreme outliers.
 """
@@ -17,7 +21,7 @@ import sys
 import pysbd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from lib.config import MAX_CANDIDATES, HARD_CUTOFF
+from lib.config import MAX_CANDIDATES, HARD_CUTOFF, MIN_SENTENCE_LENGTH, MAX_SENTENCE_LENGTH
 
 
 def _get_segmenter() -> pysbd.Segmenter:
@@ -146,6 +150,40 @@ def find_all_sentences(
     return results
 
 
+def select_best_sentence(
+    candidates: list[dict],
+    min_len: int = MIN_SENTENCE_LENGTH,
+    max_len: int = MAX_SENTENCE_LENGTH,
+) -> dict | None:
+    """Select the best candidate sentence by mechanical rule.
+
+    Three-tier selection (data-informed thresholds):
+    1. Candidates with min_len ≤ len ≤ max_len → pick shortest
+       (ideal: enough context, no truncation needed)
+    2. Only candidates > max_len remain → pick shortest
+       (must truncate, but better than a <30-char sentence with no context)
+    3. All candidates < min_len → pick longest
+       (best effort — all are <30 chars, truly insufficient context)
+
+    Returns None only if candidates list is empty.
+    """
+    if not candidates:
+        return None
+
+    # Tier 1: sweet spot — e.g. 30 ≤ len ≤ 250
+    sweet_spot = [c for c in candidates if min_len <= c['len'] <= max_len]
+    if sweet_spot:
+        return min(sweet_spot, key=lambda c: c['len'])
+
+    # Tier 2: only candidates > max_len — pick shortest (must truncate)
+    long = [c for c in candidates if c['len'] > max_len]
+    if long:
+        return min(long, key=lambda c: c['len'])
+
+    # Tier 3: all candidates < min_len — pick longest (best effort)
+    return max(candidates, key=lambda c: c['len'])
+
+
 def main():
     if len(sys.argv) < 3:
         print(f"Usage: {sys.argv[0]} <filter_json> <source_text>", file=sys.stderr)
@@ -193,11 +231,14 @@ def main():
         if not candidates:
             no_sentence.append((lemma, forms))
 
+        selected = select_best_sentence(candidates)
+
         results.append({
             'lemma': lemma,
             'rep': entry['rep'],
             'forms': forms,
             'candidates': candidates,
+            'selected': selected,
             'char_offset': char_offset,
         })
 

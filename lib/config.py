@@ -11,6 +11,13 @@ EDGE_TTS_RETRY_DELAY = 0.75    # seconds between retries
 # ── sync_anki.py ────────────────────────────────────────────────────────────
 MAX_SENTENCE_LENGTH = 250      # chars — sentences longer than this must be
                                 # truncated by Step 2B before reaching sync
+MIN_SENTENCE_LENGTH = 30       # chars — match_sentences.py prefers candidates
+                                # ≥ this length; validation.py warns when the
+                                # final sentence falls below it. Based on data:
+                                # 30-char sentences like "'Good morning,' he
+                                # said courteously." already provide sufficient
+                                # context. Only <30 (e.g. "She hesitated.") is
+                                # truly insufficient.
 
 # ── AnkiConnect ─────────────────────────────────────────────────────────────
 ANKICONNECT_URL = "http://localhost:8765"

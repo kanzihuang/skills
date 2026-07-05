@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import sys
 
-from .config import MAX_SENTENCE_LENGTH
+from .config import MAX_SENTENCE_LENGTH, MIN_SENTENCE_LENGTH
 from .lemmatize import lemmatize
 from .utils import lemmatize_word
 
@@ -18,12 +18,13 @@ from .utils import lemmatize_word
 def validate_word_entries(words: list[dict]) -> list[str]:
     """Validate word entries before sync. Returns list of error messages (empty = pass).
 
-    Checks sentence length (<=MAX_SENTENCE_LENGTH), <b> tag matches word field,
-    word actually appears in sentence text (after stripping tags),
-    and required fields (ipa, definition_cn, translation_cn) are non-empty.
+    Checks sentence length (MIN_SENTENCE_LENGTH ≤ len ≤ MAX_SENTENCE_LENGTH),
+    <b> tag matches word field, word actually appears in sentence text
+    (after stripping tags), and required fields (ipa, definition_cn,
+    translation_cn) are non-empty.
 
-    Soft warnings (IPA format, definition sanity) are printed to stderr
-    directly and do NOT block sync.
+    Soft warnings (IPA format, definition sanity, sentence too short) are
+    printed to stderr directly and do NOT block sync.
     """
     errors = []
     for w in words:
@@ -67,6 +68,14 @@ def validate_word_entries(words: list[dict]) -> list[str]:
             errors.append(
                 f"[{word}] sentence too long: {clean_len} chars "
                 f"(max {MAX_SENTENCE_LENGTH})"
+            )
+
+        # 3b. Minimum sentence length check (soft warning)
+        if clean_len < MIN_SENTENCE_LENGTH:
+            print(
+                f"  [WARN] [{word}] sentence too short: {clean_len} chars "
+                f"(min {MIN_SENTENCE_LENGTH}) — may lack sufficient context",
+                file=sys.stderr,
             )
 
         # 4. Required fields non-empty (hard error)
