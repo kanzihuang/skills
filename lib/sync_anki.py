@@ -127,6 +127,32 @@ def parse_args() -> argparse.Namespace:
 # compute_bands(), _count_coca_levels(), _pre_assign_bands() imported from .bands
 
 
+def _derive_deck_name(data: dict, cli_deck: str | None = None) -> str:
+    """Derive Anki deck name from input JSON per resolution priority.
+
+    1. JSON deck_name field (set by Claude from cardsInfo API)
+    2. --deck CLI flag (explicit override)
+    3. Auto-derive from book_title + book_author (fallback)
+       - vocab-book mode (suffix present, no book_id): appends " - 分级词汇"
+         to distinguish from vocab-anki flat deck, per SKILL.md spec
+    """
+    json_deck = data.get("deck_name", "").strip()
+    if json_deck:
+        return json_deck
+    if cli_deck:
+        return cli_deck
+
+    author = data.get("book_author", "")
+    title = data["book_title"]
+    deck_name = f"{title} ({author})" if author else f"{title} Vocabulary"
+
+    # vocab-book (suffix without book_id): add " - 分级词汇" suffix
+    if data.get("suffix") and not data.get("book_id"):
+        deck_name += " - 分级词汇"
+
+    return deck_name
+
+
 def _get_existing_per_deck(
     ac: "AnkiConnect",  # noqa: F821
     deck_name: str,
@@ -855,15 +881,8 @@ def main() -> None:
     #      {deck: bookId} mapping via cardsInfo API)
     #   3. --deck CLI flag (explicit override)
     #   4. Auto-derive from book_title + book_author (new deck, fallback)
-    json_deck = data.get("deck_name", "").strip()
-    if json_deck:
-        deck_name = json_deck
-    elif args.deck:
-        deck_name = args.deck
-    else:
-        author = data.get("book_author", "")
-        title = data["book_title"]
-        deck_name = f"{title} ({author})" if author else f"{title} Vocabulary"
+    #      vocab-book mode (suffix w/o book_id) appends " - 分级词汇"
+    deck_name = _derive_deck_name(data, args.deck)
 
     try:
         result = sync(

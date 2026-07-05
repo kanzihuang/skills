@@ -118,3 +118,78 @@ class TestSyncEmpty:
         data["suffix"] = "a1b2c3d4e5f6"
         result = sync(data, deck_name="Test", dry_run=True, no_audio=True)
         assert result is not None
+
+
+class TestDeriveDeckName:
+    """Deck name auto-derivation from input JSON."""
+
+    def test_vocab_anki_flat_deck(self):
+        """vocab-anki (book_id, no suffix): plain '{Title} ({Author})'."""
+        from lib.sync_anki import _derive_deck_name
+        data = {
+            "book_title": "Test Book",
+            "book_author": "Test Author",
+            "book_id": "12345678",
+        }
+        assert _derive_deck_name(data) == "Test Book (Test Author)"
+
+    def test_vocab_book_suffix_appends_graded(self):
+        """vocab-book (suffix, no book_id): appends ' - 分级词汇'."""
+        from lib.sync_anki import _derive_deck_name
+        data = {
+            "book_title": "Test Book",
+            "book_author": "Test Author",
+            "suffix": "a1b2c3d4e5f6",
+        }
+        result = _derive_deck_name(data)
+        assert result == "Test Book (Test Author) - 分级词汇"
+
+    def test_vocab_book_no_author(self):
+        """vocab-book without author: '{Title} Vocabulary - 分级词汇'."""
+        from lib.sync_anki import _derive_deck_name
+        data = {
+            "book_title": "Test Book",
+            "suffix": "a1b2c3d4e5f6",
+        }
+        result = _derive_deck_name(data)
+        assert result == "Test Book Vocabulary - 分级词汇"
+
+    def test_both_book_id_and_suffix_present(self):
+        """book_id takes priority — no ' - 分级词汇' suffix."""
+        from lib.sync_anki import _derive_deck_name
+        data = {
+            "book_title": "Test Book",
+            "book_author": "Test Author",
+            "book_id": "12345678",
+            "suffix": "a1b2c3d4e5f6",
+        }
+        assert _derive_deck_name(data) == "Test Book (Test Author)"
+
+    def test_json_deck_name_priority(self):
+        """JSON deck_name field takes highest priority."""
+        from lib.sync_anki import _derive_deck_name
+        data = {
+            "book_title": "Test Book",
+            "deck_name": "Custom Deck Name",
+            "suffix": "a1b2c3d4e5f6",
+        }
+        assert _derive_deck_name(data) == "Custom Deck Name"
+
+    def test_cli_deck_override(self):
+        """--deck CLI flag overrides auto-derive."""
+        from lib.sync_anki import _derive_deck_name
+        data = {
+            "book_title": "Test Book",
+            "book_author": "Test Author",
+            "suffix": "a1b2c3d4e5f6",
+        }
+        assert _derive_deck_name(data, cli_deck="CLI Deck") == "CLI Deck"
+
+    def test_json_deck_beats_cli(self):
+        """JSON deck_name beats CLI deck."""
+        from lib.sync_anki import _derive_deck_name
+        data = {
+            "book_title": "Test Book",
+            "deck_name": "JSON Deck",
+        }
+        assert _derive_deck_name(data, cli_deck="CLI Deck") == "JSON Deck"
