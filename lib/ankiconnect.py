@@ -26,9 +26,7 @@ logger = logging.getLogger(__name__)
 # AnkiConnect client
 # ---------------------------------------------------------------------------
 
-ANKICONNECT_URL = "http://localhost:8765"
-ANKICONNECT_VERSION = 6
-REQUEST_TIMEOUT = 10
+from .config import ANKICONNECT_URL, ANKICONNECT_VERSION, REQUEST_TIMEOUT
 
 
 class AnkiConnectError(Exception):

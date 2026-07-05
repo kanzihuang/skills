@@ -10,13 +10,14 @@ No semantic truncation — that is handled by Step 3A (Claude).  Only a hard
 """
 
 import json
+import os
 import re
 import sys
 
 import pysbd
 
-MAX_CANDIDATES = 5
-HARD_CUTOFF = 500
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from lib.config import MAX_CANDIDATES, HARD_CUTOFF
 
 
 def _get_segmenter() -> pysbd.Segmenter:

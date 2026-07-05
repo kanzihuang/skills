@@ -52,7 +52,8 @@ def _build_sentence_regex(sentence: str) -> str:
     return r'[^\w]*'.join(words)
 
 
-CONTEXT_SENTENCES = 2  # sentences before target to include as context
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from lib.config import BATCH_SIZE, CONTEXT_SENTENCES
 
 
 def strip_tags(text: str) -> str:
@@ -164,9 +165,8 @@ def main():
         print("No sentences to translate.", file=sys.stderr)
         return
 
-    print(f"Translating {total} sentences via DeepL (batch size 50)...", file=sys.stderr)
+    print(f"Translating {total} sentences via DeepL (batch size {BATCH_SIZE})...", file=sys.stderr)
 
-    BATCH_SIZE = 50
     translated_count = 0
     errors = 0
 

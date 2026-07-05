@@ -22,8 +22,7 @@ import time
 # Constants
 # ---------------------------------------------------------------------------
 
-EDGE_TTS_MAX_RETRIES = 2  # Retry Edge TTS up to 2 extra times (3 total) on transient failure
-EDGE_TTS_RETRY_DELAY = 0.75  # seconds between Edge TTS retries
+from .config import EDGE_TTS_MAX_RETRIES, EDGE_TTS_RETRY_DELAY
 
 # ---------------------------------------------------------------------------
 # Filename utilities

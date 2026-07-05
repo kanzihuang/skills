@@ -44,9 +44,10 @@ from .utils import (
 # Constants
 # ---------------------------------------------------------------------------
 
+from .config import MAX_SENTENCE_LENGTH
+
 MODEL_NAME = "Vocabulary Card (WeRead)"
 WORD_TIMEOUT = 30  # default seconds per word (audio generation)
-MAX_SENTENCE_LENGTH = 250  # chars — sentences longer than this must be truncated by Step 3A
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
