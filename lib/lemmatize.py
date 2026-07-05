@@ -72,9 +72,12 @@ def build_spacy_map(text: str) -> dict[str, str]:
     # Track POS distribution to distinguish inflection from derivation:
     #   - ADJ + lemma==surface → derived adjective, keep surface form
     #   - VERB + lemma!=surface → regular inflection, reduce
+    #   - VBG + amod dependency → participial adjective, keep surface form
+    #     (e.g. "the bewildering complexity" — not "bewilder")
     from collections import Counter
     votes: dict[str, Counter] = {}
     pos_counts: dict[str, Counter] = {}
+    vbg_amod_forms: set[str] = set()
 
     chunk_size = 100_000
     for i in range(0, len(text), chunk_size):
@@ -90,7 +93,13 @@ def build_spacy_map(text: str) -> dict[str, str]:
             if surface not in votes:
                 votes[surface] = Counter()
                 pos_counts[surface] = Counter()
-            votes[surface][lemma] += 1
+            # VBG + amod = participial adjective modifying a noun.
+            # Force lemma → surface so the map keeps it unreduced.
+            if token.tag_ == "VBG" and token.dep_ == "amod":
+                vbg_amod_forms.add(surface)
+                votes[surface][surface] += 1
+            else:
+                votes[surface][lemma] += 1
             pos_counts[surface][pos] += 1
 
     # Pick the most common lemma for each surface form.
@@ -122,6 +131,10 @@ def build_spacy_map(text: str) -> dict[str, str]:
                 # → derived adjective, not inflection
                 if dominant_pos == "ADJ" and surface in counter:
                     winner = surface  # override: keep surface form
+
+        # VBG-amod override: participial adjectives kept as surface form
+        if surface in vbg_amod_forms:
+            winner = surface
 
         result[surface] = winner  # always add — even canonical forms
 

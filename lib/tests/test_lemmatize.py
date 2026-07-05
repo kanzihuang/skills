@@ -193,7 +193,8 @@ def test_no_hardcoded_comparatives(coca_set):
     """Verify _IRREG_COMPARATIVES hardcoded list is gone.
     Without spacy_map, irregular comparatives follow lemminflect fallback."""
     # These are NOT reduced by lemminflect VERB/NOUN alone
-    import lemmatize as lem_module
+    import sys
+    lem_module = sys.modules["lib.lemmatize"]
     assert not hasattr(lem_module, '_IRREG_COMPARATIVES')
     # The CONTRACTIONS dict should NOT contain comparative entries
     assert "better" not in lem_module._CONTRACTIONS

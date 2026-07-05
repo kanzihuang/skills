@@ -36,7 +36,6 @@ if _REPO_ROOT not in sys.path:
 
 from lib.coca import (load_coca, in_coca,                         # noqa: E402
                          get_word_level, load_level_range)
-from lemminflect import getLemma                                     # noqa: E402
 
 
 # ── main pipeline ───────────────────────────────────────────────────────────
@@ -125,19 +124,16 @@ def main() -> None:
     # Generate UUID suffix for WordId/audio namespace isolation
     suffix = uuid.uuid4().hex[:12]
 
-    # ── POS → lemminflect channel mapping ────────────────────────────────────
-    # spaCy provides POS tags; lemminflect does the actual lemmatization.
-    # Each token's POS determines which lemminflect channel to use.
-    # ADJ, ADV, PROPN, ADP etc → keep surface form (no lemmatization needed).
-    _POS_CHANNEL: dict[str, str] = {"VERB": "VERB", "NOUN": "NOUN"}
-    _TAG_CHANNEL: dict[str, str] = {
-        "JJR": "ADJ", "JJS": "ADJ",   # comparative/superlative adjectives
-        "RBR": "ADJ", "RBS": "ADJ",   # comparative/superlative adverbs
-    }
-
-    # ── tokenize & lemmatize (spaCy per-token) ───────────────────────────────
+    # ── tokenize & lemmatize (via unified lib.lemmatize) ────────────────────
+    # build_spacy_map() parses once and produces a POS-aware
+    # {surface → lemma} map with VBG-amod guard built-in.
+    # lemmatize() uses this map as primary source, falling back to
+    # lemminflect multi-channel with COCA gate + Nation CV.
     import spacy
+    from lib.lemmatize import build_spacy_map, lemmatize
+
     nlp = spacy.load("en_core_web_sm")
+    spacy_map = build_spacy_map(text)
 
     lemma_forms: dict[str, set[str]] = {}
     raw_token_count = 0
@@ -150,35 +146,7 @@ def main() -> None:
                 continue
             raw_token_count += 1
             surface = token.text.lower()
-
-            # Which lemminflect channel?
-            channel = _TAG_CHANNEL.get(token.tag_)  # comparatives first
-            if channel is None:
-                channel = _POS_CHANNEL.get(token.pos_)
-
-            if channel is None:
-                lemma = surface  # ADJ, ADV, ADP, PROPN, … — keep as-is
-            else:
-                lemma = surface
-                lemmas = getLemma(surface, channel)
-                if lemmas:
-                    cand = lemmas[0].lower()
-                    if cand in coca_set and cand != surface:
-                        lemma = cand
-
-            # Guard: VBG with amod dependency = participial adjective
-            # modifying a noun (e.g. "the bewildering complexity").
-            # spaCy correctly tags the token as VBG (verb form) but the
-            # dependency parse reveals its adjectival role.  Without this
-            # guard, lemminflect reduces it to the verb base ("bewilder")
-            # — losing the adjectival meaning.  Keep the surface form.
-            #
-            # Only amod is guarded: acomp ("is bewildering") is tagged
-            # JJ by spaCy, acl ("the man standing") is a reduced relative
-            # clause, ROOT/xcomp ("he was boasting") is verbal.
-            if token.tag_ == "VBG" and token.dep_ == "amod" and lemma != surface:
-                lemma = surface
-
+            lemma = lemmatize(surface, coca_set, spacy_map)
             lemma_forms.setdefault(lemma, set()).add(surface)
 
     total_raw_words = raw_token_count
