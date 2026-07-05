@@ -183,7 +183,8 @@ curl 直链 + WebSearch/WebFetch 均无法获取 → **该批次所有单词跳�
 cd <skill_dir> && .venv/bin/python3 << 'PYEOF'
 import json, sys
 sys.path.insert(0, '.')
-from lib.sync_anki import _cmu_ipa, resolve_lemma
+from lib.ipa import _cmu_ipa
+from lib.lemmatize import lemmatize
 
 with open('/tmp/vocab-anki-input-<tmp_id>.json') as f:
     data = json.load(f)
@@ -192,7 +193,7 @@ missing_cmudict = []
 for w in data['words']:
     if w.get('ipa') and '/' in w['ipa']:
         continue
-    lemma = resolve_lemma(w['word'], w.get('lemma', '').strip())
+    lemma = lemmatize(w['word'], json_lemma=w.get('lemma', '').strip())
     cmu = _cmu_ipa(lemma)
     if cmu:
         w['ipa'] = cmu
@@ -228,9 +229,9 @@ cmudict 未覆盖的词由 Claude 在 2D 中手动补充。
 
 ```bash
 cd <skill_dir> && .venv/bin/python3 << 'PYEOF'
-import json, sys
+import json, re, sys
 sys.path.insert(0, '.')
-from lib.sync_anki import _get_spacy
+from lib.utils import _get_spacy
 nlp = _get_spacy()
 
 with open('/tmp/vocab-anki-input-<tmp_id>.json') as f:
@@ -243,7 +244,9 @@ for w in data['words']:
     sent = w.get('sentence', '')
     if not sent:
         continue
-    doc = nlp(sent)
+    # Strip <b> tags before spaCy parsing — otherwise token matching fails
+    clean_sent = re.sub(r'<[^>]+>', '', sent)
+    doc = nlp(clean_sent)
     for token in doc:
         if token.text.lower() == wl:
             lemma_self = token.lemma_.lower() == wl

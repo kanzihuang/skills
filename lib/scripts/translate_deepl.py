@@ -52,7 +52,7 @@ def _build_sentence_regex(sentence: str) -> str:
     return r'[^\w]*'.join(words)
 
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lib.config import BATCH_SIZE, CONTEXT_SENTENCES
 
 

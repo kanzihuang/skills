@@ -14,9 +14,11 @@ Usage:
 """
 
 import json
+import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lib.ankiconnect import AnkiConnect
 from lib.lemmatize import lemmatize
 from lib.utils import lemmatize_word
