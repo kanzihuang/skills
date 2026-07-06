@@ -487,10 +487,23 @@ def sync(
     # 5. Identify new words (WordId = safe_filename(resolved_lemma)_book_id).
     new_words = []
     skipped_words = []
+    seen_word_ids: set[str] = set()  # track within-batch duplicates
     for idx, w in enumerate(words):
         original_id = _make_word_id(w, namespace_id)
 
-        # Only dedup against this word's target deck
+        # Dedup within batch: same WordId within this run → skip.
+        # Two words that lemmatize to the same root (e.g. "boa" + "boas"
+        # both → "boa") produce the same WordId, audio filename, and card.
+        # The first occurrence wins; subsequent ones are skipped before
+        # audio generation to prevent filename collision and field overwrite.
+        if original_id in seen_word_ids:
+            if verbose:
+                print(f"  SKIP {w['word']} (duplicate lemma in batch → {original_id})")
+            skipped_words.append(w)
+            continue
+        seen_word_ids.add(original_id)
+
+        # Dedup against existing Anki cards in this word's target deck
         target_deck = band_assignment.get(idx, deck_name)
         deck_cards = existing.get(target_deck, {})
         if original_id in deck_cards:

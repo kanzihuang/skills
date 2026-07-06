@@ -24,8 +24,8 @@ description: >
 | 依赖 | weread-skills + WEREAD_API_KEY | 无外部依赖 |
 | 范围 | 已划线词汇 | 全量词汇 |
 | 频次分级 | 单层牌组 | 自动 COCA 分级层级牌组 |
-| 章节选择 | 无 | 无 |
-| Anki 去重 | 同书去重 | 无（一次性，UUID 后缀隔离） |
+| 章节选择 | 可选（extract_chapter.py） | 无 |
+| Anki 去重 | 同书去重 | 无跨次去重（UUID 后缀隔离）；批内词族去重（sync_anki.py seen_word_ids） |
 
 ## 前置条件
 
@@ -51,12 +51,14 @@ COCA 范围意图解析：
 | "等级 3-10" | Level 3-10 | `3-10` |
 | "排除前3级" | 排除 Level 1-3 | `4-25` |
 | "5级以上" | Level 5-25 | `5-25` |
+| "COCA 3000+" | 排除 Level 1-3（前 3000 词） | `4-25` |
+| "COCA 2000+" | 排除 Level 1-2（前 2000 词） | `3-25` |
 | "中频词" / "中等难度" | 大致 Level 4-10 | **提问确认具体范围** |
 | 未提及 | 无范围限制 | 省略 `--basic-range` |
 
 > 1-based level: level 1 = 最高频。两端均 inclusive。
 
-全文模式**不获取、不显示、不利用章节信息**——全书文本统一处理。
+全文模式**默认全书统一处理**。用户指定章节时可用 `extract_chapter.py` 裁剪文本。`match_sentences.py` 自动检测并跳过序言（前言/作者简介/编辑导语等非正文内容）——检测的是文本结构边界，不依赖逐词章节归属。
 Anki 去重**不做**——每次运行独立，UUID 后缀确保不与其他牌组冲突。
 
 ### Step 1: 获取书籍文本
@@ -80,6 +82,18 @@ head -c 500 /tmp/<safe_title>-*-full.txt
 - 有无明显 OCR 损坏（如 `fig ures` → 字母间多余空格）
 - 首句是否与公认经典译本一致（排除 ESL 简化版/改编版/双语版）
 - 有问题 → 换源重新拉取，不要用损坏文本
+
+**章节提取（用户指定章节时）**：
+
+```bash
+# 列出所有检测到的章节
+<skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/extract_chapter.py /tmp/<safe_title>-*-full.txt --list
+
+# 提取第 N 章到裁剪文件
+<skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/extract_chapter.py /tmp/<safe_title>-*-full.txt --chapter <N> --output /tmp/<safe_title>-ch<N>.txt
+```
+
+提取后的文本自动排除序言（章节提取从章节标题开始）。后续步骤使用裁剪后的文件。未检测到章节标题时打印警告，使用原始全文本。
 
 ### Step 2: 运行 filter_fulltext.py
 
@@ -114,18 +128,20 @@ cat /tmp/<safe_title>-*-full.txt | \
 > 以下步骤与 vocab-anki 共享。详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`。
 
 关键路径（`<skill_dir>` 内 `lib/` 前缀）：
-- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配 + 预选最佳候选句（Step 2A，PySBD 分句 + `select_best_sentence()` 三档选择）
-- **Step 2B**: 完整性校验 + 语义截断（Claude，1 agent）
-- **Step 2C**: IPA 预填充（cmudict 批量生成）
-- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2D，2C 之后、2E 之前），支持 `--source-text` 上下文参数和自动去重
-- **Step 2E**: 生成释义 + IPA（Claude，N agents 并行，≤25 词/agent）。`translation_cn` 可用时作为义项参考
-- **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent）
+- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配 + 预选最佳候选句（Step 2A，PySBD 分句 + `select_best_sentence()` 三档选择，**自动跳过序言**）
+- **Step 2B**: 完整性校验 + 语义截断（Claude，1 agent，**不可绕过**）
+- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C），支持 `--source-text` 上下文参数和自动去重
+- **Step 2D**: 生成释义 + lemma + 异读词投票（Claude，N agents 并行，≤25 词/agent）
+- **Step 2E**: cmudict IPA 生成（2D 之后，从最终 lemma 查 IPA；cmudict miss 由 2F 兜底）
+- **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent，**不可绕过**）
 - `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步（Step 2G + Step 2H）
+- `<skill_dir>/lib/scripts/check_step_completed.py` — 步骤完成检查点（2B/2F 后运行）
+- `<skill_dir>/lib/scripts/extract_chapter.py` — 章节提取（可选）
 
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
 - JSON 传入 `"suffix"` 字段（**不需要** `"book_id"`），sync_anki.py 自动识别并作为命名空间标识用于 WordId 构建和音频文件命名
-- WordId = `{safe_filename(lemma)}_{suffix}`（原形去重，同词不同屈折形式映射到同一张卡片），音频文件命名 = `{safe_filename(lemma)}_{suffix}_word.mp3` / `{safe_filename(lemma)}_{suffix}_sent.mp3`
+- WordId = `{safe_filename(lemma)}_{suffix}`（按词族去重，同词不同屈折形式映射到同一张卡片。同批次内同词族的词只取第一个，第二个起跳过——先出现的例句和释义成为卡片内容），音频文件命名 = `{safe_filename(lemma)}_{suffix}_word.mp3` / `{safe_filename(lemma)}_{suffix}_sent.mp3`
 - 同步时自动频次分级（`compute_bands()`）：COCA 级别 → ≤5 段 → `{English Title} ({Author}) - 分级词汇::{English Title} ({Author}) - COCA X-Y`。**书名和作者必须用英文**。词汇量不足（<100）或仅 1 个 COCA 级别时退回无分级，所有卡片进入父牌组 `{English Title} ({Author}) - 分级词汇`——后缀 ` - 分级词汇` 仍然存在，与 vocab-anki 扁平牌组名区分，不会重名
 - **不做 Anki 去重**（filter_fulltext.py 不连接 AnkiConnect）
 
@@ -150,8 +166,9 @@ cat /tmp/<safe_title>-*-full.txt | \
 ## 设计原则
 
 - **零微信读书依赖**：不调用任何 WeRead API，不要求 WEREAD_API_KEY
-- **UUID 后缀隔离**：每次运行生成唯一 UUID，WordId 和音频文件名永不冲突
-- **一次性**：不做跨次去重，每次独立运行
-- **不分章节**：全书文本统一处理
-- **Claude + Python 分离**：Claude 做知识工作，Python 做机械工作
+- **UUID 后缀隔离**：每次运行生成唯一 UUID，跨次 WordId 和音频文件名永不冲突。批内同词族去重（`seen_word_ids`）在 `sync_anki.py` 音频生成前执行，防止同批次内同 lemma 词的音频文件名冲突
+- **一次性**：不做跨次去重，每次独立运行。同次内按词族去重——同词族不同屈折形式只创建一张卡片
+- **序言自动过滤**：`match_sentences.py` 自动检测并跳过前言（标题页、作者简介、编辑导语），仅搜索正文内容。可选章节提取（`extract_chapter.py`）用于按章节裁剪
+- **Claude + Python 分离**：Claude 做知识工作（释义、句子审核），Python 做机械工作（TTS、同步、过滤）
 - **例句来自源文本机械匹配**：不依赖 Claude 记忆，从书中实际文本提取
+- **质量门禁不可绕过**：Step 2B（句子审核）和 Step 2F（内容验证）无 SKIP 条件。`check_step_completed.py` 执行后验证

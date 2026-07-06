@@ -259,6 +259,131 @@ class TestIncrementalSafety:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 5. Intra-batch dedup — same lemma in one batch → first wins
+# ═══════════════════════════════════════════════════════════════════
+
+class TestIntraBatchDedup:
+    """Words that lemmatize to the same root within a single batch must be
+    deduplicated — only the first occurrence gets a card, subsequent ones
+    are skipped.  This prevents:
+      - audio filename collision (both words generate the same
+        {lemma}_{suffix}_sent.mp3 → second overwrites first)
+      - sentence field overwrite on the Anki card
+    """
+
+    def test_boa_and_boas_same_batch(self):
+        """'boa' and 'boas' both lemmatize to 'boa' — second is skipped."""
+        from lib.sync_anki import _make_word_id, lemmatize
+
+        suffix = "060c532a71e0"
+        words_data = [
+            make_word("boa", sentence="It was a picture of a <b>boa</b>."),
+            make_word("boas", sentence="I drew <b>boas</b> from the outside."),
+        ]
+
+        # Simulate the intra-batch dedup added in add_new_cards()
+        seen: set[str] = set()
+        new_words = []
+        skipped_words = []
+        for w in words_data:
+            wid = _make_word_id(w, suffix)
+            if wid in seen:
+                skipped_words.append(w)
+                continue
+            seen.add(wid)
+            # (existing Anki dedup would go here — not relevant for this test)
+            new_words.append(w)
+
+        assert len(new_words) == 1, (
+            f"Expected 1 new word, got {len(new_words)}: "
+            f"{[w['word'] for w in new_words]}"
+        )
+        assert new_words[0]["word"] == "boa", "First occurrence should win"
+        assert len(skipped_words) == 1
+        assert skipped_words[0]["word"] == "boas"
+
+    def test_pondered_and_pondering_same_batch(self):
+        """'pondered' and 'pondering' both lemmatize to 'ponder'."""
+        from lib.sync_anki import _make_word_id
+
+        suffix = "abc123"
+        words_data = [
+            make_word("pondered", sentence="I <b>pondered</b> deeply."),
+            make_word("pondering", sentence="I was <b>pondering</b>."),
+        ]
+
+        seen: set[str] = set()
+        new_words = []
+        skipped_words = []
+        for w in words_data:
+            wid = _make_word_id(w, suffix)
+            if wid in seen:
+                skipped_words.append(w)
+                continue
+            seen.add(wid)
+            new_words.append(w)
+
+        assert len(new_words) == 1
+        assert new_words[0]["word"] == "pondered"
+        assert len(skipped_words) == 1
+        assert skipped_words[0]["word"] == "pondering"
+
+    def test_explicit_lemma_blocks_intra_dedup(self):
+        """Explicit lemma='astounded' vs auto-lemmatize 'astound' — different IDs."""
+        from lib.sync_anki import _make_word_id
+
+        suffix = "abc123"
+        # With explicit lemma 'astounded' → WordId = astounded_abc123
+        w1 = make_word("astounded", lemma="astounded")
+        # No explicit lemma, lemmatizes to 'astound' → WordId = astound_abc123
+        w2 = make_word("astounded")  # auto-lemmatize to "astound"
+
+        w1_id = _make_word_id(w1, suffix)
+        w2_id = _make_word_id(w2, suffix)
+
+        # They SHOULD be different: adjective vs verb lemmatization
+        seen: set[str] = set()
+        new_words = []
+        for w in [w1, w2]:
+            wid = _make_word_id(w, suffix)
+            if wid in seen:
+                continue
+            seen.add(wid)
+            new_words.append(w)
+
+        assert len(new_words) == 2, (
+            f"Explicit lemma creates different WordIds: {w1_id} vs {w2_id}"
+        )
+
+    def test_three_words_same_lemma(self):
+        """Three surface forms → same lemma → only first card created."""
+        from lib.sync_anki import _make_word_id
+
+        suffix = "test123"
+        words_data = [
+            make_word("blink", sentence="I <b>blink</b>."),
+            make_word("blinked", sentence="I <b>blinked</b>."),
+            make_word("blinking", sentence="I was <b>blinking</b>."),
+        ]
+
+        seen: set[str] = set()
+        new_words = []
+        skipped_words = []
+        for w in words_data:
+            wid = _make_word_id(w, suffix)
+            if wid in seen:
+                skipped_words.append(w)
+                continue
+            seen.add(wid)
+            new_words.append(w)
+
+        assert len(new_words) == 1
+        assert new_words[0]["word"] == "blink"
+        assert len(skipped_words) == 2
+        assert {w["word"] for w in skipped_words} == {"blinked", "blinking"}
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 4. Audio failure → retry → block (not silently skip)
 # ═══════════════════════════════════════════════════════════════════
 

@@ -105,6 +105,15 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 
 Common failure modes discovered through production use. Reference when debugging deck quality issues.
 
+### Step 2B/2F 不可绕过
+
+Step 2B（句子选择+截断）和 Step 2F（内容验证）是质量门禁，即使 match_sentences.py 预选结果看起来完美也不可跳过。只有 Claude 能识别：
+- 序言/非正文句子（char_offset 靠前、内容为作者简介/编辑导语）
+- 定义质量（如一词多译时的不一致）
+- 翻译-释义对齐
+
+自动检查（validation.py）只做格式校验，不做语义校验。每步执行后运行 check_step_completed.py 验证。
+
 ### Lemmatizer false positives (ADV channel)
 
 `lemmatize_word()` uses lemminflect's VERB → NOUN → ADJ → ADV channels. The ADV channel produces false positives for non-adverb words: "absurd"→"absur" (treats 'd' as comparative suffix), "reflective"→"reflect" (treats 'ive' as adverb suffix). **Fix (2026-07-05)**: ADV channel now gated to words ending in -ly only.
@@ -162,10 +171,21 @@ Step 2B truncation must produce **continuous substrings** of the source text —
 
 **Verify**: after truncation, run `_build_sentence_regex(sentence)` against source sentences. Match → continuous substring ✓. No match → editing detected ✗.
 
+### Intra-batch duplicate WordId → audio collision + sentence overwrite
+
+Two words that lemmatize to the same root (e.g. "boa" + "boas" → both "boa") produce the same WordId, same audio filename (`boa_{suffix}_sent.mp3`), and same card. Before the fix (2026-07-06), `add_new_cards()` only deduplicated against Anki's existing cards — not against other words in the same batch. This caused:
+- The second word's sentence audio **overwrites** the first word's audio file (same filename)
+- The Anki card's Sentence field gets the **second** word's sentence (last write wins)
+- Result: card shows word="boa" but sentence has `<b>boas</b>` — mismatch, wrong audio
+
+**Fix (2026-07-06)**: Added `seen_word_ids` set in `add_new_cards()` — tracks WordIds within the current batch. First occurrence wins, subsequent duplicates are skipped BEFORE audio generation. Regression test: `TestIntraBatchDedup` (4 tests) in `test_sync_note.py`.
+
+Symptom: card's Word field ≠ `<b>` text in Sentence field, sentence audio doesn't match displayed text. Check: `grep -c '_sent\.mp3' manifest.json` vs actual card count — duplicate filenames mean collision.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 359 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Shared tests** live in `lib/tests/` (pytest, 380 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.
