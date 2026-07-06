@@ -339,6 +339,21 @@ PYEOF
 >
 > `_spacy` 是参考数据，**不是最终判定**。Claude 必须读句子确认——spaCy 可能把形容词标为 VERB（如 disheartened）。最终 `lemma` 写入 JSON 的 `lemma` 字段，`resolve_lemma` 无条件信任。
 
+### 2D-0b. 名词复数 / 动词第三人称单数屈折
+
+对 `-s`/`-es` 结尾的规则屈折，**lemma 一律留空**。`resolve_lemma()` 会自动通过 lemminflect + COCA 守卫还原为原形。
+
+| 表面词形 | lemma 字段 | 还原结果 | 说明 |
+|---------|-----------|---------|------|
+| `boas` | 留空 | `boa` | 规则复数 |
+| `boxes` | 留空 | `box` | 规则复数 -es |
+| `walks` | 留空 | `walk` | 第三人称单数 |
+| `studies` | 留空 | `study` | -ies → -y |
+
+**例外**：以 `-s`/`-es` 结尾但并非屈折变化的词（如 `bus`、`progress`、`series`）——留空即可，auto-resolution 会判别为原形（COCA 中存在）不做还原。
+
+> ⚠️ **名词复数 + 专有名词同形陷阱**：当生词同时是普通名词的复数（如 `boas`=蟒蛇复数）和人名（`Boas`）时，spaCy 可能产生 PROPN 误标。**lemma 留空**让 `resolve_lemma()` 通过 lemminflect 自动还原。`build_spacy_map()` 已忽略小写 PROPN token，确保此场景正确还原。
+
 ### 字段说明
 
 | 字段 | 说明 | 示例 |
@@ -460,6 +475,9 @@ POS 对齐 + 释义准确 + 翻译一致性。发现问题 → 直接修正。
 | POS 对齐 | `[词性]` 标注与句中实际用法一致？比较级 passive-vs-adjective 判定标准 |
 | 释义准确 | 代入验证法 + 义项枚举 + 跨句一致性检查 |
 | 翻译一致性 | `definition_cn` 与 `translation_cn` 语义是否一致？释义和翻译应对齐（翻译由 DeepL 提供，作为独立语义参照）。不一致时优先怀疑释义有误 |
+| **lemma 拦截** | 对每个 `lemma != word` 的词，Claude 判断 `resolve_lemma()` 的还原是否正确。Claude **只能拦截**（将 `lemma` 覆写为 `word` 阻止错误还原），**不能发起**（不能对未被还原的词加新还原）。重点拦截：(1) 专有名词被还原（`Mars`→`mar`）；(2) 派生形容词被还原（`disheartened`→`dishearten`）；(3) 独立名词被还原（`constrictor`→`constrict`）。`lemma == word` 的词不处理 |
+
+**lemma 拦截出口校验**（2F 完成后主流程自动执行）：被 Claude 修改过 lemma 的词，新 lemma 必须等于 `word.lower()`——验证 Claude 只做了拦截，没有发起新还原。违反 → 硬错误，驳回。
 
 机械检查（word=`<b>` 标签、IPA 格式、功能词结尾等）由 match_sentences.py 和 sync_anki.py 纵深防御执行，不在 2F。
 

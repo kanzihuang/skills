@@ -96,7 +96,7 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 - **Incremental safety**: sync mode only adds, never modifies existing cards.
 - **Graceful degradation**: audio failures don't block card generation.
 - **Filter-first**: all mechanical filtering happens BEFORE Claude generates content.
-- **POS-gated lemmatization (vocab-book)**: spaCy provides POS tags; lemminflect provides lemmatization. Per-token POS→channel matching (ADJ/VERB/NOUN) — spaCy's lemma output is never used. Proper nouns and derivational adjectives are kept as-is. VBG+amod (participial adjectives like "bewildering") are guarded against reduction.
+- **POS-gated lemmatization (vocab-book)**: spaCy provides POS tags; lemminflect provides lemmatization. Per-token POS→channel matching (ADJ/VERB/NOUN) — spaCy's lemma output is never used. Proper nouns and derivational adjectives are kept as-is. VBG+amod (participial adjectives like "bewildering") are guarded against reduction. Lowercase PROPN tokens are skipped in `build_spacy_map()` (spaCy misclassification — genuine proper nouns are always capitalised).
 - **Truncate before translate**: sentence truncation (≤250 chars) must complete before DeepL/Claude translation. Never translate then truncate — causes sentence/translation mismatch. Verification: Chinese translation must not end with conjunctions like "然后"/"但是".
 - **bookId bridging (vocab-anki)**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching.
 - **IPA from cmudict**: IPA is generated mechanically from the CMU Pronouncing Dictionary. Stress placement follows Maximal Onset Principle. ER0 (unstressed) → /ər/, ER1/ER2 → /ɜːr/. Claude only votes on heteronym disambiguation.
@@ -182,10 +182,26 @@ Two words that lemmatize to the same root (e.g. "boa" + "boas" → both "boa") p
 
 Symptom: card's Word field ≠ `<b>` text in Sentence field, sentence audio doesn't match displayed text. Check: `grep -c '_sent\.mp3' manifest.json` vs actual card count — duplicate filenames mean collision.
 
+### spaCy PROPN misclassification blocks lemmatization
+
+spaCy tags unknown lowercase words as PROPN (proper noun) when their shape matches name-like patterns (short, vowel-rich). PROPN lemmas are left as surface forms, which prevents `lemmatize()` from reducing regular inflections. Example: `"boas"` mid-sentence → spaCy tags as PROPN → `spacy_map["boas"] = "boas"` → `lemmatize()` early-returns `"boas"` instead of `"boa"`.
+
+**Fix (2026-07-06)**: Two changes in `lib/lemmatize.py`:
+1. `build_spacy_map()` skips lowercase PROPN tokens (line 89-92). Genuine proper nouns are always capitalised; lowercase PROPN is always a misclassification. Skipped tokens don't pollute the map, allowing lemminflect to produce valid reductions.
+2. `lemmatize()` guards the `cand == w` early return with COCA membership (line 242-245). Common words (in COCA) still return immediately (protecting derived adjectives like "alluring"). Rare words not in COCA fall through to lemminflect.
+
+Symptom: plural nouns (boas, horns) appear as separate cards from their singular forms (boa, horn) in the same batch — intra-batch dedup failed because WordIds differ. Check: `grep -E '(boas|horns)' filter output` — if lemma equals surface form for a regular plural, this bug is active.
+
+### Regular plural nouns must leave lemma empty
+
+For `-s`/`-es` regular plurals and third-person singular verbs, the `lemma` field in JSON **must be left empty**. `resolve_lemma()` automatically reduces them via lemminflect. Setting `lemma` to the surface form (e.g. `"boas"`) blocks this reduction and creates a duplicate card.
+
+**Step 2F safeguard** (2026-07-06): Claude reviews every `lemma != word` pair and can **intercept** wrong reductions (set `lemma = word` to block). Claude can NEVER initiate a new reduction — this is mechanically enforced: any Claude-modified lemma must equal `word.lower()`.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 380 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Shared tests** live in `lib/tests/` (pytest, 382 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.

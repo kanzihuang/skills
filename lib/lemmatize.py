@@ -87,6 +87,12 @@ def build_spacy_map(text: str) -> dict[str, str]:
         except Exception:
             continue
         for token in doc:
+            # Lowercase words tagged PROPN are spaCy misclassifications —
+            # genuine proper nouns are always capitalised.  Skip them so
+            # they don't pollute the map with surface-form-only entries
+            # that block lemminflect from producing a valid reduction.
+            if token.pos_ == "PROPN" and token.text[0].islower():
+                continue
             surface = token.text.lower()
             lemma = token.lemma_.lower()
             pos = token.pos_
@@ -229,13 +235,17 @@ def lemmatize(
 
     # 4. spaCy map — primary source (POS-aware, zero false positives).
     #    When cand == w, spaCy has determined this is already a canonical
-    #    form (e.g. "alluring" ADJ).  Return immediately — don't let the
-    #    lemminflect fallback re-reduce a derived adjective to its verb stem.
+    #    form (e.g. "alluring" ADJ).  For common words (in COCA) return
+    #    immediately — don't let the lemminflect fallback re-reduce a
+    #    derived adjective to its verb stem.  For rare words not in COCA,
+    #    fall through to lemminflect which may produce a valid reduction.
     if spacy_map and w in spacy_map:
         cand = spacy_map[w]
         if cand == w:
-            return w  # spaCy-declared canonical — no reduction needed
-        if coca_set and cand in coca_set:
+            if coca_set is None or w in coca_set:
+                return w  # common word — trust spaCy
+            # rare word — let lemminflect try (Step 5)
+        elif coca_set and cand in coca_set:
             return cand
 
     # 5. lemminflect multi-channel fallback with COCA gate.

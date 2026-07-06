@@ -3,7 +3,12 @@
 With spacy_map: full POS-aware lemmatization (handles comparatives,
 derivational adjectives, agentive nouns correctly).
 Without spacy_map: VERB+NOUN lemminflect fallback.
-No hardcoded word lists.
+
+Regression tests for lowercase-PROPN filtering:
+- test_boas_lowercase_propn_skipped: lowercase 'boas' (misclassified PROPN)
+  -> not in spacy_map -> lemminflect -> 'boa'
+- test_mars_uppercase_propn_preserved: uppercase 'Mars' (genuine PROPN)
+  -> in spacy_map -> protected from reduction
 """
 
 import pytest
@@ -54,15 +59,15 @@ def spacy_map():
 @pytest.mark.parametrize("word,expected", [
     # Irregular comparatives (spaCy output from test sample)
     ("better", "well"),          # spaCy: well (valid, better is comp of both good & well)
-    ("best", "best"),            # not in sample → lemminflect fallback
+    ("best", "best"),            # not in sample -> lemminflect fallback
     ("worse", "bad"),
     ("worst", "bad"),
-    ("more", "more"),            # not in sample → fallback
-    ("most", "most"),            # not in sample → fallback
-    ("less", "less"),            # not in sample → fallback
-    ("least", "least"),          # not in sample → fallback
-    ("further", "further"),      # not in sample → fallback
-    ("elder", "eld"),             # spaCy→eld, eld IS in Nation 77K set (was NOT in old 19K COCA)
+    ("more", "more"),            # not in sample -> fallback
+    ("most", "most"),            # not in sample -> fallback
+    ("less", "less"),            # not in sample -> fallback
+    ("least", "least"),          # not in sample -> fallback
+    ("further", "further"),      # not in sample -> fallback
+    ("elder", "eld"),             # spaCy->eld, eld IS in Nation 77K set (was NOT in old 19K COCA)
     # Regular comparatives
     ("closest", "close"),
     ("faster", "fast"),
@@ -71,8 +76,8 @@ def spacy_map():
     ("smallest", "small"),     # suffix rule (-est reliable)
     # Derivational adjectives — spaCy tags as ADJ, lemma==surface.
     # Fix: canonical adjective form stays as-is, not reduced to verb stem.
-    ("distinguished", "distinguished"),    # ADJ in sample, spaCy→canonical
-    ("accomplished", "accomplished"),      # ADJ in sample, spaCy→canonical
+    ("distinguished", "distinguished"),    # ADJ in sample, spaCy->canonical
+    ("accomplished", "accomplished"),      # ADJ in sample, spaCy->canonical
     # Derived -ing/-ed adjectives — must NOT be reduced to verb stems
     ("alluring", "alluring"),              # ADJ, not inflection of "allure"
     ("interesting", "interesting"),        # ADJ, not inflection of "interest"
@@ -157,7 +162,7 @@ def test_with_spacy_map(word, expected, coca_set, spacy_map):
     # -est, -iest, -ier always trigger; -er gated by COCA
     ("better", "better"),
     ("best", "best"),
-    ("worse", "worse"),      # lemminflect VERB→(not in COCA), NOUN→(not), falls through
+    ("worse", "worse"),      # lemminflect VERB->(not in COCA), NOUN->(not), falls through
     ("worst", "worst"),      # same
     ("more", "more"),
     ("most", "most"),
@@ -166,13 +171,13 @@ def test_with_spacy_map(word, expected, coca_set, spacy_map):
     ("further", "further"),
     ("closest", "close"),    # suffix rule (-est reliable)
     ("fastest", "fast"),     # suffix rule (-est reliable)
-    ("happier", "happy"),    # suffix rule (-ier → -y)
+    ("happier", "happy"),    # suffix rule (-ier -> -y)
     ("smallest", "small"),   # suffix rule (-est reliable)
     ("distinguished", "distinguish"),
     ("accomplished", "accomplish"),
     # Suffix-rule false positives without spaCy map: Nation cross-validation
     # must reject cross-family reductions.
-    ("forest", "forest"),       # Nation: FOREST≠FORE → reject
+    ("forest", "forest"),       # Nation: FOREST≠FORE -> reject
     ("forever", "forever"),     # Not in COCA, lemminflect doesn't reduce
     ("biggest", "big"),         # Legit comparative, still works
 ])
@@ -313,3 +318,40 @@ def test_spacy_dep_based_adjective_detection():
                     f"  be_to={be_to}"
                 )
                 break
+
+
+def test_boas_lowercase_propn_skipped(coca_set):
+    """Lowercase boas misclassified as PROPN -> skip -> lemminflect -> boa.
+
+    Regression: before the lowercase-PROPN filter, build_spacy_map()
+    collected the PROPN lemma for boas, which blocked lemminflect from
+    producing the correct reduction to boa.
+    """
+    from lib.lemmatize import build_spacy_map, lemmatize
+
+    text = "except boas from the outside and boas from the inside."
+    spacy_map = build_spacy_map(text)
+    assert "boas" not in spacy_map, (
+        f"lowercase PROPN should be skipped, but 'boas' in map: "
+        f"{spacy_map.get('boas')!r}"
+    )
+    result = lemmatize("boas", coca_set, spacy_map)
+    assert result == "boa", f"expected 'boa', got {result!r}"
+
+
+def test_mars_uppercase_propn_preserved(coca_set):
+    """Uppercase 'Mars' is a genuine proper noun -> in spacy_map -> protected.
+
+    Regression: the PROPN filter must only skip lowercase tokens.
+    Uppercase proper nouns (planets, names) must stay in spacy_map
+    so lemmatize() treats them as canonical and does not reduce them.
+    """
+    from lib.lemmatize import build_spacy_map, lemmatize
+
+    text = "Jupiter, Mars, Venus, Earth."
+    spacy_map = build_spacy_map(text)
+    assert "mars" in spacy_map, (
+        "uppercase PROPN should be preserved in spacy_map"
+    )
+    result = lemmatize("mars", coca_set, spacy_map)
+    assert result == "mars", f"expected 'mars', got {result!r}"
