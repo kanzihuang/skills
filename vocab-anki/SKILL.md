@@ -137,7 +137,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 
 - `--anki-dedup same-book`：启用同书 Anki 去重（查已有卡片）；若 Step 0b 确认全库 0 张 Vocabulary Card 笔记，可省略此 flag 跳过 Anki 查询
 - `--book-id <bookId>`：bookId 标识，用于 WordId 构建 + 同书去重目标
-- `--json-out <path>`：将过滤结果写入结构化 JSON 文件，供 Step 2B/2D Claude 读取填充 `excluded` 数组，避免手动转录
+- `--json-out <path>`：将过滤结果写入结构化 JSON 文件，供 Step 2B/2E Claude 读取填充 `excluded` 数组，避免手动转录
 
 输出分为四段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表、`---ANKI_SKIPPED---` 表（Anki 已有卡片，仅当存在时出现）。同时写入对应的结构化 JSON 到 `--json-out` 路径。
 
@@ -173,7 +173,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 
 ## 共享工作流（Step 2A–2H）
 
-> Steps 2A（句子匹配 + 机械预选）、2B（完整性校验 + 截断）、2C（IPA 预填充）、2D（生成释义）、2E（内容验证）、2F（DeepL 翻译）、2G（预下载音频）、2H（确认+同步）与 vocab-book 共享。
+> Steps 2A（句子匹配 + 机械预选）、2B（完整性校验 + 截断）、2C（IPA 预填充）、2D（DeepL 翻译）、2E（生成释义）、2F（内容验证 + 翻译一致性）、2G（预下载音频）、2H（确认+同步）与 vocab-book 共享。
 > **详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`**——Claude 执行到对应步骤时必须 Read 该文件获取完整指令。
 
 共享步骤中关键脚本（`<skill_dir>/lib/` 前缀）：

@@ -99,6 +99,15 @@ def spacy_map():
     ("anger", "anger"),
     ("sacred", "sacred"),
     ("much", "much"),
+    # Suffix-rule false positives: words ending in -est/-er that are
+    # NOT comparatives. Step 3 must not reduce them. Guard: spaCy map
+    # (forest, forever) + Nation cross-validation (FOREST≠FORE, etc.).
+    ("forest", "forest"),
+    ("forever", "forever"),
+    ("honest", "honest"),
+    ("earnest", "earnest"),
+    ("digest", "digest"),
+    ("attest", "attest"),
 ])
 def test_with_spacy_map(word, expected, coca_set, spacy_map):
     result = lemmatize(word, coca_set, spacy_map)
@@ -161,6 +170,11 @@ def test_with_spacy_map(word, expected, coca_set, spacy_map):
     ("smallest", "small"),   # suffix rule (-est reliable)
     ("distinguished", "distinguish"),
     ("accomplished", "accomplish"),
+    # Suffix-rule false positives without spaCy map: Nation cross-validation
+    # must reject cross-family reductions.
+    ("forest", "forest"),       # Nation: FOREST≠FORE → reject
+    ("forever", "forever"),     # Not in COCA, lemminflect doesn't reduce
+    ("biggest", "big"),         # Legit comparative, still works
 ])
 def test_without_spacy_map(word, expected, coca_set):
     result = lemmatize(word, coca_set)

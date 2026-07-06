@@ -83,8 +83,8 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 | `scripts/` | Shared entry-point scripts (match_sentences, translate_deepl, audit_deck) |
 | `data/bnc_coca/` | Nation (2017) word family lists (25 levels × ~1000 families) |
 | `data/cmudict.dict` | CMU Pronouncing Dictionary (135K entries) |
-| `tests/` | Shared pytest suite (~325 tests) for lib modules |
-| `SHARED_WORKFLOW.md` | Shared Claude workflow steps (3.0–4) referenced by both SKILL.md files |
+| `tests/` | Shared pytest suite (~359 tests) for lib modules |
+| `SHARED_WORKFLOW.md` | Shared Claude workflow steps (2A–2H) referenced by both SKILL.md files |
 
 ## Shared Design Principles
 
@@ -108,6 +108,32 @@ Common failure modes discovered through production use. Reference when debugging
 ### Lemmatizer false positives (ADV channel)
 
 `lemmatize_word()` uses lemminflect's VERB → NOUN → ADJ → ADV channels. The ADV channel produces false positives for non-adverb words: "absurd"→"absur" (treats 'd' as comparative suffix), "reflective"→"reflect" (treats 'ive' as adverb suffix). **Fix (2026-07-05)**: ADV channel now gated to words ending in -ly only.
+
+### Lemmatizer false positives (suffix rules, -est/-er)
+
+`lemmatize()` Step 3 (suffix rules) reduces words by stripping -est/-er/-ier/-iest suffixes. Before the fix (2026-07-06), Step 3 returned immediately (`return cand`), bypassing Step 4 (spaCy map) and Step 6 (Nation cross-validation). This caused:
+
+- **forest→fore**: "forest" ends in "est" → stripped to "for" → dropped-e rule adds "e" → "fore". spaCy map has correct answer but Step 3 returned before Step 4 ran.
+- **forever→forev**: "forever" not in COCA → -er stripped → "forev" (not a real word). Pytest's spacy_map didn't include "forever", and Nation list doesn't have "forever" as a headword.
+
+**Fix (2026-07-06)**: Three changes:
+1. Step 3 stores candidate in `suffix_candidate` instead of returning — lets later steps (spaCy map, Nation) validate
+2. COCA plausibility gate: candidate must be a real English word (`cand in coca_set`) before Step 3 accepts it — rejects "forev"
+3. Step 5 inherits `suffix_candidate` as initial value: `reduced = suffix_candidate or w`
+
+Symptom: deck has cards with Word="fore" (should be "forest") or "forev" (should be "forever"). Check: `grep -E '^fore|^forev'` in filter output.
+
+### DeepL translation now runs before Claude definitions
+
+**Change (2026-07-06)**: Step 2D (DeepL) and Step 2E (Claude definitions) swapped — translation now completes before Claude generates `definition_cn`. This gives Claude the Chinese translation as context for word-sense disambiguation. Step 2F (validation) adds a `definition_cn ↔ translation_cn` consistency check.
+
+### DeepL failure handling
+
+**Change (2026-07-06)**: `translate_deepl.py` now classifies exceptions and retries smartly:
+- Network/429 → retry with context
+- 4xx (possible context issue) → retry without context
+- Auth/Quota → immediate `sys.exit(1)`
+- All failures after 1 retry → `sys.exit(1)` hard abort
 
 Symptom: COCA-valid words get excluded by filter_pipeline (absurd→absur not in COCA) or get wrong IPA (reflective→reflect IPA).
 Check: `python3 -c "import lemminflect; print(lemminflect.getLemma('WORD', 'ADV'))"` — if it returns a shorter non-word, it's this bug.
@@ -139,7 +165,7 @@ Step 2B truncation must produce **continuous substrings** of the source text —
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 350 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Shared tests** live in `lib/tests/` (pytest, 359 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.

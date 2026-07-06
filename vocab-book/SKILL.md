@@ -117,9 +117,9 @@ cat /tmp/<safe_title>-*-full.txt | \
 - `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配 + 预选最佳候选句（Step 2A，PySBD 分句 + `select_best_sentence()` 三档选择）
 - **Step 2B**: 完整性校验 + 语义截断（Claude，1 agent）
 - **Step 2C**: IPA 预填充（cmudict 批量生成）
-- **Step 2D**: 生成释义 + IPA（Claude，N agents 并行，≤25 词/agent）
-- **Step 2E**: 内容验证 — POS 对齐 + 释义准确（Claude，1 agent）
-- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2F，2E 之后），支持 `--source-text` 上下文参数和自动去重
+- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2D，2C 之后、2E 之前），支持 `--source-text` 上下文参数和自动去重
+- **Step 2E**: 生成释义 + IPA（Claude，N agents 并行，≤25 词/agent）。`translation_cn` 可用时作为义项参考
+- **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent）
 - `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步（Step 2G + Step 2H）
 
 **全文模式特有**：

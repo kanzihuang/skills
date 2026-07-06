@@ -190,6 +190,9 @@ def lemmatize(
     # 3. Regular -est/-er/-ier/-iest patterns.
     #    Only apply when the word is NOT already in COCA, preventing false
     #    reductions like beer→bee, anger→ange, sacred→sacre.
+    #    Candidate is stored in suffix_candidate and validated by later steps
+    #    (spaCy map, Nation cross-validation) — no early return here.
+    suffix_candidate = ""
     if w not in coca_set or w.endswith("est") or w.endswith("iest") or w.endswith("ier"):
         for sfx, slen in [("iest", 4), ("est", 3), ("ier", 3), ("er", 2)]:
             if w.endswith(sfx) and len(w) > slen + 1:
@@ -215,7 +218,13 @@ def lemmatize(
                         if cand_e in coca_set and cand_e != w:
                             cand = cand_e
                 if cand != w and len(cand) < len(w):
-                    return cand
+                    # COCA plausibility gate: the candidate must be a
+                    # recognizable English word.  Prevents false reductions
+                    # like forever→forev (stem "forev" not in COCA) while
+                    # allowing faster→fast, bigger→big, closest→close.
+                    if coca_set and cand not in coca_set:
+                        break
+                    suffix_candidate = cand
                 break
 
     # 4. spaCy map — primary source (POS-aware, zero false positives).
@@ -235,7 +244,7 @@ def lemmatize(
     except ImportError:
         return jl or w
 
-    reduced = w
+    reduced = suffix_candidate or w
 
     # Agentive-noun guard: spaCy POS check for ADJ/ADV channels.
     # Nouns like walker, robber, baker are falsely reduced by lemminflect

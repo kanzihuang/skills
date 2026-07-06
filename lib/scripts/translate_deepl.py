@@ -22,9 +22,19 @@ import json
 import os
 import re
 import sys
+import time
 
 import deepl
 import pysbd
+
+# Exception types for smart retry
+from deepl import (
+    AuthorizationException,
+    ConnectionException,
+    DeepLException,
+    QuotaExceededException,
+    TooManyRequestsException,
+)
 
 DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY", "")
 if not DEEPL_API_KEY:
@@ -32,6 +42,31 @@ if not DEEPL_API_KEY:
     sys.exit(1)
 
 translator = deepl.Translator(DEEPL_API_KEY)
+
+MAX_RETRIES = 1  # retry once after initial failure
+
+
+def _classify_error(e: Exception) -> str:
+    """Classify a DeepL exception for smart retry decisions.
+
+    Returns one of:
+      - "fatal"              → abort immediately (auth, quota)
+      - "retry_without_ctx"  → retry without context (4xx likely context-related)
+      - "retry_with_ctx"     → retry with context (transient: network, 429, 5xx)
+    """
+    if isinstance(e, (QuotaExceededException, AuthorizationException)):
+        return "fatal"
+    if isinstance(e, (ConnectionException, TooManyRequestsException)):
+        return "retry_with_ctx"
+    if isinstance(e, DeepLException):
+        status = getattr(e, "http_status_code", None)
+        if status and 400 <= status < 500 and status != 429:
+            # 4xx client error — request may be too large with context
+            return "retry_without_ctx"
+        # 5xx or unknown — transient server issue
+        return "retry_with_ctx"
+    # Unknown exception — conservative: try without context
+    return "retry_without_ctx"
 def _build_sentence_regex(sentence: str) -> str:
     """Build a regex from sentence words joined by \\s+ for fuzzy matching.
 
@@ -169,48 +204,74 @@ def main():
     print(f"Translating {total} sentences via DeepL (batch size {BATCH_SIZE})...", file=sys.stderr)
 
     translated_count = 0
-    errors = 0
 
     for batch_start in range(0, total, BATCH_SIZE):
         batch = to_translate[batch_start:batch_start + BATCH_SIZE]
-        texts = [t[0] for t in batch]
         # Split: items with context go individually, items without
         # go as a batch for speed.
         ctx_batch = [(txt, ctx) for txt, ctx in batch if ctx]
         no_ctx_batch = [(txt, ctx) for txt, ctx in batch if not ctx]
 
-        # Batch items without context
+        # Batch items without context (retry with backoff)
         if no_ctx_batch:
-            try:
-                no_ctx_texts = [t[0] for t in no_ctx_batch]
-                translations = translate_batch(no_ctx_texts)
-                for (plain, _), trans in zip(no_ctx_batch, translations):
-                    for idx in unique[plain][0]:
-                        words[idx]["translation_cn"] = trans
-                    translated_count += 1
-            except Exception as e:
-                errors += 1
-                print(f"  Batch failed: {e}", file=sys.stderr)
-
-        # Individual items with context
-        for (plain_text, context) in ctx_batch:
-            try:
-                results = translate_batch([plain_text], context=context)
-                for idx in unique[plain_text][0]:
-                    words[idx]["translation_cn"] = results[0]
-                translated_count += 1
-            except Exception:
-                errors += 1
-                # Retry without context
+            no_ctx_texts = [t[0] for t in no_ctx_batch]
+            success = False
+            for attempt in range(MAX_RETRIES + 1):
                 try:
-                    results = translate_batch([plain_text])
+                    translations = translate_batch(no_ctx_texts)
+                    for (plain, _), trans in zip(no_ctx_batch, translations):
+                        for idx in unique[plain][0]:
+                            words[idx]["translation_cn"] = trans
+                        translated_count += 1
+                    success = True
+                    break
+                except (QuotaExceededException, AuthorizationException) as e:
+                    print(f"\nFATAL: {e}", file=sys.stderr)
+                    sys.exit(1)
+                except Exception:
+                    if attempt < MAX_RETRIES:
+                        time.sleep(1)
+                        continue
+            if not success:
+                print(
+                    f"\nFATAL: batch translation failed after "
+                    f"{MAX_RETRIES} retries", file=sys.stderr,
+                )
+                sys.exit(1)
+
+        # Individual items with context (smart retry)
+        for (plain_text, context) in ctx_batch:
+            success = False
+            current_context = context
+            for attempt in range(MAX_RETRIES + 1):
+                try:
+                    kwargs = {}
+                    if current_context:
+                        kwargs["context"] = current_context
+                    results = translate_batch([plain_text], **kwargs)
                     for idx in unique[plain_text][0]:
                         words[idx]["translation_cn"] = results[0]
                     translated_count += 1
-                except Exception:
-                    errors += 1
-                    print(f"  [{words[unique[plain_text][0][0]].get('word', '?')}] translation failed",
-                          file=sys.stderr)
+                    success = True
+                    break
+                except (QuotaExceededException, AuthorizationException) as e:
+                    print(f"\nFATAL: {e}", file=sys.stderr)
+                    sys.exit(1)
+                except Exception as e:
+                    if attempt >= MAX_RETRIES:
+                        break  # retries exhausted
+                    action = _classify_error(e)
+                    if action == "retry_without_ctx":
+                        current_context = ""
+                    # else: retry_with_ctx → keep current_context, sleep & retry
+                    time.sleep(1)
+            if not success:
+                w = words[unique[plain_text][0][0]].get("word", "?")
+                print(
+                    f"\nFATAL: DeepL translation failed for '{w}' "
+                    f"after {MAX_RETRIES} retries", file=sys.stderr,
+                )
+                sys.exit(1)
 
         # Progress
         progress = min(batch_start + BATCH_SIZE, total)
@@ -224,7 +285,7 @@ def main():
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     char_count = sum(len(t[0]) for t in to_translate)
-    print(f"Done: {translated_count} unique translated, {errors} failed, "
+    print(f"Done: {translated_count} unique translated, "
           f"~{char_count} chars used of 500,000 monthly quota",
           file=sys.stderr)
 
