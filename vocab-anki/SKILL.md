@@ -173,23 +173,22 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 
 ## 共享工作流（Step 2A–2H）
 
-> Steps 2A（句子匹配 + 机械预选）、2B（完整性校验 + 截断，不可绕过）、2C（DeepL 翻译）、2D（生成释义 + lemma）、2E（cmudict IPA 生成）、2F（内容验证，不可绕过）、2G（预下载音频）、2H（确认+同步）与 vocab-book 共享。
+> Steps 2A（句子匹配 + POS 分析 + lemma + IPA）、2B（完整性校验 + 截断，不可绕过）、2C（DeepL 翻译）、2E（生成释义，不碰 lemma）、2F（内容验证，不可绕过）、2G（预下载音频）、2H（确认+同步）与 vocab-book 共享。
 > **详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`**——Claude 执行到对应步骤时必须 Read 该文件获取完整指令。
 
 共享步骤中关键脚本（`<skill_dir>/lib/` 前缀）：
-- `lib/scripts/match_sentences.py` — 机械句子匹配 + `select_best_sentence()` 三档预选，**自动跳过序言**
+- `lib/scripts/match_sentences.py` — 句子匹配 + per-sentence spaCy POS 分析 + (lemma,pos) 分组 + cmudict IPA
 - `lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C）
-- `lib/sync_anki.py` — 音频预下载 + 同步
+- `lib/sync_anki.py` — 音频预下载 + 同步（根据 `target_offset` 拼接 `<b>` 标签）
 - `lib/scripts/audit_deck.py` — 同步后审计
 - `lib/scripts/check_step_completed.py` — 步骤完成检查点（Step 2B/2F 后运行）
 
 **划线模式特有调整**：
 - `<tmp_id>` 使用微信读书 `bookId`
-- JSON 传入 `"book_id"` 字段，sync_anki.py 将其作为命名空间标识用于 WordId 构建和音频文件命名
-- WordId = `{lemma}_{bookId}`，音频文件 = `{lemma}_{bookId}_word.mp3` / `{lemma}_{bookId}_sent.mp3`
+- WordId = `{lemma}_{pos}_{bookId}`，音频文件 = `{lemma}_{pos}_{bookId}_word.mp3` / `_sent.mp3`
 - 句子匹配时利用 JSON 中 `in_coca[].chapters` 字段做章节优先匹配
-- Anki 去重已在 Step 1d 完成（同书跨次去重）；`sync_anki.py` 另在音频生成前执行批内 WordId 去重（`seen_word_ids`），作为同批次内同 lemma 词的安全网
-- 牌组名：`{English Title} ({Author})`（无分级后缀）。**书名和作者必须用英文**——若微信读书返回中文标题（如"小王子（英文版）"），改用英文原版标题。vocab-book 的分级后缀（`- COCA X-Y`）天然与此区分，不会重名
+- Anki 去重已在 Step 1d 完成；`sync_anki.py` 另在音频生成前执行批内 WordId 去重
+- 牌组名：`{English Title} ({Author})`（无分级后缀）
 
 ## 异常处理
 
@@ -215,11 +214,11 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 | 脚本 | 用途 |
 |------|------|
 | `filter_pipeline.py` | 合并过滤流水线 — 标点/大小写清理 → lemmatize → Anki 去重 → COCA 检查 |
-| `lib/sync_anki.py` | 增量同步到 Anki — `resolve_lemma()` 原形还原 |
+| `lib/sync_anki.py` | 增量同步到 Anki — 信任 JSON lemma，`target_offset` 拼接 `<b>` 标签 |
 | `lib/ankiconnect.py` | AnkiConnect 客户端模块 |
 | `lib/utils.py` | 共享工具 — lemmatize_word, edge_tts_bytes/file, safe_filename |
 | `lib/coca.py` | BNC/COCA 词族等级查询（Nation 2017）|
-| `lib/scripts/match_sentences.py` | 机械句子匹配（自动跳过序言） |
+| `lib/scripts/match_sentences.py` | 句子匹配 + POS 分析 + lemma + IPA |
 | `lib/scripts/translate_deepl.py` | DeepL 翻译 |
 | `lib/scripts/audit_deck.py` | 牌组质量审计 |
 | `lib/scripts/check_step_completed.py` | 步骤完成检查点 |

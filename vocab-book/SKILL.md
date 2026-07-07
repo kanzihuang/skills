@@ -112,37 +112,31 @@ cat /tmp/<safe_title>-*-full.txt | \
 ```
 
 脚本内流水线：
-1. spaCy 健康检查：验证 spaCy + `en_core_web_sm` 可用，失败自动修复，修复失败则终止
-2. 分词 + 词形还原：spaCy per-token POS 标注 → lemminflect 按 POS 通道还原
-   - ADJ 比较级/最高级 (`JJR/JJS/RBR/RBS`) → lemminflect ADJ 通道
-   - VERB (`VB*`) → lemminflect VERB 通道
-   - NOUN (`NN*`) → lemminflect NOUN 通道
-   - 其他 POS (ADJ/ADV/PROPN/…) → 保持原形
-   - **VBG-amod 守卫**：VBG + `amod` 依赖关系 = 分词形容词（如 "bewildering complexity"），保持原形不还原。仅 `amod` 触发——`ROOT`/`xcomp`（动词谓语）照常还原
-3. COCA 范围过滤 + 等级标注（`coca_level`: 1-25）
-4. 生成 UUID 后缀（`uuid.uuid4().hex[:12]`），写入 JSON `suffix` 字段
-5. JSON 输出（含 `in_coca[]`、`excluded[]`、`suffix`、`summary`）
+1. spaCy 健康检查：验证 spaCy + `en_core_web_sm` 可用，失败自动修复
+2. 分词去重：spaCy tokenization → 唯一 surface form 集合
+3. `in_coca(surface)`：直接查 surface form 是否在 BNC/COCA 25000 词族中
+4. COCA 范围过滤 + 等级标注（`coca_level`: 1-25）
+5. 生成 UUID 后缀（`uuid.uuid4().hex[:12]`），写入 JSON `suffix` 字段
+6. JSON 输出（含 `in_coca[]`、`excluded[]`、`suffix`、`summary`）
+
+不做 lemmatization——最终 lemma 由 `match_sentences.py` 从具体例句判定。
 
 ### Steps 2A–2H: 句子匹配 / 内容生成 / 翻译 / 音频 / 同步
 
 > 以下步骤与 vocab-anki 共享。详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`。
 
 关键路径（`<skill_dir>` 内 `lib/` 前缀）：
-- `<skill_dir>/lib/scripts/match_sentences.py` — 机械句子匹配 + 预选最佳候选句（Step 2A，PySBD 分句 + `select_best_sentence()` 三档选择，**自动跳过序言**）
-- **Step 2B**: 完整性校验 + 语义截断（Claude，1 agent，**不可绕过**）
-- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C），支持 `--source-text` 上下文参数和自动去重
-- **Step 2D**: 生成释义 + lemma + 异读词投票（Claude，N agents 并行，≤25 词/agent）
-- **Step 2E**: cmudict IPA 生成（2D 之后，从最终 lemma 查 IPA；cmudict miss 由 2F 兜底）
+- `<skill_dir>/lib/scripts/match_sentences.py` — 句子匹配 + per-sentence spaCy POS 分析 + (lemma,pos) 分组 + cmudict IPA（Step 2A，一站式机械分析）
+- **Step 2B**: 完整性校验 + 语义截断（Claude，1 agent，**不可绕过**，目标词由 `target_offset` 定位）
+- `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C）
+- **Step 2E**: 生成释义 + 补 cmudict 未覆盖 IPA + 异读词投票（Claude，N agents 并行，≤25 词/agent，**不碰 lemma**）
 - **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent，**不可绕过**）
-- `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步（Step 2G + Step 2H）
-- `<skill_dir>/lib/scripts/check_step_completed.py` — 步骤完成检查点（2B/2F 后运行）
-- `<skill_dir>/lib/scripts/extract_chapter.py` — 章节提取（可选）
+- `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步（Step 2G + Step 2H，根据 `target_offset` 拼接 `<b>` 标签）
 
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
-- JSON 传入 `"suffix"` 字段（**不需要** `"book_id"`），sync_anki.py 自动识别并作为命名空间标识用于 WordId 构建和音频文件命名
-- WordId = `{safe_filename(lemma)}_{suffix}`（按词族去重，同词不同屈折形式映射到同一张卡片。同批次内同词族的词只取第一个，第二个起跳过——先出现的例句和释义成为卡片内容），音频文件命名 = `{safe_filename(lemma)}_{suffix}_word.mp3` / `{safe_filename(lemma)}_{suffix}_sent.mp3`
-- 同步时自动频次分级（`compute_bands()`）：COCA 级别 → ≤5 段 → `{English Title} ({Author}) - 分级词汇::{English Title} ({Author}) - COCA X-Y`。**书名和作者必须用英文**。词汇量不足（<100）或仅 1 个 COCA 级别时退回无分级，所有卡片进入父牌组 `{English Title} ({Author}) - 分级词汇`——后缀 ` - 分级词汇` 仍然存在，与 vocab-anki 扁平牌组名区分，不会重名
+- WordId = `{safe_filename(lemma)}_{pos}_{suffix}`；音频命名 = `{safe_filename(lemma)}_{pos}_{suffix}_word.mp3` / `_sent.mp3`
+- 同步时自动频次分级（`compute_bands()`）
 - **不做 Anki 去重**（filter_fulltext.py 不连接 AnkiConnect）
 
 ## 异常处理
@@ -165,10 +159,10 @@ cat /tmp/<safe_title>-*-full.txt | \
 
 ## 设计原则
 
-- **零微信读书依赖**：不调用任何 WeRead API，不要求 WEREAD_API_KEY
-- **UUID 后缀隔离**：每次运行生成唯一 UUID，跨次 WordId 和音频文件名永不冲突。批内同词族去重（`seen_word_ids`）在 `sync_anki.py` 音频生成前执行，防止同批次内同 lemma 词的音频文件名冲突
-- **一次性**：不做跨次去重，每次独立运行。同次内按词族去重——同词族不同屈折形式只创建一张卡片
-- **序言自动过滤**：`match_sentences.py` 自动检测并跳过前言（标题页、作者简介、编辑导语），仅搜索正文内容。可选章节提取（`extract_chapter.py`）用于按章节裁剪
-- **Claude + Python 分离**：Claude 做知识工作（释义、句子审核），Python 做机械工作（TTS、同步、过滤）
-- **例句来自源文本机械匹配**：不依赖 Claude 记忆，从书中实际文本提取
-- **质量门禁不可绕过**：Step 2B（句子审核）和 Step 2F（内容验证）无 SKIP 条件。`check_step_completed.py` 执行后验证
+- **零微信读书依赖**：不调用任何 WeRead API
+- **UUID 后缀隔离**：每次运行生成唯一 UUID，WordId = `{lemma}_{pos}_{suffix}` 确保跨批/跨 POS 不冲突
+- **per-sentence POS 分析**：spaCy 在具体句子上判定词性，不全局投票。lemma 机械化产出，Claude 不参与
+- **序言自动过滤**：`match_sentences.py` 自动跳过前言
+- **Claude + Python 分离**：Claude 做知识工作（释义、句子审核），Python 做机械工作（POS、lemma、TTS、同步、过滤、IPA）
+- **例句来自源文本机械匹配**：不依赖 Claude 记忆
+- **质量门禁不可绕过**：Step 2B（句子审核）和 Step 2F（内容验证）无 SKIP 条件

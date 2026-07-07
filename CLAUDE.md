@@ -47,7 +47,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 | `lib/sync_anki.py` | Incremental sync to Anki via AnkiConnect |
 | `lib/ankiconnect.py` | AnkiConnect JSON-RPC client library |
 | `lib/utils.py` | Shared utilities: lemmatize_word, edge_tts_bytes/file, safe_filename, print_progress |
-| `lib/scripts/match_sentences.py` | Mechanical sentence matching with `<b>` tagging |
+| `lib/scripts/match_sentences.py` | Sentence matching + per-sentence spaCy POS analysis + (lemma,pos) grouping + cmudict IPA |
 | `lib/scripts/translate_deepl.py` | DeepL batch translation with context support and sentence dedup |
 | `lib/scripts/audit_deck.py` | Deck quality audit |
 | `lib/SHARED_WORKFLOW.md` | Shared workflow steps (2A–2H) with vocab-book |
@@ -63,7 +63,7 @@ Extract vocabulary from any English book's full text, generate Anki flashcard de
 **Scripts (skill-specific):**
 | Script | Purpose |
 |--------|---------|
-| `filter_fulltext.py` | Full-text filter pipeline — spaCy POS tagging → lemminflect per-channel (ADJ/VERB/NOUN) → COCA range filter + level annotation. spaCy health auto-repair on startup. Generates UUID suffix. No AnkiConnect dependency |
+| `filter_fulltext.py` | Full-text COCA filter — spaCy tokenization, surface-form-only `in_coca()` lookup, COCA range + level annotation. No lemmatization. Generates UUID suffix. No AnkiConnect dependency |
 
 **Shared scripts:** Same `lib/` scripts as vocab-anki.
 
@@ -76,7 +76,7 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 | File | Purpose |
 |------|---------|
 | `coca.py` | BNC/COCA word family lookup (Nation 2017), 3-tier strategy |
-| `lemmatize.py` | Two-tier lemmatization (spaCy POS gate, lemminflect fallback). Used by vocab-list; vocab-book uses spaCy per-token POS + lemminflect directly in filter_fulltext.py |
+| `lemmatize.py` | Two-tier lemmatization (spaCy POS gate, lemminflect fallback). Used by vocab-list and sync_anki.py fallback path |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client |
 | `utils.py` | Shared utilities: TTS, lemmatize_word, safe_filename, print_progress |
 | `sync_anki.py` | Main sync orchestrator (uses relative imports from lib package) |
@@ -90,16 +90,17 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 
 See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principles:
 
-- **Separation of concerns**: Claude does knowledge work (sentences, definitions, IPA heteronym voting), DeepL does mechanical translation, Python does mechanical work (lemmatization, TTS, Anki sync).
-- **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 2A). No fabricated or dictionary sentences. Source text unavailable → skip the batch. Sentence selection is also mechanical: `match_sentences.py` pre-selects the best candidate via `select_best_sentence()` (three-tier: sweet-spot 30-250 > long > very-short) before Step 2B, saving Claude context and eliminating selection variability.
+- **Separation of concerns**: Claude does knowledge work (sentence review, definitions, IPA for heteronyms/cmudict misses), DeepL does mechanical translation, Python does mechanical work (POS analysis, lemmatization, TTS, Anki sync, cmudict IPA).
+- **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 2A). No fabricated or dictionary sentences. Source text unavailable → skip the batch. Sentence selection is also mechanical: `match_sentences.py` does per-sentence spaCy POS analysis, groups by (lemma,pos), and selects the best candidate via `select_best_sentence()` (three-tier: sweet-spot 30-250 > long > very-short).
 - **Source-truth-only translations**: Translations must be of the mechanically matched sentence. Never substitute a translation from memory even if you recognize the passage — this causes sentence/translation mismatch.
 - **Incremental safety**: sync mode only adds, never modifies existing cards.
 - **Graceful degradation**: audio failures don't block card generation.
 - **Filter-first**: all mechanical filtering happens BEFORE Claude generates content.
-- **POS-gated lemmatization (vocab-book)**: spaCy provides POS tags; lemminflect provides lemmatization. Per-token POS→channel matching (ADJ/VERB/NOUN) — spaCy's lemma output is never used. Proper nouns and derivational adjectives are kept as-is. VBG+amod (participial adjectives like "bewildering") are guarded against reduction. Lowercase PROPN tokens are skipped in `build_spacy_map()` (spaCy misclassification — genuine proper nouns are always capitalised).
-- **Truncate before translate**: sentence truncation (≤250 chars) must complete before DeepL/Claude translation. Never translate then truncate — causes sentence/translation mismatch. Verification: Chinese translation must not end with conjunctions like "然后"/"但是".
-- **bookId bridging (vocab-anki)**: `WordId = {lemma}_{bookId}` enables precise Anki ↔ WeRead matching.
-- **IPA from cmudict**: IPA is generated mechanically from the CMU Pronouncing Dictionary. Stress placement follows Maximal Onset Principle. ER0 (unstressed) → /ər/, ER1/ER2 → /ɜːr/. Claude only votes on heteronym disambiguation.
+- **Per-sentence POS-gated lemmatization**: `match_sentences.py` runs spaCy on each selected sentence to determine POS and lemma. Multi-signal adjective detection (POS=ADJ, adjectival dep, VBG+amod, be-to pattern, spacy_lemma==word, PROPN guard, -ly adverb guard). Falls through to lemminflect with the correct POS channel. No global voting — POS is determined from the specific sentence context. Claude does NOT set lemma (it is mechanically authoritative).
+- **Truncate before translate**: sentence truncation (≤250 chars) must complete before DeepL/Claude translation. Never translate then truncate — causes sentence/translation mismatch.
+- **bookId bridging (vocab-anki)**: `WordId = {lemma}_{pos}_{bookId}` enables precise Anki ↔ WeRead matching and prevents cross-POS collisions.
+- **WordId isolation (vocab-book)**: `WordId = {lemma}_{pos}_{suffix}` — UUID suffix isolates cards from other batches; POS prevents same-lemma different-POS collisions.
+- **IPA from cmudict**: IPA is generated mechanically by `match_sentences.py` from the CMU Pronouncing Dictionary. Claude only provides IPA for cmudict misses and heteronym disambiguation.
 
 ## Known Pitfalls & Troubleshooting
 
@@ -151,13 +152,13 @@ Check: `python3 -c "import lemminflect; print(lemminflect.getLemma('WORD', 'ADV'
 
 Internet Archive `.txt` files often contain double-space OCR artifacts. `match_sentences.py` now normalizes whitespace, but if sentences from other sources have double spaces, verify the source text quality first. Use `grep -c '  ' source.txt` to check.
 
-### `<b>` case sensitivity
+### `<b>` tags added at sync time
 
-`<b>Absurd</b>` (sentence-initial capital) vs `word="absurd"` (lowercase) is a legitimate difference. The validation is case-insensitive. When a word appears at sentence start, set `word` to the canonical lowercase form; the `<b>` tag preserves the sentence-surface capitalization.
+**Change (2026-07-07)**: Sentences are stored WITHOUT `<b>` tags in the JSON. `sync_anki.py` inserts `<b>` tags at display time using `target_offset`. Sentence-initial capitalization (e.g. "Absurd") is preserved in the sentence text; the `word` field stores the canonical lowercase form. Validation checks `target_offset` instead of parsing `<b>` tags.
 
-### Derived adjectives and IPA
+### Lemma is now mechanical — Claude does NOT set lemma
 
-For -ive, -ous, -ful derived adjectives (reflective, tremendous, beautiful), `resolve_lemma` may reduce them to verb stems. When the word IS in COCA as-is, set `lemma` explicitly to prevent reduction. IPA must match the card-displayed lemma, not the reduced stem — always verify with `_cmu_ipa(lemma)` after setting lemma.
+**Change (2026-07-07)**: Lemma is determined by `match_sentences.py` from per-sentence spaCy POS analysis + lemminflect. Claude no longer participates in lemma decisions (Step 2D/2E). The `lemma` field in the JSON must not be modified by Claude.
 
 ### Exact-form-only sentence matching
 
@@ -182,21 +183,13 @@ Two words that lemmatize to the same root (e.g. "boa" + "boas" → both "boa") p
 
 Symptom: card's Word field ≠ `<b>` text in Sentence field, sentence audio doesn't match displayed text. Check: `grep -c '_sent\.mp3' manifest.json` vs actual card count — duplicate filenames mean collision.
 
-### spaCy PROPN misclassification blocks lemmatization
+### POS analysis is per-sentence, not global voting
 
-spaCy tags unknown lowercase words as PROPN (proper noun) when their shape matches name-like patterns (short, vowel-rich). PROPN lemmas are left as surface forms, which prevents `lemmatize()` from reducing regular inflections. Example: `"boas"` mid-sentence → spaCy tags as PROPN → `spacy_map["boas"] = "boas"` → `lemmatize()` early-returns `"boas"` instead of `"boa"`.
+**Change (2026-07-07)**: `match_sentences.py` runs spaCy on each selected sentence (not the full text). POS is determined from the specific sentence context, not aggregated via majority vote. Lowercase PROPN tokens are treated as NOUN for lemmatization. `build_spacy_map()` is no longer used.
 
-**Fix (2026-07-06)**: Two changes in `lib/lemmatize.py`:
-1. `build_spacy_map()` skips lowercase PROPN tokens (line 89-92). Genuine proper nouns are always capitalised; lowercase PROPN is always a misclassification. Skipped tokens don't pollute the map, allowing lemminflect to produce valid reductions.
-2. `lemmatize()` guards the `cand == w` early return with COCA membership (line 242-245). Common words (in COCA) still return immediately (protecting derived adjectives like "alluring"). Rare words not in COCA fall through to lemminflect.
+### WordId includes POS for cross-POS collision prevention
 
-Symptom: plural nouns (boas, horns) appear as separate cards from their singular forms (boa, horn) in the same batch — intra-batch dedup failed because WordIds differ. Check: `grep -E '(boas|horns)' filter output` — if lemma equals surface form for a regular plural, this bug is active.
-
-### Regular plural nouns must leave lemma empty
-
-For `-s`/`-es` regular plurals and third-person singular verbs, the `lemma` field in JSON **must be left empty**. `resolve_lemma()` automatically reduces them via lemminflect. Setting `lemma` to the surface form (e.g. `"boas"`) blocks this reduction and creates a duplicate card.
-
-**Step 2F safeguard** (2026-07-06): Claude reviews every `lemma != word` pair and can **intercept** wrong reductions (set `lemma = word` to block). Claude can NEVER initiate a new reduction — this is mechanically enforced: any Claude-modified lemma must equal `word.lower()`.
+**Change (2026-07-07)**: `WordId = {lemma}_{pos}_{suffix}` (vocab-book) or `{lemma}_{pos}_{bookId}` (vocab-anki). POS is included to prevent collisions when the same lemma appears with different parts of speech (e.g. "walk" as NOUN vs VERB).
 
 ## Testing
 
