@@ -59,7 +59,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 > - 语法不完整的句子片段
 > - 语义不匹配的候选句
 
-**目标词由 `target_offset` 定位**（不含 `<b>` 标签）。其余逻辑不变：完整性检查 → 长句截断 → candidates 回退 → 源文本手动提取。
+**目标词由 `target_offset` 定位**（不含 `<b>` 标签）。其余逻辑不变：完整性检查 → 长句截断 → 源文本手动提取。
 
 截断规则不变：
 - 目标 ≤250 字符，语法完整，含生词上下文
@@ -204,8 +204,7 @@ cd <skill_dir> && .venv/bin/python -u -m lib.sync_anki \
       "char_offset": 5477,
       "ipa": "/əˈstaʊndɪd/",
       "definition_cn": "[adj.] 大吃一惊的，震惊的",
-      "translation_cn": "当我听到那个小家伙...",
-      "candidates": [...]
+      "translation_cn": "当我听到那个小家伙..."
     }
   ],
   "excluded": [...]

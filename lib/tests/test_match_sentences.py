@@ -1,15 +1,15 @@
-"""Test match_sentences.py — PySBD segmentation + candidate extraction.
+"""Test match_sentences.py — PySBD segmentation + _better() comparison.
 
 In the new design, sentences are stored WITHOUT <b> tags. Each result
-has 'target_offset', 'matched_form', and 'text' fields.
+has 'target_offset', 'matched_form', and 'text' fields. No candidates
+array — only the best entry per (lemma, pos) is retained.
 """
 
 import pytest
 from lib.scripts.match_sentences import (
     split_sentences,
-    find_all_sentences,
     hard_truncate,
-    select_best_sentence,
+    _better,
     _clean_quote_artifact,
 )
 
@@ -51,58 +51,6 @@ def test_hard_truncate_long_sentence_cut_at_word_boundary():
     assert not result.endswith(" ") or result[-1] != " "
 
 
-# ── Candidate extraction ──
-
-
-def test_candidates_in_original_order():
-    text = (
-        "The little prince was abashed. "
-        "He felt very abashed indeed. "
-        "Completely abashed, he looked away."
-    )
-    results = find_all_sentences(text, ["abashed"])
-    assert len(results) == 3
-    assert "little prince" in results[0]["text"]
-    assert "very" in results[1]["text"]
-    assert "Completely" in results[2]["text"]
-
-
-def test_candidates_not_capped():
-    """All candidates are returned (no MAX_CANDIDATES cap)."""
-    text = ". ".join([f"Sentence {i} with the word test." for i in range(10)])
-    results = find_all_sentences(text, ["test"])
-    assert len(results) == 10
-
-
-def test_word_not_in_text_returns_empty():
-    results = find_all_sentences("No match here.", ["abashed"])
-    assert results == []
-
-
-def test_target_offset_and_matched_form():
-    """target_offset marks the word position, matched_form is the surface form."""
-    text = "The little prince was abashed."
-    results = find_all_sentences(text, ["abashed"])
-    assert len(results) == 1
-    assert "abashed" in results[0]["text"]
-    assert results[0]["target_offset"] >= 0
-    assert results[0]["matched_form"] == "abashed"
-
-
-def test_case_insensitive_match_preserves_original():
-    """Matching is case-insensitive; matched_form preserves original case."""
-    text = "ABASHED, he looked away."
-    results = find_all_sentences(text, ["abashed"])
-    assert len(results) == 1
-    assert results[0]["matched_form"] == "ABASHED"
-
-
-def test_duplicate_sentences_deduplicated():
-    text = "He was abashed. He was abashed."
-    results = find_all_sentences(text, ["abashed"])
-    assert len(results) == 1
-
-
 # ── _clean_quote_artifact ──
 
 def test_quote_artifact_no_leading_whitespace():
@@ -117,57 +65,66 @@ def test_quote_artifact_clean_sentence_unchanged():
     assert _clean_quote_artifact('"Hello," he said.') == '"Hello," he said.'
 
 
-# ── select_best_sentence three-tier selection ──
+# ── _better() three-tier comparison ──
 
 
-class TestSelectBestSentence:
+def _cand(length):
+    """Helper: build a minimal candidate dict for _better()."""
+    return {"len": length, "text": "x" * length}
 
-    def test_empty_candidates_returns_none(self):
-        assert select_best_sentence([]) is None
 
-    def test_single_short_candidate(self):
-        candidates = [{"text": "x" * 15, "len": 15, "truncated": False}]
-        result = select_best_sentence(candidates)
-        assert result["len"] == 15
+class TestBetter:
+    """Test _better(old, new) — pure comparison, no scoring."""
 
-    def test_single_sweet_spot_candidate(self):
-        candidates = [{"text": "x" * 60, "len": 60, "truncated": False}]
-        result = select_best_sentence(candidates)
-        assert result["len"] == 60
+    # Sweet-spot (30-250): shorter wins
+    def test_sweet_spot_shorter_wins(self):
+        assert _better(_cand(60), _cand(50)) is True
+        assert _better(_cand(50), _cand(60)) is False
 
-    def test_single_long_candidate(self):
-        candidates = [{"text": "x" * 300, "len": 300, "truncated": False}]
-        result = select_best_sentence(candidates)
-        assert result["len"] == 300
+    def test_sweet_spot_tie_keeps_old(self):
+        assert _better(_cand(100), _cand(100)) is False
+        assert _better(_cand(30), _cand(30)) is False
+        assert _better(_cand(250), _cand(250)) is False
 
-    def test_boundary_exactly_at_min(self):
-        candidates = [
-            {"text": "x" * 30, "len": 30, "truncated": False},
-            {"text": "x" * 80, "len": 80, "truncated": False},
-        ]
-        result = select_best_sentence(candidates)
-        assert result["len"] == 30
+    # Sweet-spot always beats too-long
+    def test_sweet_spot_beats_too_long(self):
+        assert _better(_cand(50), _cand(300)) is False   # old is sweet-spot → keep
+        assert _better(_cand(300), _cand(50)) is True    # new is sweet-spot → switch
 
-    def test_boundary_exactly_at_max(self):
-        candidates = [
-            {"text": "x" * 250, "len": 250, "truncated": False},
-            {"text": "x" * 100, "len": 100, "truncated": False},
-        ]
-        result = select_best_sentence(candidates)
-        assert result["len"] == 100
+    # Sweet-spot always beats too-short
+    def test_sweet_spot_beats_too_short(self):
+        assert _better(_cand(50), _cand(15)) is False    # old is sweet-spot → keep
+        assert _better(_cand(15), _cand(50)) is True     # new is sweet-spot → switch
 
-    def test_tier2_all_long_picks_shortest(self):
-        candidates = [
-            {"text": "x" * 300, "len": 300, "truncated": False},
-            {"text": "x" * 400, "len": 400, "truncated": False},
-        ]
-        result = select_best_sentence(candidates)
-        assert result["len"] == 300
+    # Both too-long (>250): shorter wins
+    def test_both_too_long_shorter_wins(self):
+        assert _better(_cand(300), _cand(350)) is False  # old shorter → keep
+        assert _better(_cand(350), _cand(300)) is True   # new shorter → switch
 
-    def test_tier3_all_short_picks_longest(self):
-        candidates = [
-            {"text": "x" * 10, "len": 10, "truncated": False},
-            {"text": "x" * 20, "len": 20, "truncated": False},
-        ]
-        result = select_best_sentence(candidates)
-        assert result["len"] == 20
+    # Both too-short (<30): longer wins
+    def test_both_too_short_longer_wins(self):
+        assert _better(_cand(15), _cand(20)) is True     # new longer
+        assert _better(_cand(20), _cand(15)) is False    # old longer → keep
+
+    # Too-long beats too-short (cross-tier)
+    def test_too_long_beats_too_short(self):
+        assert _better(_cand(300), _cand(15)) is False   # old is too-long → keep
+        assert _better(_cand(15), _cand(300)) is True    # new is too-long → switch
+
+    # Boundaries
+    def test_boundary_30_belongs_sweet_spot(self):
+        # 29 is too-short, 30 is sweet-spot
+        assert _better(_cand(29), _cand(30)) is True     # sweet-spot wins
+        assert _better(_cand(30), _cand(29)) is False    # sweet-spot kept
+
+    def test_boundary_250_belongs_sweet_spot(self):
+        # 250 is sweet-spot, 251 is too-long
+        assert _better(_cand(250), _cand(251)) is False  # sweet-spot kept
+        assert _better(_cand(251), _cand(250)) is True   # sweet-spot wins
+
+    # Tie-break at all boundaries
+    def test_tie_at_all_boundaries(self):
+        assert _better(_cand(30), _cand(30)) is False    # keep old
+        assert _better(_cand(250), _cand(250)) is False  # keep old
+        assert _better(_cand(300), _cand(300)) is False  # keep old
+        assert _better(_cand(15), _cand(15)) is False    # keep old
