@@ -37,7 +37,6 @@ from .ipa import _cmu_ipa
 from .lemmatize import lemmatize
 from .utils import (
     EDGE_TTS_MAX_RETRIES,
-    _get_spacy,
     edge_tts_bytes,
     lemmatize_word,
     print_progress,
@@ -178,18 +177,10 @@ def _make_word_id(word_data: dict, book_id: str,
                    resolved_lemma: str | None = None) -> str:
     """Compute the canonical WordId for a word entry.
 
-    WordId = {safe_filename(resolved_lemma)}_{book_id}
+    WordId = {safe_filename(resolved_lemma)}_{pos}_{book_id}
 
-    This is the single source of truth for WordId construction, used by
-    both the dedup check and build_note_entry.  Using the resolved lemma
-    (not the surface form) ensures cross-book dedup consistency: variants
-    like "pondered" and "pondering" from different books all map to the
-    same lemma "ponder", preventing duplicate cards for the same root word.
-
-    When *resolved_lemma* is provided (by the caller who already resolved
-    it), it is used directly.  Otherwise, resolve_lemma() is called on
-    the word_data to compute it — used by the dedup check where the lemma
-    hasn't been resolved yet.
+    POS is included to prevent collisions when the same lemma appears
+    with different parts of speech (e.g. "walk" as NOUN vs VERB).
     """
     if resolved_lemma:
         resolved = resolved_lemma
@@ -198,36 +189,10 @@ def _make_word_id(word_data: dict, book_id: str,
             word_data["word"],
             json_lemma=word_data.get("lemma", ""),
         )
+    pos = word_data.get("pos", "").strip()
+    if pos:
+        return f"{safe_filename(resolved)}_{pos}_{book_id}"
     return f"{safe_filename(resolved)}_{book_id}"
-
-
-def _has_be_to_pattern(doc, vbn_idx: int) -> bool:
-    """Check if the VBN at vbn_idx is part of a "be VBN to <verb>" pattern.
-
-    "be astonished to see", "be surprised to hear" etc. — emotional
-    adjectives with to-infinitive complement.  spaCy's small model often
-    tags these as VERB/VBN rather than ADJ, but the structural pattern
-    (form of "be" before, "to" + verb after) is a reliable adjective signal.
-    """
-    # Check preceding tokens: a form of "be" within 3 tokens before
-    be_forms = {"am", "is", "are", "was", "were", "be", "been", "being"}
-    has_be = False
-    for i in range(max(0, vbn_idx - 3), vbn_idx):
-        if doc[i].text.lower() in be_forms:
-            has_be = True
-            break
-    if not has_be:
-        return False
-
-    # Check following tokens: "to" within 2 tokens after, followed by verb
-    for i in range(vbn_idx + 1, min(vbn_idx + 3, len(doc))):
-        if doc[i].text.lower() == "to" and i + 1 < len(doc):
-            if doc[i + 1].pos_ == "VERB":
-                return True
-            # Also catch adverbs between "to" and verb: "to properly see"
-            if i + 2 < len(doc) and doc[i + 2].pos_ == "VERB":
-                return True
-    return False
 
 
 def _process_one_word(
@@ -242,61 +207,9 @@ def _process_one_word(
     Returns (note, audio_uploads, ipa).
     """
     word = w["word"]
-    json_lemma = w.get("lemma", "").strip()
-    lemma = lemmatize(word, json_lemma=json_lemma)
-
-    # Safety net: for -ed/-ing words that resolve_lemma reduced away from
-    # the surface form, verify with spaCy's sentence-context parse.
-    #
-    # Four signals that the surface form is a derivational adjective
-    # (keep it) rather than a verb inflection (reduce to stem),
-    # ordered by reliability — most confident first, broader heuristics later:
-    #
-    #   1. POS tag: spaCy directly tags the token as ADJ — most precise,
-    #      near-zero false positives.  Fires first.
-    #      — catches: blundering (JJ), interesting (JJ)
-    #
-    #   2. Dependency: the token has an adjectival grammatical function
-    #      (acomp/oprd/attr/amod).  Broader than POS — catches adjectives
-    #      spaCy tagged as VERB but parsed as adjectival modifiers.
-    #      — catches: surprised (acomp), disappointed (oprd), distinguished (amod)
-    #
-    #   3. Lemma: spaCy returns the surface form as its own lemma — the
-    #      lemmatizer itself refuses to reduce.  Belt & suspenders.
-    #      — catches: embarrassed (lemma=embarrassed)
-    #
-    #   4. be-to pattern: "be VBN to <verb>" — emotional adjective with
-    #      to-infinitive complement.  spaCy often misparses this as ROOT
-    #      (passive) instead of acomp.
-    #      — catches: astonished ("was astonished to see")
-    wl = word.lower()
-    if lemma != wl and wl.endswith(("ed", "ing")):
-        sent = w.get("sentence", "")
-        if sent:
-            nlp = _get_spacy(enable_parser=True)
-            if nlp is not None:
-                try:
-                    doc = nlp(sent)
-                    for token in doc:
-                        if token.text.lower() == wl:
-                            # Signal 1: POS tag — most precise, fires first
-                            if token.pos_ == "ADJ":
-                                lemma = wl
-                                break
-                            # Signal 2: adjectival dependency relation
-                            if token.dep_ in ("acomp", "oprd", "attr", "amod"):
-                                lemma = wl
-                                break
-                            # Signal 3: spaCy lemma == surface form
-                            if token.lemma_.lower() == wl:
-                                lemma = wl
-                                break
-                            # Signal 4: be VBN to <verb> structural pattern
-                            if token.tag_ == "VBN" and _has_be_to_pattern(doc, token.i):
-                                lemma = wl
-                                break
-                except Exception:
-                    pass
+    # Trust the lemma from match_sentences.py (authoritative, per-sentence spaCy analysis).
+    # Falls back to the word itself if lemma is missing (degraded mode).
+    lemma = w.get("lemma", "").strip() or word
 
     safe = safe_filename(lemma)
 
@@ -367,13 +280,26 @@ def build_note_entry(
     word_audio_ref = f"[sound:{safe_lemma}_{book_id}_word.mp3]"
     sent_audio_ref = f"[sound:{safe_lemma}_{book_id}_sent.mp3]"
 
+    # Insert <b> tags around the target word using target_offset.
+    # Sentence is stored without tags — we add them here for Anki display.
+    # Use the original-casing word (not lowercased surface) for the tag text.
+    sent = word_data.get("sentence", "")
+    target_offset = word_data.get("target_offset", -1)
+    display_word = word_data["word"]  # original casing from sentence
+    if target_offset >= 0 and target_offset + len(display_word) <= len(sent):
+        sent = (
+            sent[:target_offset]
+            + f"<b>{display_word}</b>"
+            + sent[target_offset + len(display_word):]
+        )
+
     return {
         "deckName": "",  # filled in later by caller
         "modelName": MODEL_NAME,
         "fields": {
             "WordId": word_id,
             "Word": lemma if lemma else surface,
-            "Sentence": word_data["sentence"],
+            "Sentence": sent,
             "IPA": ipa or word_data.get("ipa", ""),
             "DefinitionCN": word_data["definition_cn"],
             "TranslationCN": word_data["translation_cn"],

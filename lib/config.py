@@ -25,7 +25,6 @@ ANKICONNECT_VERSION = 6
 REQUEST_TIMEOUT = 10           # seconds per HTTP request
 
 # ── match_sentences.py ──────────────────────────────────────────────────────
-MAX_CANDIDATES = 5             # max sentence candidates per word
 HARD_CUTOFF = 500              # chars — mechanical cutoff before semantic truncation
 
 # ── translate_deepl.py ──────────────────────────────────────────────────────

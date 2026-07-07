@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Full-text vocabulary filtering pipeline for vocab-book.
 
-Reads raw book text from stdin, performs comprehensive lemmatization, COCA
-frequency-range filtering, and COCA level annotation.  Outputs structured JSON
-consumed by sync_anki.py.
+Reads raw book text from stdin, tokenizes with spaCy, and filters unique
+surface forms against BNC/COCA word families.  No lemmatization — the
+authoritative lemma is determined later by match_sentences.py from the
+specific sentence context.
 
 Does NOT depend on WeRead (微信读书).  Does NOT connect to AnkiConnect.
 Generates a UUID suffix for WordId/audio namespace isolation.
@@ -124,18 +125,15 @@ def main() -> None:
     # Generate UUID suffix for WordId/audio namespace isolation
     suffix = uuid.uuid4().hex[:12]
 
-    # ── tokenize & lemmatize (via unified lib.lemmatize) ────────────────────
-    # build_spacy_map() parses once and produces a POS-aware
-    # {surface → lemma} map with VBG-amod guard built-in.
-    # lemmatize() uses this map as primary source, falling back to
-    # lemminflect multi-channel with COCA gate + Nation CV.
+    # ── tokenize & COCA filter ────────────────────────────────────────────
+    # Filter is surface-form-only: each unique surface form is checked against
+    # the COCA word families directly. No lemmatization — the authoritative
+    # lemma is determined later by match_sentences.py from the specific sentence.
     import spacy
-    from lib.lemmatize import build_spacy_map, lemmatize
 
     nlp = spacy.load("en_core_web_sm")
-    spacy_map = build_spacy_map(text)
 
-    lemma_forms: dict[str, set[str]] = {}
+    surface_forms: set[str] = set()
     raw_token_count = 0
 
     chunk_size = 100_000
@@ -145,16 +143,14 @@ def main() -> None:
             if not token.is_alpha or len(token.text) < 2:
                 continue
             raw_token_count += 1
-            surface = token.text.lower()
-            lemma = lemmatize(surface, coca_set, spacy_map)
-            lemma_forms.setdefault(lemma, set()).add(surface)
+            surface_forms.add(token.text.lower())
 
     total_raw_words = raw_token_count
-    total_lemmas = len(lemma_forms)
+    total_unique = len(surface_forms)
 
     # -- COCA frequency range filtering ---------------------------------------
-    passed: list[tuple[str, str, list[str]]] = []       # (lemma, rep, forms)
-    rejected: list[tuple[str, str, str]] = []            # (lemma, rep, reason)
+    passed: list[tuple[str, str, list[str]]] = []       # (surface, rep, forms)
+    rejected: list[tuple[str, str, str]] = []            # (surface, rep, reason)
 
     if basic_min > 0 or basic_max > 0:
         lo = max(basic_min, 1)
@@ -163,35 +159,32 @@ def main() -> None:
 
     passed_coca_levels: dict[str, int | None] = {}
 
-    for lemma in sorted(lemma_forms.keys()):
-        forms = sorted(lemma_forms[lemma])
-        rep = lemma  # rep is always the lemma in full-text mode
+    for surface in sorted(surface_forms):
+        rep = surface
 
-        # COCA membership check via in_coca() — handles derivational forms
-        # that lemmatize() couldn't reduce (e.g. indulgently → indulgent)
-        ok, detail = in_coca(lemma, coca_set)
+        # COCA membership: check surface form directly against word families
+        ok, detail = in_coca(surface, coca_set)
         if not ok:
-            rejected.append((lemma, rep, "不在 BNC/COCA 25000 词族中"))
+            rejected.append((surface, rep, "不在 BNC/COCA 25000 词族中"))
             continue
 
-        # Determine the canonical COCA word for frequency rank lookup.
-        # in_coca() detail: "word" for direct match, "word -> base" for fallback.
-        coca_word = lemma
+        # Determine the canonical COCA word for frequency rank lookup
+        coca_word = surface
         if " -> " in detail:
             coca_word = detail.split(" -> ", 1)[1]
 
         # Always resolve COCA level for banding in sync_anki.py
-        passed_coca_levels[lemma] = get_word_level(coca_word)
+        passed_coca_levels[surface] = get_word_level(coca_word)
 
-        # COCA frequency range check (using canonical COCA word's rank)
+        # COCA frequency range check
         if basic_min > 0 or basic_max > 0:
             if coca_word not in in_range_set:
-                lvl = passed_coca_levels[lemma]
+                lvl = passed_coca_levels[surface]
                 lvl_str = f"level {lvl}/25" if lvl else "不在词族中"
-                rejected.append((lemma, rep, f"BNC/COCA 词族等级范围外 ({lvl_str})"))
+                rejected.append((surface, rep, f"BNC/COCA 词族等级范围外 ({lvl_str})"))
                 continue
 
-        passed.append((lemma, rep, forms))
+        passed.append((surface, rep, [surface]))
 
     n_coca_excluded = len(rejected)
     n_final = len(passed)
@@ -199,7 +192,7 @@ def main() -> None:
     # -- stdout output (human-readable) ---------------------------------------
     parts = [
         f"Raw tokens: {total_raw_words}",
-        f"Unique lemmas: {total_lemmas}",
+        f"Unique surfaces: {total_unique}",
     ]
     if basic_min or basic_max:
         parts.append(f"BNC/COCA levels: {basic_min}-{basic_max}")
@@ -208,11 +201,11 @@ def main() -> None:
     print(f"SUMMARY: {' | '.join(parts)}")
 
     print("---IN_COCA---")
-    for lemma, rep, forms in passed:
-        print(f"{lemma}\t{rep}\t{','.join(forms)}")
+    for surface, rep, forms in passed:
+        print(f"{surface}\t{rep}\t{','.join(forms)}")
     print("---EXCLUDED---")
-    for lemma, rep, reason in rejected:
-        print(f"{lemma}\t{rep}\t{reason}")
+    for surface, rep, reason in rejected:
+        print(f"{surface}\t{rep}\t{reason}")
 
     # -- JSON output ----------------------------------------------------------
     if json_out_path:
@@ -220,22 +213,22 @@ def main() -> None:
             "suffix": suffix,
             "summary": {
                 "total_words": total_raw_words,
-                "lemmas": total_lemmas,
+                "unique_surfaces": total_unique,
                 "coca_excluded": n_coca_excluded,
                 "final": n_final,
             },
             "in_coca": [
                 {
-                    "lemma": lemma,
+                    "lemma": surface,
                     "rep": rep,
-                    "forms": forms,
-                    "coca_level": passed_coca_levels.get(lemma),
+                    "forms": [surface],
+                    "coca_level": passed_coca_levels.get(surface),
                 }
-                for lemma, rep, forms in passed
+                for surface, rep, forms in passed
             ],
             "excluded": [
-                {"lemma": lemma, "rep": rep, "reason": reason}
-                for lemma, rep, reason in rejected
+                {"lemma": surface, "rep": rep, "reason": reason}
+                for surface, rep, reason in rejected
             ],
         }
         with open(json_out_path, "w", encoding="utf-8") as f:

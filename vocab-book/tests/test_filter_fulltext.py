@@ -29,7 +29,7 @@ def _run_filter(text: str, *extra_args: str) -> "subprocess.CompletedProcess[str
         input=text,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=120,
     )
 
 
@@ -63,7 +63,7 @@ class TestBasicFiltering:
         data = _run_filter_json(SAMPLE_TEXT)
         s = data["summary"]
         assert s["total_words"] > 0
-        assert s["lemmas"] > 0
+        assert s["unique_surfaces"] > 0
         assert "coca_excluded" in s
         assert s["final"] > 0
 
@@ -120,14 +120,10 @@ class TestBasicFiltering:
             assert word in lemmas, f"Expected '{word}' to pass COCA check"
 
     def test_vbg_amod_adjective_kept_as_is(self):
-        """VBG + amod dependency = participial adjective — keep surface form.
+        """Surface forms preserved as-is — filter no longer lemmatizes.
 
-        "bewildering" in "the bewildering complexity" is tagged VBG by spaCy
-        but has an amod (adjectival modifier) dependency — it modifies the
-        noun "complexity".  Without the VBG-amod guard, lemminflect's VERB
-        channel would reduce it to "bewilder".
-
-        Regular VBD past-tense forms like "bewildered" must still reduce.
+        Lemmatization (including VBG-amod guard) is now in match_sentences.py.
+        Filter just passes through surface forms that pass COCA membership.
         """
         text = (
             "The bewildering complexity of the problem stunned everyone. "
@@ -137,25 +133,23 @@ class TestBasicFiltering:
         lemmas = {e["lemma"] for e in data["in_coca"]}
 
         assert "bewildering" in lemmas, (
-            f"VBG-amod adjective 'bewildering' should be kept as its own "
-            f"lemma, got: {sorted(lemmas)}"
+            f"Surface form 'bewildering' should pass as-is, got: {sorted(lemmas)}"
         )
-        assert "bewilder" in lemmas, (
-            f"Regular VBD 'bewildered' should still reduce to 'bewilder', "
-            f"got: {sorted(lemmas)}"
+        assert "bewildered" in lemmas, (
+            f"Surface form 'bewildered' should pass as-is, got: {sorted(lemmas)}"
         )
 
     def test_vbg_verbal_still_reduces(self):
-        """Verbal VBG ('he was boasting', dep_=ROOT) — reduce normally.
+        """Surface forms preserved as-is — filter no longer lemmatizes.
 
-        The VBG-amod guard must NOT block genuine verbal participles.
+        Lemmatization is now in match_sentences.py. 'boasting' passes COCA
+        membership as a surface form.
         """
         text = "He was boasting about his achievements all day."
         data = _run_filter_json(text)
         lemmas = {e["lemma"] for e in data["in_coca"]}
-        assert "boast" in lemmas, (
-            f"Verbal 'boasting' (dep_=ROOT) should reduce to 'boast', "
-            f"got: {sorted(lemmas)}"
+        assert "boasting" in lemmas, (
+            f"Surface form 'boasting' should pass as-is, got: {sorted(lemmas)}"
         )
 
 

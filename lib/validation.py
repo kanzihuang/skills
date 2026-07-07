@@ -1,8 +1,11 @@
 """Pre-sync word entry validation.
 
-Checks sentence length, <b> tag consistency, required fields, lemma
-sanity, and punctuation artifacts.  Hard errors block sync; soft
-warnings go to stderr.
+Checks sentence length, target word presence in sentence, required fields,
+and lemma sanity.  Hard errors block sync; soft warnings go to stderr.
+
+In the new design, sentences are stored WITHOUT <b> tags — the tag is
+inserted by build_note_entry() using target_offset.  Validation checks
+the word at target_offset instead of parsing <b> tags.
 """
 
 from __future__ import annotations
@@ -19,9 +22,8 @@ def validate_word_entries(words: list[dict]) -> list[str]:
     """Validate word entries before sync. Returns list of error messages (empty = pass).
 
     Checks sentence length (MIN_SENTENCE_LENGTH ≤ len ≤ MAX_SENTENCE_LENGTH),
-    <b> tag matches word field, word actually appears in sentence text
-    (after stripping tags), and required fields (ipa, definition_cn,
-    translation_cn) are non-empty.
+    target word at target_offset matches word field, and required fields
+    (ipa, definition_cn, translation_cn) are non-empty.
 
     Soft warnings (IPA format, definition sanity, sentence too short) are
     printed to stderr directly and do NOT block sync.
@@ -30,40 +32,31 @@ def validate_word_entries(words: list[dict]) -> list[str]:
     for w in words:
         word = w.get("word", "")
         sentence = w.get("sentence", "")
+        target_offset = w.get("target_offset", -1)
 
-        # 1. <b> content must match word field (case-insensitive).
-        b_match = re.search(r"<b>(.*?)</b>", sentence)
-        b_text = b_match.group(1) if b_match else ""
-        if b_text.lower() != word.lower():
-            errors.append(f"[{word}] <b> mismatch: <b>{b_text}</b> != word '{word}'")
-
-        # 1b. <b> must wrap the COMPLETE surface word
-        if b_match and b_text:
-            after = sentence[b_match.end():]
-            if after and after[0].isalpha() and after[0].islower():
-                remaining = ""
-                for ch in after:
-                    if ch.isalpha():
-                        remaining += ch
-                    else:
-                        break
-                full_word = b_text + remaining
+        # 1. Word at target_offset must match word field
+        if target_offset >= 0 and target_offset + len(word) <= len(sentence):
+            sent_word = sentence[target_offset:target_offset + len(word)]
+            if sent_word.lower() != word.lower():
                 errors.append(
-                    f"[{word}] <b> tag splits surface word: "
-                    f"<b>{b_text}</b>{remaining} -> should wrap complete "
-                    f"surface form '<b>{full_word}</b>'"
+                    f"[{word}] target_offset mismatch: "
+                    f"'{sent_word}' at offset {target_offset} != word '{word}'"
                 )
+        elif target_offset >= 0:
+            errors.append(
+                f"[{word}] target_offset {target_offset} out of range "
+                f"for sentence length {len(sentence)}"
+            )
 
-        # 2. Sentence must contain the word (case-insensitive, after stripping tags)
-        clean_sentence = re.sub(r"<[^>]+>", "", sentence)
-        if word.lower() not in clean_sentence.lower():
+        # 2. Sentence must contain the word (case-insensitive)
+        if word.lower() not in sentence.lower():
             errors.append(
                 f"[{word}] word not found in sentence: "
-                f"'{word}' not in '{clean_sentence[:80]}{'...' if len(clean_sentence) > 80 else ''}'"
+                f"'{word}' not in '{sentence[:80]}{'...' if len(sentence) > 80 else ''}'"
             )
 
         # 3. Sentence length check
-        clean_len = len(re.sub(r"</?b>", "", sentence))
+        clean_len = len(sentence)
         if clean_len > MAX_SENTENCE_LENGTH:
             errors.append(
                 f"[{word}] sentence too long: {clean_len} chars "
@@ -82,31 +75,6 @@ def validate_word_entries(words: list[dict]) -> list[str]:
         for field in ["ipa", "definition_cn", "translation_cn"]:
             if not w.get(field):
                 errors.append(f"[{word}] missing '{field}'")
-
-        # 4.5 lemma sanity
-        json_lemma = w.get("lemma", "").strip()
-        if json_lemma:
-            wl = word.lower()
-            if wl.endswith(("ed", "ing")):
-                if json_lemma.lower() != wl:
-                    errors.append(
-                        f"[{word}] -ed/-ing word with lemma '{json_lemma}' "
-                        f"that differs from surface form. "
-                        f"See SHARED_WORKFLOW.md Step 2D-0 lemma ==: "
-                        f"if adjective -> set lemma='{word}'; "
-                        f"if regular inflection -> leave lemma empty."
-                    )
-            else:
-                resolved = lemmatize(word)
-                machine = lemmatize_word(word)
-                if (json_lemma.lower() != wl
-                        and json_lemma.lower() != machine.lower()
-                        and len(json_lemma) > len(word)):
-                    errors.append(
-                        f"[{word}] suspicious lemma '{json_lemma}': differs from both "
-                        f"surface form '{word}' and lemmatize_word() result '{machine}'. "
-                        f"Leave lemma empty for regular inflection (auto-correct -> '{resolved}')"
-                    )
 
         # --- Soft warnings (stderr only, do not block sync) ---
 
