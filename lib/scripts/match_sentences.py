@@ -106,15 +106,17 @@ def _determine_lemma(token, word: str) -> str:
     if token.dep_ in ("acomp", "amod", "attr", "oprd"):
         return wl
 
-    # Signal 3: VBG + amod — participial adjective
-    if token.tag_ == "VBG" and token.dep_ == "amod":
+    # Signal 3: VBG + adjectival dep — participial adjective
+    if token.tag_ == "VBG" and token.dep_ in ("amod", "acomp"):
         return wl
 
     # Signal 4: PROPN — proper noun.  Lowercase PROPN is almost always
     # a spaCy mis-classification (genuine proper nouns are capitalised).
+    # Sentence-initial tokens are also likely mis-classified (capitalised
+    # due to position, not because they are proper nouns).
     # Must be checked BEFORE spacy_lemma==word (PROPN tokens lemma==text).
     if token.pos_ == "PROPN":
-        if word[0].islower():
+        if word[0].islower() or token.i == 0:
             lemmas = lemminflect.getLemma(wl, 'NOUN')
             if lemmas:
                 return lemmas[0]
@@ -278,16 +280,27 @@ def main():
 
                 # Determine lemma from this specific token context
                 lemma = _determine_lemma(token, token.text)
+                pos = token.pos_
 
                 # be-to pattern check for VBN tokens
                 if token.tag_ == "VBN" and lemma != token_lower:
                     if _has_be_to_pattern(doc, token.i):
                         lemma = token_lower
+                        pos = "ADJ"
 
-                # POS with PROPN→NOUN override for lowercase proper nouns
-                pos = token.pos_
-                if pos == "PROPN" and token.text[0].islower():
+                # PROPN→NOUN: lowercase or sentence-initial proper nouns
+                if pos == "PROPN" and (token.text[0].islower() or token.i == 0):
                     pos = "NOUN"
+                # NOUN/VERB→ADJ: adjectival dependency overrides POS tag
+                if pos in ("NOUN", "VERB") and token.dep_ in ("amod", "acomp", "attr", "oprd"):
+                    pos = "ADJ"
+                # NOUN+compound→ADJ: spaCy mis-tags some adjectives as noun
+                # compounds (e.g. "primeval forests").  Adjective suffixes
+                # help distinguish from genuine noun compounds ("stone wall").
+                _ADJ_SUFFIXES = ("al", "ic", "ous", "ive", "ful", "less", "able", "ible")
+                if (pos == "NOUN" and token.dep_ == "compound"
+                        and token.text.lower().endswith(_ADJ_SUFFIXES)):
+                    pos = "ADJ"
 
                 key = (lemma, pos)
 

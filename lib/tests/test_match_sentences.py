@@ -128,3 +128,93 @@ class TestBetter:
         assert _better(_cand(250), _cand(250)) is False  # keep old
         assert _better(_cand(300), _cand(300)) is False  # keep old
         assert _better(_cand(15), _cand(15)) is False    # keep old
+
+
+# ── POS correction ──
+
+
+def _run_pipeline(in_coca: list[dict], text: str) -> dict:
+    """Run match_sentences.py pipeline on minimal inputs, return words dict."""
+    import json, subprocess, tempfile, os
+    from pathlib import Path
+
+    filter_json = {
+        "suffix": "test00000000",
+        "in_coca": in_coca,
+    }
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as fj:
+        json.dump(filter_json, fj)
+        fj_path = fj.name
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as ft:
+        ft.write(text)
+        txt_path = ft.name
+
+    try:
+        # Use vocab-book skill root (not shared lib) — symlink-aware
+        _repo = Path(__file__).resolve().parent.parent.parent  # skills/
+        _skill_root = _repo / "vocab-book"
+        python = _skill_root / ".venv" / "bin" / "python3"
+        ms_script = _skill_root / "lib" / "scripts" / "match_sentences.py"
+        result = subprocess.run(
+            [str(python), str(ms_script), fj_path, txt_path],
+            capture_output=True, text=True, timeout=90,
+        )
+        idx = result.stdout.index('{\n  "book_title"')
+        return json.loads(result.stdout[idx:])
+    finally:
+        os.unlink(fj_path)
+        os.unlink(txt_path)
+
+
+class TestPOSCorrections:
+    """Verify POS corrections in the main processing pipeline."""
+
+    def test_vbg_acomp_becomes_adj(self):
+        """VBG + acomp (predicative) → ADJ via dep override."""
+        result = _run_pipeline(
+            [{"lemma": "overpowering", "rep": "overpowering",
+              "forms": ["overpowering"], "coca_level": 7}],
+            "When a mystery is too overpowering, one dare not disobey.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"expected ADJ, got {w['pos']}"
+
+    def test_noun_amod_becomes_adj(self):
+        """NOUN + amod → ADJ via dep override."""
+        result = _run_pipeline(
+            [{"lemma": "primeval", "rep": "primeval",
+              "forms": ["primeval"], "coca_level": 10}],
+            "I would never talk about primeval forests or stars.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"expected ADJ, got {w['pos']}"
+
+    def test_propn_sentence_initial_becomes_noun(self):
+        """Sentence-initial PROPN → NOUN (improved, not perfect for true ADJ)."""
+        result = _run_pipeline(
+            [{"lemma": "absurd", "rep": "absurd",
+              "forms": ["absurd"], "coca_level": 4}],
+            "Absurd as it might seem, I took out my pen.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "NOUN", f"expected NOUN, got {w['pos']}"
+
+    def test_be_to_vbn_pos_becomes_adj(self):
+        """be-to VBN pattern sets POS=ADJ."""
+        result = _run_pipeline(
+            [{"lemma": "astounded", "rep": "astounded",
+              "forms": ["astounded"], "coca_level": 7}],
+            "I was astounded to hear the news.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"expected ADJ, got {w['pos']}"
+
+    def test_vbg_acomp_lemma_not_reduced(self):
+        """VBG + acomp: surface form preserved, not lemmatised to verb base."""
+        result = _run_pipeline(
+            [{"lemma": "overpowering", "rep": "overpowering",
+              "forms": ["overpowering"], "coca_level": 7}],
+            "When a mystery is too overpowering, one dare not disobey.",
+        )
+        w = result["words"][0]
+        assert w["lemma"] == "overpowering", f"expected overpowering, got {w['lemma']}"
