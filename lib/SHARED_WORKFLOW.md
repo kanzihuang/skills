@@ -27,24 +27,20 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
   <source_text_path>
 ```
 
-脚本流水线：
+脚本流水线（全书扫一次，句子为外循环）：
 
-1. 对每个 surface form，搜索源文本中**所有**出现位置（不限数量）
-2. 每个出现 → 提取完整句子 → 跑 spaCy → 获取目标 token 的 `pos_/dep_/lemma_/tag_` + be-to 判定
-3. 逐句判定 lemma：
-   - `pos=ADJ` / `dep in (acomp,amod,attr,oprd)` → 形容词，不还原
-   - `VBG + dep=amod` → 分词形容词，不还原
-   - `spacy_lemma == word` → spaCy 拒绝还原，信任
-   - `be_to == true` → 心理形容词（"was astonished to see"），不还原
-   - `PROPN`（大写）→ 专有名词，不还原；小写 PROPN → 作 NOUN 处理
-   - `ADV + word.endswith('ly')` → 副词，不还原
-   - 其他 → lemminflect 正确 POS 通道
-4. 按 `(lemma, pos)` 分组
-5. 每组内 `select_best_sentence()` 选最佳句
-6. cmudict IPA（从最终 lemma 查，fallback 到 surface form）
-7. 按 `(lemma, pos)` 跨 entry 去重
+1. PySBD 一次切句 + 篇章检测跳过序言
+2. 建 `form_index`：`form_lower → [(idx, entry), ...]`
+3. 遍历每个句子：
+   a. 快速 pre-filter（简单 token 查 form_index）
+   b. hard_truncate（>500 字符硬截断）
+   c. `nlp(sentence)` — 每句只跑一次
+   d. 遍历 doc tokens，查 form_index → `(idx, entry, token)`
+   e. `_determine_lemma(token)` → lemma，PROPN→NOUN 覆盖
+   f. `_better()` 增量比较 → 只保留每个 `(lemma, pos)` 的最佳句
+4. 后处理：回填 `char_offset` + cmudict IPA
 
-输出 JSON：每个 `(lemma, pos)` 一个 entry，含 `lemma/word/pos/dep/spacy_lemma/be_to/coca_level/sentence/target_offset/ipa/candidates`。句子**不含 `<b>` 标签**。
+输出 JSON：每个 `(lemma, pos)` 一个 entry，含 `lemma/word/pos/dep/spacy_lemma/be_to/coca_level/sentence/target_offset/ipa`。句子**不含 `<b>` 标签**。无 `candidates` 数组。
 
 ### 2A-d. 版本校验 + 失败处理
 
