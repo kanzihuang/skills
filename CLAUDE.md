@@ -160,6 +160,10 @@ Internet Archive `.txt` files often contain double-space OCR artifacts. `match_s
 
 **Change (2026-07-07)**: Lemma is determined by `match_sentences.py` from per-sentence spaCy POS analysis + lemminflect. Claude no longer participates in lemma decisions (Step 2D/2E). The `lemma` field in the JSON must not be modified by Claude.
 
+### Deck name is auto-derived — Claude does NOT set deck_name
+
+**Change (2026-07-07)**: Deck name is auto-derived by `sync_anki.py`'s `_derive_deck_name()` from `book_title` + `book_author` + "分级词汇" suffix. Claude must NOT set `deck_name` in the JSON or pass `--deck` on the CLI — doing so overrides the correct auto-generated name. The format is `{title} ({author}) - 分级词汇` for vocab-book, `{title} ({author})` for vocab-anki.
+
 ### Exact-form-only sentence matching
 
 `match_sentences.py` searches for the **exact surface forms** from the `forms` array in the source text. No inflectional expansion (-s/-es/-ed/-ing). If a user highlights the base form ("arouse") but the text only has inflected forms ("aroused"), the word gets no sentence → excluded from the deck. This is by design: the card's `<b>` tag must wrap the exact word the user highlighted. Do not manually expand forms to force a match.

@@ -138,6 +138,7 @@ cat /tmp/<safe_title>-*-full.txt | \
 - WordId = `{safe_filename(lemma)}_{pos}_{suffix}`；音频命名 = `{safe_filename(lemma)}_{pos}_{suffix}_word.mp3` / `_sent.mp3`
 - 同步时自动频次分级（`compute_bands()`）
 - **不做 Anki 去重**（filter_fulltext.py 不连接 AnkiConnect）
+- **牌组名由脚本自动生成**：格式 `{book_title} ({book_author}) - 分级词汇`，由 `sync_anki.py` 的 `_derive_deck_name()` 自动推导。Claude 不要设置 `deck_name` 字段，也不要传 `--deck` 参数
 
 ## 异常处理
 
