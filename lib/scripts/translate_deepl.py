@@ -8,7 +8,6 @@ input file).
 Usage:
     python scripts/translate_deepl.py input.json
     python scripts/translate_deepl.py input.json --output output.json
-    python scripts/translate_deepl.py input.json --book-context "Title: ..."
 
 Requires DEEPL_API_KEY environment variable (free key from deepl.com/pro-api).
 Free tier: 500,000 chars/month. Endpoint auto-detected by deepl SDK.

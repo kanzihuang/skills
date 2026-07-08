@@ -79,13 +79,17 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 | `coca.py` | BNC/COCA word family lookup (Nation 2017), 3-tier strategy |
 | `lemmatize.py` | Two-tier lemmatization (spaCy POS gate, lemminflect fallback). Used by vocab-list and sync_anki.py fallback path |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client |
+| `audio.py` | Anki media directory detection + direct filesystem media upload |
+| `bands.py` | COCA frequency band computation for sub-deck splitting |
 | `chapter_detect.py` | Chapter heading detection + preamble skip; used by match_sentences and extract_chapter |
+| `config.py` | Centralized constants (MAX_SENTENCE_LENGTH, Edge TTS retries, timeouts) |
+| `ipa.py` | cmudict ARPAbet→IPA conversion with suffix-stripping fallback |
 | `utils.py` | Shared utilities: TTS, lemmatize_word, safe_filename, print_progress |
 | `sync_anki.py` | Main sync orchestrator (uses relative imports from lib package) |
 | `scripts/` | Shared entry-point scripts (match_sentences, translate_deepl, audit_deck, extract_chapter) |
 | `data/bnc_coca/` | Nation (2017) word family lists (25 levels × ~1000 families) |
 | `data/cmudict.dict` | CMU Pronouncing Dictionary (135K entries) |
-| `tests/` | Shared pytest suite (~404 tests) for lib modules |
+| `tests/` | Shared pytest suite (285 tests) for lib modules |
 | `SHARED_WORKFLOW.md` | Shared Claude workflow steps (2A–2H) referenced by both SKILL.md files |
 
 ## Shared Design Principles
@@ -138,7 +142,7 @@ Symptom: deck has cards with Word="fore" (should be "forest") or "forev" (should
 
 ### DeepL translation now runs before Claude definitions
 
-**Change (2026-07-06)**: Step 2D (DeepL) and Step 2E (Claude definitions) swapped — translation now completes before Claude generates `definition_cn`. This gives Claude the Chinese translation as context for word-sense disambiguation. Step 2F (validation) adds a `definition_cn ↔ translation_cn` consistency check.
+**Change (2026-07-06)**: Step 2C (DeepL) and Step 2E (Claude definitions) swapped — translation now completes before Claude generates `definition_cn`. This gives Claude the Chinese translation as context for word-sense disambiguation. Step 2F (validation) adds a `definition_cn ↔ translation_cn` consistency check.
 
 ### DeepL failure handling
 
@@ -161,7 +165,7 @@ Internet Archive `.txt` files often contain double-space OCR artifacts. `match_s
 
 ### Lemma is now mechanical — Claude does NOT set lemma
 
-**Change (2026-07-07)**: Lemma is determined by `match_sentences.py` from per-sentence spaCy POS analysis + lemminflect. Claude no longer participates in lemma decisions (Step 2D/2E). The `lemma` field in the JSON must not be modified by Claude.
+**Change (2026-07-07)**: Lemma is determined by `match_sentences.py` from per-sentence spaCy POS analysis + lemminflect. Claude no longer participates in lemma decisions (Step 2C/2E). The `lemma` field in the JSON must not be modified by Claude.
 
 ### Deck name is auto-derived — Claude does NOT set deck_name
 
@@ -334,7 +338,7 @@ Symptom before fix: `indulgently` had empty IPA despite "indulgent" being in cmu
 
 ### Irregular past-tense finite-verb detection
 
-**Change (2026-07-08)**: `validation.py`'s finite-verb check now has three tiers: (1) auxiliary/modal verbs, (2) regular -ed/-s endings, (3) common irregular past-tense forms (`_IRREGULAR_PAST_TENSE`: 60 words — made, went, told, found, etc.). Previously only tiers 1-2 existed, causing false-positive "may lack a finite verb" warnings for sentences like "I made the acquaintance..." where "made" is a past-tense main verb that matches neither an auxiliary list nor a regular -ed ending.
+**Change (2026-07-08)**: `validation.py`'s finite-verb check now has three tiers: (1) auxiliary/modal verbs, (2) regular -ed/-s endings, (3) common irregular past-tense forms (`_IRREGULAR_PAST_TENSE`: 59 words — made, went, told, found, etc.). Previously only tiers 1-2 existed, causing false-positive "may lack a finite verb" warnings for sentences like "I made the acquaintance..." where "made" is a past-tense main verb that matches neither an auxiliary list nor a regular -ed ending.
 
 All three tiers are soft warnings — they print to stderr but never block sync.
 
@@ -396,14 +400,14 @@ Symptom: `lemma` is a verb base not appearing in the text (e.g. "dishearten" for
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, ~435 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
-- **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
+- **Shared tests** live in `lib/tests/` (pytest, 285 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
+- **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 14 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.
 - Run all tests before committing:
   ```bash
   cd lib && /home/agent/.claude/skills/vocab-anki/.venv/bin/python -m pytest tests/ -v && \
-  cd ../vocab-ani && .venv/bin/python -m pytest tests/ -v && \
+  cd ../vocab-anki && .venv/bin/python -m pytest tests/ -v && \
   cd ../vocab-book && ../vocab-anki/.venv/bin/python -m pytest tests/ -v
   ```
 

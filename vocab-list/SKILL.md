@@ -28,7 +28,7 @@ Python:  机械工作 —— 词形提取、屈折还原、COCA 过滤、去重
 
 **依赖：**
 - `weread-skills` — 书籍搜索（获取 bookId、书名、作者）
-- `lib/` — 共享库：`lib/lemmatize.py`（屈折还原引擎）、`lib/coca.py`（BNC/COCA 词族查找，Nation 2017）、`lib/data/bnc_coca/basewrd1-25.txt`（词族数据）
+- `lib/` — 共享库：`lib/lemmatize.py`（屈折还原引擎）、`lib/coca.py`（BNC/COCA 词族查找，Nation 2017）、`lib/data/bnc_coca/basewrd1.txt`–`basewrd25.txt`（词族数据，25 个独立文件）
 - Python 包：`lemminflect`
 
 ## 前置条件

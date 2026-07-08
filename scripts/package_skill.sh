@@ -11,8 +11,8 @@ mkdir -p "$OUTPUT_DIR"
 
 # 各技能需要的 lib 模块
 declare -A SKILL_LIB_DEPS
-SKILL_LIB_DEPS["vocab-anki"]="coca.py lemmatize.py ankiconnect.py utils.py sync_anki.py chapter_detect.py SHARED_WORKFLOW.md"
-SKILL_LIB_DEPS["vocab-book"]="coca.py lemmatize.py ankiconnect.py utils.py sync_anki.py chapter_detect.py SHARED_WORKFLOW.md"
+SKILL_LIB_DEPS["vocab-anki"]="coca.py lemmatize.py ankiconnect.py audio.py bands.py config.py ipa.py utils.py sync_anki.py validation.py chapter_detect.py SHARED_WORKFLOW.md"
+SKILL_LIB_DEPS["vocab-book"]="coca.py lemmatize.py ankiconnect.py audio.py bands.py config.py ipa.py utils.py sync_anki.py validation.py chapter_detect.py SHARED_WORKFLOW.md"
 SKILL_LIB_DEPS["vocab-list"]="coca.py lemmatize.py"
 
 for skill in "${!SKILL_LIB_DEPS[@]}"; do
@@ -53,13 +53,26 @@ for skill in "${!SKILL_LIB_DEPS[@]}"; do
     cp -r "${SKILLS_DIR}/lib/data/bnc_coca/"* "${SKILL_DIR}/lib/data/bnc_coca/"
     cp "${SKILLS_DIR}/lib/data/cmudict.dict" "${SKILL_DIR}/lib/data/cmudict.dict"
 
-    # 4. 创建 zip
+    # 4. 创建 zip (via Python stdlib — 不依赖系统 zip 命令)
     cd "${TMPDIR}"
-    zip -qr "${OUTPUT_DIR}/${skill}.zip" "${skill}/"
+    python3 -c "
+import zipfile, os, sys
+skill = sys.argv[1]
+out_dir = sys.argv[2]
+os.makedirs(out_dir, exist_ok=True)
+out_path = os.path.join(out_dir, f'{skill}.zip')
+with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+    for root, dirs, files in os.walk(skill):
+        for fn in files:
+            full = os.path.join(root, fn)
+            if os.path.islink(full):
+                continue  # skip symlinks — real files live in lib/scripts/
+            zf.write(full)
+print(f'  -> {out_path}')
+" "${skill}" "${OUTPUT_DIR}"
     cd "${SKILLS_DIR}"
 
     rm -rf "${TMPDIR}"
-    echo "  -> ${OUTPUT_DIR}/${skill}.zip"
 done
 
 echo "完成。输出目录: ${OUTPUT_DIR}"

@@ -870,7 +870,8 @@ class TestCheckStepCompleted:
 
 
 def _run_pipeline_json_out(in_coca: list[dict], text: str,
-                           extra_args: list[str] | None = None) -> dict:
+                           extra_args: list[str] | None = None,
+                           filter_extra: dict | None = None) -> dict:
     """Run match_sentences.py with --json-out, return parsed output dict.
 
     Unlike _run_pipeline() which parses stdout, this reads the --json-out file
@@ -883,6 +884,8 @@ def _run_pipeline_json_out(in_coca: list[dict], text: str,
         "suffix": "test00000000",
         "in_coca": in_coca,
     }
+    if filter_extra:
+        filter_json.update(filter_extra)
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as fj:
         json.dump(filter_json, fj)
         fj_path = fj.name
@@ -970,3 +973,25 @@ class TestJsonOut:
         ])
         assert result_with_meta['book_title'] == 'Test Book'
         assert result_with_meta['book_author'] == 'Test Author'
+
+    def test_book_id_propagated(self):
+        """book_id from filter_pipeline.py input is preserved in output."""
+        in_coca = [{"lemma": "hello", "rep": "hello", "forms": ["hello"],
+                     "coca_level": 5}]
+        text = "Hello world. This is a test."
+
+        # Include book_id in input (as filter_pipeline.py does for vocab-anki)
+        result = _run_pipeline_json_out(in_coca, text,
+            filter_extra={"book_id": "22720170"})
+        assert result['book_id'] == '22720170'
+        # suffix should still be present (vocab-book mode)
+        assert result['suffix'] == 'test00000000'
+
+    def test_book_id_absent_when_not_in_input(self):
+        """book_id is empty string when input had no book_id."""
+        in_coca = [{"lemma": "hello", "rep": "hello", "forms": ["hello"],
+                     "coca_level": 5}]
+        text = "Hello world. This is a test."
+
+        result = _run_pipeline_json_out(in_coca, text)
+        assert result['book_id'] == ''

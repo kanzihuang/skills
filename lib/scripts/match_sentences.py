@@ -675,6 +675,7 @@ def main():
         'book_author': args.book_author if args.book_author else data.get('book_author', ''),
         'deck_name': data.get('deck_name', ''),
         'source_text_path': text_path,
+        'book_id': data.get('book_id', ''),
         'suffix': data.get('suffix', ''),
         'words': results,
         'excluded': data.get('excluded', []),
