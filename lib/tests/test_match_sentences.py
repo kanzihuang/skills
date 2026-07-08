@@ -317,3 +317,38 @@ class TestPOSCorrections:
         )
         w = result["words"][0]
         assert w["lemma"] == "overpowering", f"expected overpowering, got {w['lemma']}"
+
+    def test_noun_attr_stays_noun(self):
+        """NOUN + attr dep: stays NOUN, not promoted to ADJ.
+
+        attr is the complement of copular verbs — it applies to both
+        nouns ("He is a teacher") and adjectives ("He is tall").
+        Unlike amod/acomp/oprd, it is NOT a reliable ADJ signal.
+        Regression test for constrictor in "a boa constrictor".
+        """
+        result = _run_pipeline(
+            [{"lemma": "constrictor", "rep": "constrictor",
+              "forms": ["constrictor"], "coca_level": 8}],
+            "It was a boa constrictor digesting an elephant.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "NOUN", f"expected NOUN, got {w['pos']}"
+
+    def test_mid_sentence_capitalized_propn_becomes_noun(self):
+        """Mid-sentence capitalized common noun tagged PROPN → NOUN.
+
+        E.g. "Boa" in "In the book, Boa constrictors swallow..."
+        spaCy mis-tags the capitalized common noun as PROPN; since
+        the word is in our filter vocabulary, convert to NOUN.
+        """
+        result = _run_pipeline(
+            [{"lemma": "boa", "rep": "boa",
+              "forms": ["boa", "boas"], "coca_level": 12}],
+            "It was written in the book, Boa constrictors swallow their prey.",
+        )
+        words = result["words"]
+        # Find the Boa entry
+        boa_entry = [w for w in words if w["lemma"] == "boa"]
+        assert len(boa_entry) == 1, f"expected 1 boa entry, got {len(boa_entry)}"
+        assert boa_entry[0]["pos"] == "NOUN", \
+            f"expected NOUN, got {boa_entry[0]['pos']}"

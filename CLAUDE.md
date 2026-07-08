@@ -222,10 +222,30 @@ Symptom: sentences ending with `:` or `,` that look like dialogue lead-ins (e.g.
 
 **Change (2026-07-07)**: `WordId = {lemma}_{pos}_{suffix}` (vocab-book) or `{lemma}_{pos}_{bookId}` (vocab-anki). POS is included to prevent collisions when the same lemma appears with different parts of speech (e.g. "walk" as NOUN vs VERB).
 
+### attr dep is NOT a reliable ADJ signal
+
+**Change (2026-07-08)**: `attr` (predicate attribute) was removed from the adjectival dependency set in `match_sentences.py` (`_determine_lemma` Signal 2 and main-loop POS correction). `attr` is the complement of copular verbs — it applies equally to nouns ("He is **a teacher**") and adjectives ("He is **tall**"). Unlike `amod`/`acomp`/`oprd` which are exclusively adjectival, `attr` is NOT a reliable ADJ signal.
+
+Before the fix, a NOUN with `attr` dep (e.g. "constrictor" in "It was a boa constrictor") was incorrectly promoted to ADJ because the code treated `attr` identically to `amod`/`acomp`/`oprd`.
+
+`_has_be_to_pattern` already correctly excludes `attr` (it only accepts `acomp`/`oprd` for JJ-tagged tokens) — no change was needed there.
+
+Symptom: entries like "constrictor" tagged ADJ with definition "[adj.] 大蟒的" when it should be NOUN. Check: `grep '"pos": "ADJ"'` in match_sentences output for words that are clearly nouns.
+
+### PROPN→NOUN conversion missed mid-sentence capitalized common nouns
+
+**Change (2026-07-08)**: The PROPN→NOUN POS correction in `match_sentences.py` (main loop) was widened from `token.text[0].islower() or token.i == 0` to also include `token_lower in form_index`. The original condition only caught lowercase PROPNs ("boas") and sentence-initial PROPNs ("Absurd"). It missed mid-sentence capitalized common nouns ("Boa" in "in the book, Boa constrictors swallow...").
+
+Since the code only reaches this check after confirming the word is in our COCA filter, `token_lower in form_index` is a safe signal: any tracked vocabulary word tagged PROPN is a spaCy misclassification — genuine proper nouns are almost never COCA level 4+.
+
+Note: `_determine_lemma` Signal 4 was NOT changed — `word[0].islower()` there refers to `token.text.lower()[0]` which is always lowercase, so it always enters the NOUN lemmatization branch. The lemma was already correct ("boa"); only the POS tag was wrong.
+
+Symptom: "Boa" tagged PROPN with definition "[n.] 蟒蛇属（动物分类名）" when it should be NOUN. Check: `grep '"pos": "PROPN"'` in match_sentences output.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 355 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Shared tests** live in `lib/tests/` (pytest, 373 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.

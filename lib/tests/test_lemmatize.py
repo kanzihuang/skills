@@ -223,8 +223,10 @@ def test_no_hardcoded_comparatives(coca_set):
 # ── sync_anki safety net: -ed/-ing adjective detection ──
 
 def test_spacy_dep_based_adjective_detection():
-    """Dependency relations (acomp/oprd/attr/amod) identify adjectives
-    more reliably than POS tags.  Historical bug: "astonished" in
+    """Dependency relations (acomp/oprd/amod) identify adjectives
+    more reliably than POS tags.  attr is excluded — it applies to
+    both nouns ("a teacher") and adjectives ("tall") in predicate
+    position.  Historical bug: "astonished" in
     "be astonished to see" was classified as VERB (ROOT) by spaCy,
     causing lemmatization to "astonish".  The safety net now uses
     three signals: dep-based, lemma-based, and be-to pattern.
@@ -247,7 +249,7 @@ def test_spacy_dep_based_adjective_detection():
         ("astonished", "your friends will be properly astonished to see you laughing", "astonished"),
     ]
 
-    adj_deps = {"acomp", "oprd", "attr", "amod"}
+    adj_deps = {"acomp", "oprd", "amod"}
     be_forms = {"am", "is", "are", "was", "were", "be", "been", "being"}
 
     for label, sent, word in adj_cases:

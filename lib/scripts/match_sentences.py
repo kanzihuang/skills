@@ -133,8 +133,10 @@ def _determine_lemma(token, word: str) -> str:
     if token.pos_ == "ADJ":
         return wl
 
-    # Signal 2: adjectival dependency relation
-    if token.dep_ in ("acomp", "amod", "attr", "oprd"):
+    # Signal 2: adjectival dependency relation.
+    # attr is NOT included — it applies to both nouns and adjectives
+    # in predicate position (e.g. "He is a teacher" vs "He is tall").
+    if token.dep_ in ("acomp", "amod", "oprd"):
         return wl
 
     # Signal 3: VBG + adjectival dep — participial adjective
@@ -326,11 +328,17 @@ def main():
                     lemma = token_lower
                     pos = "ADJ"
 
-                # PROPN→NOUN: lowercase or sentence-initial proper nouns
-                if pos == "PROPN" and (token.text[0].islower() or token.i == 0):
+                # PROPN→NOUN: lowercase, sentence-initial, or known-vocabulary
+                # proper nouns.  Mid-sentence capitalized common nouns
+                # (e.g. "Boa" in "book, Boa constrictors") are spaCy
+                # mis-classifications — convert if the word is in our filter.
+                if pos == "PROPN" and (token.text[0].islower() or token.i == 0
+                                       or token_lower in form_index):
                     pos = "NOUN"
-                # NOUN/VERB→ADJ: adjectival dependency overrides POS tag
-                if pos in ("NOUN", "VERB") and token.dep_ in ("amod", "acomp", "attr", "oprd"):
+                # NOUN/VERB→ADJ: adjectival dependency overrides POS tag.
+                # attr is excluded — it applies to both nouns ("a teacher")
+                # and adjectives ("tall") in predicate position.
+                if pos in ("NOUN", "VERB") and token.dep_ in ("amod", "acomp", "oprd"):
                     pos = "ADJ"
                 # NOUN+compound→ADJ: spaCy mis-tags some adjectives as noun
                 # compounds (e.g. "primeval forests").  Adjective suffixes
