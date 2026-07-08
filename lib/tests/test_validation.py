@@ -232,6 +232,31 @@ def test_sentence_ending_with_bare_comma_is_error():
         f"Should detect bare comma ending\nErrors: {errors}"
 
 
+# ── Colon-ending sentence (dialogue-attribution fragment) ──
+
+
+def test_sentence_ending_with_colon_is_error():
+    """Sentences ending with ':' are dialogue-attribution fragments — hard error."""
+    w = make_word(
+        word="attentively",
+        sentence="He looked attentively, then:",
+    )
+    errors = validate_word_entries([w])
+    assert has_error(errors, "attentively", "dialogue-attribution"), \
+        f"Should detect colon ending\nErrors: {errors}"
+
+
+def test_then_colon_caught_as_function_word():
+    """'then:' is stripped to 'then' and caught by function-word check."""
+    w = make_word(
+        word="attentively",
+        sentence="He looked attentively, then:",
+    )
+    errors = validate_word_entries([w])
+    assert has_error(errors, "attentively", "function word"), \
+        f"'then:' should match 'then' in function word set\nErrors: {errors}"
+
+
 def test_old_regex_still_catches_comma_period():
     """Regression: old ',.' pattern still caught by extended check."""
     w = make_word(

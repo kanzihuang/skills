@@ -11,6 +11,7 @@ from lib.scripts.match_sentences import (
     hard_truncate,
     _better,
     _clean_quote_artifact,
+    _normalize_dialogue_attribution,
 )
 
 
@@ -63,6 +64,75 @@ def test_quote_artifact_with_leading_whitespace():
 
 def test_quote_artifact_clean_sentence_unchanged():
     assert _clean_quote_artifact('"Hello," he said.') == '"Hello," he said.'
+
+
+# ── Dialogue-attribution normalization ──
+
+
+class TestDialogueAttributionNormalization:
+    """_normalize_dialogue_attribution joins colon-ending lines with dialogue."""
+
+    def test_colon_attribution_joined(self):
+        """'He looked...:\\n\\n\"No!\"' → ': \"No!\"'"""
+        from lib.scripts.match_sentences import _normalize_dialogue_attribution
+
+        text = 'He looked attentively, then:\n\n"No! That one is very ill."'
+        result = _normalize_dialogue_attribution(text)
+        assert ': "No!' in result, f"expected joined, got: {repr(result)}"
+        assert '\n\n' not in result, "blank lines should be removed"
+
+    def test_no_colon_not_affected(self):
+        """Text without colon-attribution pattern is unchanged."""
+        from lib.scripts.match_sentences import _normalize_dialogue_attribution
+
+        text = "This is a normal sentence.\n\nAnother paragraph here."
+        result = _normalize_dialogue_attribution(text)
+        assert result == text, f"text should be unchanged, got: {repr(result)}"
+
+    def test_colon_without_dialogue_preserved(self):
+        """'Chapter 1:\\n\\nWhen I was six...' — no quote → preserved."""
+        from lib.scripts.match_sentences import _normalize_dialogue_attribution
+
+        text = "Chapter 1:\n\nWhen I was six years old, I once saw..."
+        result = _normalize_dialogue_attribution(text)
+        assert result == text, (
+            f"colon without dialogue quote should be preserved, got: {repr(result)}"
+        )
+
+    def test_multiple_attributions_in_text(self):
+        """Multiple colon-attribution patterns all joined."""
+        from lib.scripts.match_sentences import _normalize_dialogue_attribution
+
+        text = (
+            'He looked attentively, then:\n\n"No! Too ill."\n\n'
+            'I drew:\n\n"He has gone to sleep..."'
+        )
+        result = _normalize_dialogue_attribution(text)
+        assert ': "No!' in result
+        assert ': "He has' in result
+        # Paragraph breaks between unrelated lines should remain
+        assert '\n\n' in result, (
+            "paragraph break after dialogue close-quote should remain"
+        )
+
+    def test_end_to_end_attentively_sentence(self):
+        """Full pipeline: attentively gets a complete sentence with dialogue."""
+        from lib.scripts.match_sentences import split_sentences
+
+        text = (
+            'I drew.  Then\n\n'
+            'He looked attentively, then:\n\n'
+            '"No! That one is already very ill. Do another one."'
+        )
+        sentences = split_sentences(text)
+        # Should find one sentence containing both the attribution and dialogue
+        combined = [s for s in sentences if 'attentively' in s]
+        assert len(combined) == 1, f"expected 1 sentence with attentively, got {len(combined)}"
+        sent = combined[0]
+        assert 'attentively' in sent
+        assert 'No!' in sent or 'very ill' in sent, (
+            f"sentence should include dialogue, got: {repr(sent)}"
+        )
 
 
 # ── _better() three-tier comparison ──

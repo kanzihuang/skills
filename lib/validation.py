@@ -153,13 +153,27 @@ def validate_word_entries(words: list[dict]) -> list[str]:
                 "nearly", "else",
             }
             last_word = re.split(r'\s+', clean.rstrip('"\'') + ' ')[-2].strip().lower()
+            # Strip trailing colon/semicolon before comparing —
+            # "then:" should match "then" in the function word set.
+            # Do NOT strip periods or commas — those are legitimate
+            # sentence endings (e.g. "came back again." is fine).
+            last_word = last_word.rstrip(':;')
             if last_word in _FUNCTION_ENDINGS:
                 errors.append(
                     f"[{word}] sentence ends with function word "
                     f"'{last_word}' - likely truncated fragment"
                 )
 
-            # 7d. Punctuation artifact
+            # 7d. Sentence ending with colon — dialogue-attribution fragment.
+            # A colon-terminated "sentence" is never grammatically complete;
+            # the following dialogue must be joined (see _normalize_dialogue_attribution).
+            if clean.rstrip().endswith(':'):
+                errors.append(
+                    f"[{word}] sentence ends with ':' — "
+                    f"dialogue-attribution fragment (needs following dialogue)"
+                )
+
+            # 7e. Punctuation artifact
             stripped = clean.rstrip()
             if re.search(r',[.)]$', stripped) or stripped.endswith(','):
                 errors.append(

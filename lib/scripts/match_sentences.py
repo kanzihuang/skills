@@ -31,8 +31,31 @@ def _get_segmenter() -> pysbd.Segmenter:
     return pysbd.Segmenter(language="en", clean=True)
 
 
+_DIALOGUE_ATTRIBUTION_RE = re.compile(r':[ \t]*\n[ \t]*\n[ \t]*"')
+
+
+def _normalize_dialogue_attribution(text: str) -> str:
+    """Join colon-ending attribution lines with their dialogue.
+
+    In some plain-text editions, dialogue-attribution lines are separated
+    from their spoken text by blank lines:
+
+        He looked attentively, then:
+
+        "No! That one is already very ill."
+
+    PySBD splits these at the blank line, producing fragment sentences
+    like 'He looked attentively, then:'.  Collapse the whitespace so
+    PySBD sees the attribution and dialogue as one sentence:
+
+        He looked attentively, then: "No! That one is already very ill."
+    """
+    return _DIALOGUE_ATTRIBUTION_RE.sub(r': "', text)
+
+
 def split_sentences(text: str) -> list[str]:
     """Split text into sentences using PySBD."""
+    text = _normalize_dialogue_attribution(text)
     text = re.sub(r'\n{2,}', '\n\n', text)
     text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
     seg = _get_segmenter()
