@@ -175,9 +175,23 @@ Internet Archive `.txt` files often contain double-space OCR artifacts. `match_s
 
 Step 2B truncation must produce **continuous substrings** of the source text — delete from beginning/end only, never replace/edit words in the middle. Editing (e.g., "And then look:" → "Look:") breaks regex matching in `translate_deepl.py`, silently losing DeepL context.
 
-**Fix (2026-07-05)**: Step 2B post-truncation self-checks now include Step 0 — `_build_sentence_regex(truncated)` must match the source text. Failure → rejection, redo the truncation.
+**Fix (2026-07-05)**: Step 2B post-truncation self-checks now include Step 0 — `build_sentence_regex(truncated)` (from `lib.utils`) must match the source text. Failure → rejection, redo the truncation.
 
-**Verify**: after truncation, run `_build_sentence_regex(sentence)` against source sentences. Match → continuous substring ✓. No match → editing detected ✗.
+**Verify**: after truncation, run `build_sentence_regex(sentence)` (`from lib.utils import build_sentence_regex`) against source sentences. Match → continuous substring ✓. No match → editing detected ✗.
+
+### Blank-line sentence fragmentation (PySBD + source text artifacts)
+
+When source text contains blank lines within a sentence (e.g. `"bigger \n\n\n\nthan himself"`), PySBD treats `\n\n` as a sentence boundary, splitting the sentence into fragments. `_normalize_dialogue_attribution()` handles `[:,]\n{2,}["""]` (attribution→dialogue), but does not cover blank lines within sentences without attribution markers.
+
+**Fix (2026-07-08)**: `match_sentences.py` now marks fragment candidates with `is_fragment=True` (via `_is_fragment()` — detects missing sentence-ending punctuation, unclosed quotes, lowercase starts). `_better()` Tier 0 deprioritizes fragments: a complete sentence always beats a fragment; if the only candidate is a fragment, it still wins (to avoid data loss). `check_step_completed.py --step 2B` flags sentences lacking terminating `. ! ?`. Step 2B provides a manual repair workflow in `SHARED_WORKFLOW.md`.
+
+Symptom: `is_fragment=True` in match_sentences output for a word; `check_step_completed.py` warns about lacking terminating punctuation. Check: `grep '"is_fragment": true'` in match_sentences output. If the word only appears once in the text (no other sentence to select), the fragment is still kept — fix it in Step 2B.
+
+### Lemma case normalization at output
+
+**Change (2026-07-08)**: Non-PROPN lemmas are now lowercased at output time (`match_sentences.py:578`): `cand['lemma'] if cand['pos'] == 'PROPN' else cand['lemma'].lower()`. The group key also lowercases (`(lemma.lower(), pos)`) to merge same-word different-casing entries. Previously, `_determine_lemma():157` returned capitalized lemmas for mid-sentence PROPN tokens, which after PROPN→NOUN conversion produced `"Asteroid"` vs `"asteroid"` — two separate entries for the same word, later merged by `sync_anki.py`'s dedup with a surprise card count drop.
+
+Symptom: fewer cards than expected (e.g., 23 vs 24); capitalized and lowercase lemmas for the same word. Check: `grep -E '"lemma": "[A-Z]'` in match_sentences output for non-PROPN entries.
 
 ### Intra-batch dedup key: (lemma, pos) not surface word form
 
