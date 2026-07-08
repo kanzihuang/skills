@@ -103,6 +103,7 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 - **bookId bridging (vocab-anki)**: `WordId = {lemma}_{pos}_{bookId}` enables precise Anki ↔ WeRead matching and prevents cross-POS collisions.
 - **WordId isolation (vocab-book)**: `WordId = {lemma}_{pos}_{suffix}` — UUID suffix isolates cards from other batches; POS prevents same-lemma different-POS collisions.
 - **IPA from cmudict**: IPA is generated mechanically by `match_sentences.py` from the CMU Pronouncing Dictionary. Claude only provides IPA for cmudict misses and heteronym disambiguation.
+- **No hard-coded semantic word lists in Python**: Python code handles mechanical/formal work (tokenization, regex, IPA lookup, COCA level mapping). Semantic classification — distinguishing emotional adjectives from true passives, heteronym disambiguation, identifying non-body-text sentences — is Claude's responsibility in the mandatory review gates (Step 2B, Step 2F). Hard-coded word sets create unbounded maintenance burden and violate separation of concerns.
 
 ## Known Pitfalls & Troubleshooting
 
@@ -305,6 +306,21 @@ Symptom: 237KB cached file instead of expected 94KB; `head -c 500` shows HTML ta
 **Change (2026-07-08)**: `extract_chapter.py` now supports `--boundaries-file` for books without explicit chapter headings (e.g. Katherine Woods translation of The Little Prince). Claude identifies chapter boundaries semantically, writes a JSON file `[{"chapter": 1, "start": 0, "end": 6974}, ...]`, and passes it via `--boundaries-file`. When provided, `find_chapter_boundaries()` is skipped.
 
 Symptom: `extract_chapter.py --list` prints "No chapter headings detected" despite the book clearly having chapters.
+
+### "be + VBN + by" emotional -ed adjectives misclassified as VERB
+
+spaCy analyses past participles in "be + VBN + by" constructions as verbal passives. For emotional/stative adjectives like "disheartened" ("I had been disheartened by the failure"), this produces `pos="VERB"`, `lemma="dishearten"` — the lemma is reduced to a base verb that does not appear in the text.
+
+This is an inherent limitation of mechanical POS analysis — distinguishing "disheartened by" (emotional state, → ADJ) from "broken by" (action on patient, → VERB) requires semantic understanding.
+
+**Do NOT fix this with hard-coded adjective sets in Python.** The fix is in the workflow:
+
+1. **Step 2B (Claude review)** must explicitly check for "be + VBN + by" patterns where the VBN is an emotional/stative adjective. Test: "very + word" (e.g. "very disheartened" ✓ → ADJ; "very broken" on a window ✗ → VERB).
+2. When found, Claude corrects `pos` → "ADJ" and `lemma` → surface form in the JSON.
+
+This is the correct separation: Python handles mechanical lemmatization; Claude handles semantic classification during the mandatory review gate.
+
+Symptom: `lemma` is a verb base not appearing in the text (e.g. "dishearten" for "disheartened"). Check: entries where `lemma != word` and `word` ends in `-ed` following a be-form.
 
 ## Testing
 
