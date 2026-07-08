@@ -193,6 +193,22 @@ def _better(old: dict, new: dict) -> bool:
     return True                                                  # pick new
 
 
+def _first_word_boundary_offset(text: str, forms: list[str], start: int = 0) -> int:
+    """Return char offset of the first \\b-bounded occurrence of any form.
+
+    Uses word-boundary regex to avoid substring false matches
+    (e.g. 'ram' matching inside 'grammar'). Returns -1 if no form found.
+    """
+    search_text = text[start:]
+    for form in forms:
+        if not form:
+            continue
+        m = re.search(r'\b' + re.escape(form) + r'\b', search_text, re.IGNORECASE)
+        if m:
+            return start + m.start()
+    return -1
+
+
 def _cmu_ipa(word: str) -> str:
     """Look up IPA from cmudict, with suffix-stripping fallback.
 
@@ -492,13 +508,8 @@ def main():
                 coca_level = lvl
                 break
 
-        # char_offset: first occurrence in story body
-        char_offset = -1
-        for form in all_forms:
-            pos_val = text.lower().find(form.lower(), start_offset)
-            if pos_val >= 0:
-                char_offset = pos_val
-                break
+        # char_offset: first word-boundary occurrence in story body
+        char_offset = _first_word_boundary_offset(text, all_forms, start_offset)
 
         # IPA: try lemma first, fall back to matched surface form
         ipa = _cmu_ipa(lemma) or _cmu_ipa(cand['matched_form'])

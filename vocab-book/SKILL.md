@@ -78,6 +78,7 @@ head -c 500 /tmp/<safe_title>-*-full.txt
 > 文件 >20KB 且包含书中实际文本。**必须使用英文原版**——双语版中的中文翻译、西里尔字母、guillemet（«»）等非英文内容会污染句子匹配。`match_sentences.py` 遇到此类文本直接拒绝。优先选择 Project Gutenberg（英文版）、Standard Ebooks、Internet Archive 英文原版。**不要使用 ESL 简化版或双语对照版替代**——改写后的句子与原文不符。
 
 拉取后做质量验证（`head -c 500`）：
+- **纯文本格式验证**：`head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → 则文件为 HTML 包装，需换源获取纯文本版本（Internet Archive 使用 `_djvu.txt` 后缀）
 - 正文句子是否完整（非章节摘要片段）
 - 有无明显 OCR 损坏（如 `fig ures` → 字母间多余空格）
 - 首句是否与公认经典译本一致（排除 ESL 简化版/改编版/双语版）
@@ -94,6 +95,33 @@ head -c 500 /tmp/<safe_title>-*-full.txt
 ```
 
 提取后的文本自动排除序言（章节提取从章节标题开始）。后续步骤使用裁剪后的文件。未检测到章节标题时打印警告，使用原始全文本。
+
+**无章节标题的书籍**（如《小王子》Katherine Woods 译本无 CHAPTER I 等标记）：
+
+Claude 阅读全文后根据语义识别章节边界，创建 JSON 边界文件传入 `--boundaries-file`：
+
+```bash
+# Claude 先识别章节边界，写入 JSON（start inclusive, end exclusive）
+cat > /tmp/<safe_title>-boundaries.json << 'EOF'
+[
+  {"chapter": 1, "start": 0, "end": 6974},
+  {"chapter": 2, "start": 6974, "end": 12345}
+]
+EOF
+
+# 用边界文件列出章节
+<skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/extract_chapter.py \
+  /tmp/<safe_title>-*-full.txt \
+  --boundaries-file /tmp/<safe_title>-boundaries.json --list
+
+# 提取第 N 章
+<skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/extract_chapter.py \
+  /tmp/<safe_title>-*-full.txt \
+  --chapter <N> --boundaries-file /tmp/<safe_title>-boundaries.json \
+  --output /tmp/<safe_title>-ch<N>.txt
+```
+
+`--boundaries-file` 传入后跳过机械章节检测，直接使用外部边界。`--list` 预览确认边界准确后再提取。
 
 ### Step 2: 运行 filter_fulltext.py
 

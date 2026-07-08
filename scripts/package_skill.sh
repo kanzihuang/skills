@@ -11,8 +11,8 @@ mkdir -p "$OUTPUT_DIR"
 
 # 各技能需要的 lib 模块
 declare -A SKILL_LIB_DEPS
-SKILL_LIB_DEPS["vocab-anki"]="coca.py lemmatize.py ankiconnect.py utils.py sync_anki.py SHARED_WORKFLOW.md"
-SKILL_LIB_DEPS["vocab-book"]="coca.py lemmatize.py ankiconnect.py utils.py sync_anki.py SHARED_WORKFLOW.md"
+SKILL_LIB_DEPS["vocab-anki"]="coca.py lemmatize.py ankiconnect.py utils.py sync_anki.py chapter_detect.py SHARED_WORKFLOW.md"
+SKILL_LIB_DEPS["vocab-book"]="coca.py lemmatize.py ankiconnect.py utils.py sync_anki.py chapter_detect.py SHARED_WORKFLOW.md"
 SKILL_LIB_DEPS["vocab-list"]="coca.py lemmatize.py"
 
 for skill in "${!SKILL_LIB_DEPS[@]}"; do
@@ -40,7 +40,7 @@ for skill in "${!SKILL_LIB_DEPS[@]}"; do
     done
 
     # 2b. 复制 scripts/ 共享脚本
-    for script in match_sentences.py translate_deepl.py audit_deck.py; do
+    for script in match_sentences.py translate_deepl.py audit_deck.py extract_chapter.py check_step_completed.py; do
         src="${SKILLS_DIR}/lib/scripts/${script}"
         dst="${SKILL_DIR}/lib/scripts/${script}"
         [ -f "$src" ] && cp "$src" "$dst"

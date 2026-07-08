@@ -10,8 +10,10 @@ from lib.scripts.match_sentences import (
     split_sentences,
     hard_truncate,
     _better,
+    _cmu_ipa,
     _clean_quote_artifact,
     _normalize_dialogue_attribution,
+    _first_word_boundary_offset,
 )
 
 
@@ -207,6 +209,37 @@ class TestBetter:
         assert _better(_cand(250), _cand(250)) is False  # keep old
         assert _better(_cand(300), _cand(300)) is False  # keep old
         assert _better(_cand(15), _cand(15)) is False    # keep old
+
+    def test_better_uses_config_constants(self):
+        """Verify _better references MIN_SENTENCE_LENGTH, not hardcoded 30."""
+        import inspect
+        source = inspect.getsource(_better)
+        assert "MIN_SENTENCE_LENGTH" in source, \
+            "_better() must use MIN_SENTENCE_LENGTH from config"
+
+
+# ── cmudict IPA fallback for derived forms (Issue 3) ──
+
+
+class TestCmuIpaFallback:
+    """Test _cmu_ipa suffix-stripping fallback for -ly adverbs etc."""
+
+    def test_direct_cmu_lookup_still_works(self):
+        """Words directly in cmudict are unchanged."""
+        result = _cmu_ipa("hello")
+        assert result == "/həˈloʊ/", f"Expected /həˈloʊ/, got: {result}"
+
+    def test_ly_adverb_fallback(self):
+        """indulgently → fall back to indulgent + /li/."""
+        result = _cmu_ipa("indulgently")
+        assert result, f"Expected non-empty IPA for indulgently"
+        assert result.endswith("li/"), \
+            f"Expected /li/ suffix on fallback IPA, got: {result}"
+
+    def test_unknown_word_returns_empty(self):
+        """Non-dictionary word with no suffix match returns empty string."""
+        result = _cmu_ipa("xyzzy123")
+        assert result == "", f"Expected empty string, got: {result}"
 
 
 # ── POS correction ──
@@ -430,3 +463,51 @@ class TestPOSCorrections:
         assert len(boa_entry) == 1, f"expected 1 boa entry, got {len(boa_entry)}"
         assert boa_entry[0]["pos"] == "NOUN", \
             f"expected NOUN, got {boa_entry[0]['pos']}"
+
+
+# ── char_offset word-boundary matching ──
+
+class TestCharOffsetWordBoundary:
+    """Verify _first_word_boundary_offset uses \b to avoid substring false matches."""
+
+    def test_exact_match(self):
+        assert _first_word_boundary_offset("The ram walked.", ["ram"]) == 4
+
+    def test_substring_not_matched(self):
+        """'ram' inside 'grammar' must NOT match."""
+        assert _first_word_boundary_offset("grammar is hard", ["ram"]) == -1
+
+    def test_punctuation_adjacent(self):
+        """Word followed by punctuation still matches."""
+        assert _first_word_boundary_offset("the ram.", ["ram"]) == 4
+        assert _first_word_boundary_offset("(ram)", ["ram"]) == 1
+
+    def test_case_insensitive(self):
+        assert _first_word_boundary_offset("The RAM is fast.", ["ram"]) == 4
+        assert _first_word_boundary_offset("The Ram walked.", ["ram"]) == 4
+
+    def test_no_match_returns_neg1(self):
+        assert _first_word_boundary_offset("hello world", ["xyzzy"]) == -1
+
+    def test_multiple_forms_first_wins(self):
+        """First form that matches wins; forms are tried in order."""
+        text = "The rams walked. The ram ate."
+        # 'ram' in 'rams' has NO trailing \b (s is a word char), so first
+        # match is 'ram' at position 21 (standalone "ram")
+        assert _first_word_boundary_offset(text, ["ram", "rams"]) == 21
+        # Reversed order: 'rams' matches first at position 4
+        assert _first_word_boundary_offset(text, ["rams", "ram"]) == 4
+
+    def test_empty_forms_returns_neg1(self):
+        assert _first_word_boundary_offset("hello world", []) == -1
+
+    def test_empty_form_skipped(self):
+        """Empty string in forms list is skipped gracefully."""
+        assert _first_word_boundary_offset("hello world", ["", "world"]) == 6
+
+    def test_special_regex_chars_in_form(self):
+        """re.escape prevents regex errors from special chars in form."""
+        # Dot is a regex wildcard; re.escape makes it literal
+        assert _first_word_boundary_offset("hello a.b world", ["a.b"]) == 6
+        # Asterisk
+        assert _first_word_boundary_offset("hello a*b world", ["a*b"]) == 6

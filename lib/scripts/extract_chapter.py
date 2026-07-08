@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -34,17 +35,41 @@ def _main() -> None:
                         help="List all detected chapters and exit")
     parser.add_argument("--preamble", action="store_true",
                         help="Extract only the preamble (text before first chapter)")
+    parser.add_argument("--boundaries-file", "-b", type=str, default=None,
+                        help="JSON file with chapter boundaries [{chapter, start, end}]. "
+                             "Skips mechanical detection. For books without explicit headings.")
     args = parser.parse_args()
 
     with open(args.source_text, encoding="utf-8") as f:
         text = f.read()
 
-    boundaries = find_chapter_boundaries(text)
+    if args.boundaries_file:
+        try:
+            with open(args.boundaries_file, encoding="utf-8") as f:
+                boundaries = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"Error reading --boundaries-file: {e}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(boundaries, list) or not boundaries:
+            print("Error: --boundaries-file must be a non-empty JSON array", file=sys.stderr)
+            sys.exit(1)
+        for i, b in enumerate(boundaries):
+            if not isinstance(b, dict) or "start" not in b or "end" not in b:
+                print(f"Error: boundary {i} missing 'start' or 'end' keys", file=sys.stderr)
+                sys.exit(1)
+            b.setdefault("chapter", i + 1)
+            b.setdefault("label", f"Chapter {b['chapter']}")
+            b["start"] = int(b["start"])
+            b["end"] = int(b["end"])
+    else:
+        boundaries = find_chapter_boundaries(text)
 
     if args.list:
         if not boundaries:
             print("No chapter headings detected.")
         else:
+            if args.boundaries_file:
+                print(f"Using external boundaries from {args.boundaries_file}:")
             for i, b in enumerate(boundaries, 1):
                 length = b["end"] - b["start"]
                 preview = text[b["start"]:b["start"] + 80].replace("\n", " | ")

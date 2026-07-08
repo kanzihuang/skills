@@ -49,6 +49,7 @@ Generate Anki vocabulary flashcard decks from WeRead (微信读书) English book
 | `lib/utils.py` | Shared utilities: lemmatize_word, edge_tts_bytes/file, safe_filename, print_progress |
 | `lib/scripts/match_sentences.py` | Sentence matching + per-sentence spaCy POS analysis + (lemma,pos) grouping + cmudict IPA |
 | `lib/scripts/translate_deepl.py` | DeepL batch translation with context support and sentence dedup |
+| `lib/scripts/extract_chapter.py` | Chapter extraction with `--boundaries-file` option for books without headings |
 | `lib/scripts/audit_deck.py` | Deck quality audit |
 | `lib/SHARED_WORKFLOW.md` | Shared workflow steps (2A–2H) with vocab-book |
 
@@ -78,12 +79,13 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 | `coca.py` | BNC/COCA word family lookup (Nation 2017), 3-tier strategy |
 | `lemmatize.py` | Two-tier lemmatization (spaCy POS gate, lemminflect fallback). Used by vocab-list and sync_anki.py fallback path |
 | `ankiconnect.py` | AnkiConnect JSON-RPC client |
+| `chapter_detect.py` | Chapter heading detection + preamble skip; used by match_sentences and extract_chapter |
 | `utils.py` | Shared utilities: TTS, lemmatize_word, safe_filename, print_progress |
 | `sync_anki.py` | Main sync orchestrator (uses relative imports from lib package) |
-| `scripts/` | Shared entry-point scripts (match_sentences, translate_deepl, audit_deck) |
+| `scripts/` | Shared entry-point scripts (match_sentences, translate_deepl, audit_deck, extract_chapter) |
 | `data/bnc_coca/` | Nation (2017) word family lists (25 levels × ~1000 families) |
 | `data/cmudict.dict` | CMU Pronouncing Dictionary (135K entries) |
-| `tests/` | Shared pytest suite (~359 tests) for lib modules |
+| `tests/` | Shared pytest suite (~404 tests) for lib modules |
 | `SHARED_WORKFLOW.md` | Shared Claude workflow steps (2A–2H) referenced by both SKILL.md files |
 
 ## Shared Design Principles
@@ -286,10 +288,28 @@ Constraints: only sentence-final punctuation may be changed; never edit mid-sent
 
 Symptom: sentences like `"I scribbled this drawing:"` in Internet Archive texts where the original has a period. Step 1 also now includes an OCR quality checklist to catch these early.
 
+### char_offset substring matching (word-boundary fix)
+
+**Change (2026-07-08)**: `match_sentences.py` `char_offset` computation previously used `str.find()` which performs substring matching — "ram" would match inside "grammar" (g-**ram**-mar), producing a wrong `char_offset` pointing to an unrelated part of the text. Replaced with `_first_word_boundary_offset()` which uses `\b` word-boundary regex (`re.search(r'\b' + re.escape(form) + r'\b', ...)`). Affects all short word forms that appear as substrings of longer words.
+
+Symptom: `char_offset` for "ram" pointing to "grammar" instead of "This is a ram." Check: any entry where `char_offset` points to a word that doesn't match the sentence.
+
+### Source text HTML wrapper detection
+
+**Change (2026-07-08)**: Step 1 (SKILL.md) and Step 2A-a/b (SHARED_WORKFLOW.md) quality verification now include a plain-text format check: `head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → reject and re-fetch. Also added cache filename validation in SHARED_WORKFLOW.md Step 2A-0: cached files must match `<safe_title>-<uuid8>-full.txt` naming convention; old-format files (e.g. `tlp-full.txt`) trigger a cache miss and re-download.
+
+Symptom: 237KB cached file instead of expected 94KB; `head -c 500` shows HTML tags. Check: `file /tmp/*-full.txt` or `head -c 100` for `<!DOCTYPE`/`<html`.
+
+### Chapter extraction for books without headings (--boundaries-file)
+
+**Change (2026-07-08)**: `extract_chapter.py` now supports `--boundaries-file` for books without explicit chapter headings (e.g. Katherine Woods translation of The Little Prince). Claude identifies chapter boundaries semantically, writes a JSON file `[{"chapter": 1, "start": 0, "end": 6974}, ...]`, and passes it via `--boundaries-file`. When provided, `find_chapter_boundaries()` is skipped.
+
+Symptom: `extract_chapter.py --list` prints "No chapter headings detected" despite the book clearly having chapters.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 386 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Shared tests** live in `lib/tests/` (pytest, 404 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.
