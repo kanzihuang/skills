@@ -11,7 +11,7 @@ Historical errors covered:
 """
 
 import pytest
-from lib.utils import lemmatize_word, safe_filename
+from lib.utils import lemmatize_word, safe_filename, build_sentence_regex
 
 
 @pytest.mark.parametrize(
@@ -101,3 +101,12 @@ def test_safe_filename(filename, expected):
     """safe_filename sanitizes to alphanumeric + underscore."""
     result = safe_filename(filename)
     assert result == expected, f"safe_filename({filename!r}) = {result!r}"
+
+
+def test_build_sentence_regex_importable():
+    """build_sentence_regex is importable from lib.utils without side effects."""
+    import re
+    pattern = build_sentence_regex("hello world.")
+    assert re.search(pattern, "hello  world.")
+    assert re.search(pattern, "hello\nworld.")
+    assert not re.search(pattern, "goodbye")

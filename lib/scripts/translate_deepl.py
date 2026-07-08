@@ -67,28 +67,11 @@ def _classify_error(e: Exception) -> str:
         return "retry_with_ctx"
     # Unknown exception — conservative: try without context
     return "retry_without_ctx"
-def _build_sentence_regex(sentence: str) -> str:
-    """Build a regex from sentence words joined by \\s+ for fuzzy matching.
-
-    Strips punctuation from each word so \"ephemeral,\" in the truncated
-    sentence matches \"ephemeral\" in the source text. Handles newlines,
-    straight/curly quotes, and minor punctuation differences.
-    """
-    import string
-    _PUNCT = string.punctuation + '“”‘’…—–'
-    words = []
-    for w in sentence.split():
-        w = w.strip(_PUNCT)
-        if w:
-            words.append(re.escape(w))
-    # Join with [^\w]* to swallow any non-word chars between words
-    # (punctuation, whitespace, newlines, quotes).  \s+ alone misses
-    # "I, too" (comma after I) or "tenderness \nand" (newline).
-    return r'[^\w]*'.join(words)
 
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lib.config import BATCH_SIZE, CONTEXT_SENTENCES
+from lib.utils import build_sentence_regex as _build_sentence_regex
 
 
 def strip_tags(text: str) -> str:

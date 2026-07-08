@@ -14,7 +14,9 @@ from lib.scripts.match_sentences import (
     _clean_quote_artifact,
     _normalize_dialogue_attribution,
     _first_word_boundary_offset,
+    _is_fragment,
 )
+from lib.scripts.check_step_completed import _has_sentence_ending
 
 
 # ── PySBD sentence splitting ──
@@ -35,6 +37,29 @@ def test_dialogue_quote_split():
 def test_abbreviation_not_split():
     sents = split_sentences("Mr. Jones and Dr. Lee went to U.S. offices.")
     assert len(sents) == 1
+
+
+def test_double_space_normalized():
+    """split_sentences collapses multiple consecutive spaces into one."""
+    sents = split_sentences("This is  a  test  sentence.")
+    assert len(sents) == 1
+    assert "  " not in sents[0]
+    assert sents[0] == "This is a test sentence."
+
+
+def test_triple_space_normalized():
+    sents = split_sentences("Hello   world.")
+    assert "   " not in sents[0]
+    assert sents[0] == "Hello world."
+
+
+def test_hyphen_space_preserved():
+    """split_sentences does NOT fix hyphen-space (known limitation).
+    Cannot reliably distinguish OCR error 'fair-to- middling' from
+    legitimate 're- enter'."""
+    sents = split_sentences("fair-to- middling quality.")
+    assert len(sents) == 1
+    assert "to- middling" in sents[0]
 
 
 # ── Hard truncation ──
@@ -171,9 +196,9 @@ class TestDialogueAttributionNormalization:
 # ── _better() three-tier comparison ──
 
 
-def _cand(length):
+def _cand(length, is_fragment=False):
     """Helper: build a minimal candidate dict for _better()."""
-    return {"len": length, "text": "x" * length}
+    return {"len": length, "text": "x" * length, "is_fragment": is_fragment}
 
 
 class TestBetter:
@@ -239,6 +264,47 @@ class TestBetter:
         assert "MIN_SENTENCE_LENGTH" in source, \
             "_better() must use MIN_SENTENCE_LENGTH from config"
 
+    # Tier 0: complete sentence always beats fragment
+    def test_complete_beats_fragment(self):
+        assert _better(
+            _cand(50, is_fragment=True),
+            _cand(50, is_fragment=False),
+        ) is True   # new is complete → switch
+
+    def test_fragment_does_not_beat_complete(self):
+        assert _better(
+            _cand(50, is_fragment=False),
+            _cand(50, is_fragment=True),
+        ) is False  # old is complete → keep
+
+    def test_complete_too_long_beats_fragment_sweet_spot(self):
+        """Even a too-long complete sentence beats a sweet-spot fragment."""
+        assert _better(
+            _cand(50, is_fragment=True),
+            _cand(300, is_fragment=False),
+        ) is True   # new is complete (even though too-long) → switch
+
+    def test_fragment_sweet_spot_does_not_beat_complete_too_short(self):
+        """A sweet-spot fragment does NOT beat a too-short complete sentence."""
+        assert _better(
+            _cand(15, is_fragment=False),
+            _cand(50, is_fragment=True),
+        ) is False  # old is complete → keep
+
+    def test_both_fragments_fall_through_to_length(self):
+        """Both fragments → fall through to Tier 1-3 length comparison."""
+        assert _better(
+            _cand(60, is_fragment=True),
+            _cand(50, is_fragment=True),
+        ) is True   # new shorter → sweet-spot rule
+
+    def test_both_complete_unchanged_behavior(self):
+        """Both complete → existing length comparison unchanged."""
+        assert _better(
+            _cand(60, is_fragment=False),
+            _cand(50, is_fragment=False),
+        ) is True   # new shorter → sweet-spot rule
+
 
 # ── cmudict IPA fallback for derived forms (Issue 3) ──
 
@@ -262,6 +328,56 @@ class TestCmuIpaFallback:
         """Non-dictionary word with no suffix match returns empty string."""
         result = _cmu_ipa("xyzzy123")
         assert result == "", f"Expected empty string, got: {result}"
+
+
+# ── _is_fragment detection ──
+
+
+class TestIsFragment:
+    """Test _is_fragment() — sentence completeness detection."""
+
+    # Signal 1: no sentence-ending punctuation after stripping quotes
+    def test_complete_sentence_is_not_fragment(self):
+        assert _is_fragment("This is a complete sentence.") is False
+
+    def test_question_is_not_fragment(self):
+        assert _is_fragment("Is this a question?") is False
+
+    def test_exclamation_is_not_fragment(self):
+        assert _is_fragment("What a pretty house!") is False
+
+    def test_missing_period_is_fragment(self):
+        assert _is_fragment("This sentence has no ending") is True
+
+    def test_quote_ending_stripped_then_punctuation(self):
+        assert _is_fragment("He said, 'Hello.'") is False
+
+    def test_quote_ending_stripped_no_punctuation(self):
+        assert _is_fragment('"Once upon a time there was a prince') is True
+
+    # Signal 2: odd number of ASCII double quotes
+    def test_unclosed_double_quote_is_fragment(self):
+        assert _is_fragment('He said, "hello') is True
+
+    def test_balanced_double_quotes_not_fragment(self):
+        assert _is_fragment('He said, "hello."') is False
+
+    def test_three_quotes_is_fragment(self):
+        assert _is_fragment('He said, "hello," then "goodbye') is True
+
+    # Signal 3: starts with lowercase
+    def test_starts_lowercase_is_fragment(self):
+        assert _is_fragment("than himself, and who had need of a sheep...") is True
+
+    def test_starts_capital_is_not_fragment(self):
+        assert _is_fragment("Than himself, and who had need.") is False
+
+    # Edge cases
+    def test_empty_string_is_fragment(self):
+        assert _is_fragment("") is True
+
+    def test_whitespace_only_is_fragment(self):
+        assert _is_fragment("   ") is True
 
 
 # ── POS correction ──
@@ -578,6 +694,48 @@ class TestPOSCorrections:
         w = result["words"][0]
         assert w["pos"] == "NOUN", f"expected NOUN, got {w['pos']}"
 
+    def test_propn_to_noun_lowercases_lemma(self):
+        """Non-PROPN lemma is always lowercased at output.
+
+        'Asteroid' in 'Asteroid 325' may be tagged ADJ by spaCy (noun
+        modifier), and 'asteroid' in 'This asteroid...' is NOUN. Both
+        are non-PROPN → lemmas must be lowercase. Different POS means
+        separate entries (by design — POS prevents cross-POS collision).
+        """
+        result = _run_pipeline(
+            [{"lemma": "asteroid", "rep": "asteroid",
+              "forms": ["asteroid"], "coca_level": 8}],
+            "This asteroid is small. He named it Asteroid 325.",
+        )
+        words = result["words"]
+        # All entries should have lowercase lemma (not 'Asteroid')
+        for w in words:
+            assert w["lemma"] == "asteroid", (
+                f"expected lowercase lemma 'asteroid', got '{w['lemma']}'"
+                f" (pos={w['pos']})"
+            )
+
+    def test_genuine_propn_keeps_capital_lemma(self):
+        """PROPN entries (Jupiter) keep uppercase lemma after the fix.
+        Only non-PROPN lemmas are lowercased; pos=PROPN preserves casing.
+        """
+        result = _run_pipeline(
+            [{"lemma": "jupiter", "rep": "jupiter",
+              "forms": ["jupiter"], "coca_level": 16}],
+            "I knew about planets such as Earth, Jupiter, Mars and Venus.",
+        )
+        words = result["words"]
+        j_entry = [w for w in words if w["pos"] == "PROPN"]
+        assert len(j_entry) >= 1, f"expected at least 1 PROPN, got {j_entry}"
+        # PROPN lemmas must keep uppercase
+        for w in j_entry:
+            assert w["lemma"][0].isupper(), (
+                f"PROPN lemma '{w['lemma']}' must start with uppercase"
+            )
+        # The specific Jupiter entry
+        jupiter = [w for w in j_entry if w["lemma"] == "Jupiter"]
+        assert len(jupiter) == 1, f"expected Jupiter PROPN, got {[w['lemma'] for w in j_entry]}"
+
 
 # ── char_offset word-boundary matching ──
 
@@ -625,3 +783,30 @@ class TestCharOffsetWordBoundary:
         assert _first_word_boundary_offset("hello a.b world", ["a.b"]) == 6
         # Asterisk
         assert _first_word_boundary_offset("hello a*b world", ["a*b"]) == 6
+
+
+# ── _has_sentence_ending (check_step_completed.py) ──
+
+
+class TestCheckStepCompleted:
+    """Test _has_sentence_ending() — fragment detection for Step 2B guard."""
+
+    def test_ends_with_period(self):
+        assert _has_sentence_ending("This is complete.") is True
+
+    def test_ends_with_question_mark(self):
+        assert _has_sentence_ending("Is it?") is True
+
+    def test_ends_with_exclamation(self):
+        assert _has_sentence_ending("Wow!") is True
+
+    def test_no_ending_punctuation(self):
+        assert _has_sentence_ending("This has no ending") is False
+
+    def test_quote_no_punctuation(self):
+        assert _has_sentence_ending('"scarcely any bigger') is False
+
+    def test_curly_quotes_stripped(self):
+        assert _has_sentence_ending(
+            '“Once upon a time there was a prince.”'
+        ) is True

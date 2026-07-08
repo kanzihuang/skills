@@ -20,9 +20,9 @@ if _REPO_ROOT not in sys.path:
 
 from lib.scripts.translate_deepl import (
     strip_tags,
-    _build_sentence_regex,
     translate_batch,
 )
+from lib.utils import build_sentence_regex as _build_sentence_regex
 
 
 class TestStripTags:

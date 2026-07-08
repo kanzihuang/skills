@@ -22,6 +22,14 @@ import json
 import re
 import sys
 
+_QUOTES = '"' + '“' + '”' + "'" + '‘' + '’'
+
+
+def _has_sentence_ending(sent: str) -> bool:
+    """Check sentence ends with . ! ? after stripping trailing quotes."""
+    stripped = sent.rstrip().rstrip(_QUOTES)
+    return bool(stripped) and stripped[-1] in ('.', '!', '?')
+
 
 def _check_2b(words: list[dict]) -> list[str]:
     """Check if Step 2B (sentence selection + truncation) was executed.
@@ -53,6 +61,13 @@ def _check_2b(words: list[dict]) -> list[str]:
             warnings.append(
                 f"[{word}] sentence starts with '{first_char}' — may be a "
                 f"fragment, Step 2B completeness check likely skipped"
+            )
+
+        # Check sentence has terminating punctuation
+        if not _has_sentence_ending(clean):
+            warnings.append(
+                f"[{word}] sentence lacks terminating punctuation (. ! ?) — "
+                f"may be a fragment, verify in Step 2B"
             )
 
     return warnings

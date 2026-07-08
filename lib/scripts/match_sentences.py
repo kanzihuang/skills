@@ -61,6 +61,7 @@ def split_sentences(text: str) -> list[str]:
     text = _normalize_dialogue_attribution(text)
     text = re.sub(r'\n{2,}', '\n\n', text)
     text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
+    text = re.sub(r' {2,}', ' ', text)
     seg = _get_segmenter()
     sentences = seg.segment(text)
     sentences = [_clean_quote_artifact(s.strip()) for s in sentences]
@@ -75,6 +76,33 @@ def _strip_non_alpha(text: str) -> str:
 def _clean_quote_artifact(sentence: str) -> str:
     """Remove PySBD dangling-quote artifacts from dialogue splitting."""
     return re.sub(r'^\"\s+\"', '"', sentence)
+
+
+_QUOTES = '"' + '“' + '”' + "'" + '‘' + '’'
+
+
+def _is_fragment(sentence: str) -> bool:
+    """Return True if sentence appears to be an incomplete fragment.
+
+    Signals (any one hit → potential fragment):
+      1. Doesn't end with . ! ? after stripping trailing quotes
+      2. Odd number of ASCII \" (unclosed quote)
+      3. Starts with lowercase letter
+    """
+    s = sentence.strip()
+    if not s:
+        return True
+    # Signal 3: starts lowercase
+    if s[0].islower():
+        return True
+    # Signal 2: odd number of ASCII double quotes
+    if s.count('"') % 2 != 0:
+        return True
+    # Signal 1: no sentence-ending punctuation after stripping quotes
+    stripped = s.rstrip().rstrip(_QUOTES)
+    if stripped and stripped[-1] not in ('.', '!', '?'):
+        return True
+    return False
 
 
 def hard_truncate(sentence: str, max_len: int = HARD_CUTOFF) -> tuple[str, bool]:
@@ -178,13 +206,20 @@ def _determine_lemma(token, word: str) -> str:
 def _better(old: dict, new: dict) -> bool:
     """Return True if *new* sentence is better than *old*.
 
-    Three-tier comparison (pure logic, no scoring):
+    Four-tier comparison (pure logic, no scoring):
+      0. completeness: non-fragment beats fragment
       1. sweet-spot (MIN_SENTENCE_LENGTH-MAX_SENTENCE_LENGTH chars): shorter wins
       2. too-long (>MAX_SENTENCE_LENGTH): shorter wins
       3. too-short (<MIN_SENTENCE_LENGTH): longer wins
     Cross-tier: sweet-spot > too-long > too-short.
     Tie (same length): keep old.
     """
+    # Tier 0 — completeness: non-fragment beats fragment
+    old_frag = old.get('is_fragment', False)
+    new_frag = new.get('is_fragment', False)
+    if old_frag != new_frag:
+        return not new_frag  # pick new only if it's complete
+
     la, lb = old['len'], new['len']
     if la == lb:
         return False                                             # tie → keep old
@@ -510,7 +545,7 @@ def main():
                         and token_lower not in _all_lowercase_words):
                     pos = "PROPN"
 
-                key = (lemma, pos)
+                key = (lemma.lower(), pos)
 
                 cand = {
                     'text': truncated,
@@ -523,6 +558,7 @@ def main():
                     'spacy_lemma': token.lemma_,
                     'be_to': has_be_to,
                     'truncated': was_truncated,
+                    'is_fragment': _is_fragment(truncated),
                 }
 
                 if key not in groups or _better(groups[key], cand):
@@ -575,7 +611,7 @@ def main():
         ipa = _cmu_ipa(lemma) or _cmu_ipa(cand['matched_form'])
 
         results.append({
-            'lemma': lemma,
+            'lemma': cand['lemma'] if cand['pos'] == 'PROPN' else cand['lemma'].lower(),
             'word': cand['matched_form'],
             'forms': all_forms,
             'pos': cand['pos'],

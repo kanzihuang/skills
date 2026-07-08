@@ -57,6 +57,8 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 源文本获取失败 → 该批次所有单词跳过。
 
+**已知局限**: `split_sentences()` 将空行（`\n\n`）视为句边界。当源文本在句中包含空行时（通常为 OCR 或排版 artifact），PySBD 会将其切为多个碎片。碎片句由 `_is_fragment()` 自动标记（`is_fragment=True`），`check_step_completed.py --step 2B` 可自动检测缺少句末标点的可疑句子。详见下方 Step 2B 的修复流程。
+
 ---
 
 ## Step 2B: 句子审核 + 完整性校验 + 长句截断（Claude，1 agent）
@@ -79,7 +81,24 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 - 目标 ≤250 字符，语法完整，含生词上下文
 - 禁止切掉目标词、禁止以连词/功能词开头或结尾
 - **截断必须从原始源文本做显式字符切片**（`text[start:end]`），不要基于 JSON 中的 sentence 字符串修改——JSON 中的句子经 `_normalize_dialogue_attribution()` 规范化后换行/空格与原始源文本不同
-- **截断后验证**：用 `re.search(_build_sentence_regex(truncated), raw_source_text)` 验证。**不要用 `assert truncated in source_text`** ——精确字符串包含会因规范化差异而误判。此验证的真正价值是防止 Claude 在截断时意外编辑文本（如 "And then look:" → "Look:"），而非验证截断结果在源文本中的存在性
+- **截断后验证**：用 `re.search(build_sentence_regex(truncated), raw_source_text)` 验证（函数位于 `lib/utils.py`，通过 `from lib.utils import build_sentence_regex` 导入）。**不要用 `assert truncated in source_text`** ——精确字符串包含会因规范化差异而误判。此验证的真正价值是防止 Claude 在截断时意外编辑文本（如 "And then look:" → "Look:"），而非验证截断结果在源文本中的存在性
+
+### 修复因源文本空行产生的碎片句子
+
+当 `match_sentences.py` 的输出包含不完整句子时（特征：`is_fragment=True`、不以 `. ! ?` 结尾、源文本中同一句的后半部分以空行隔开），按以下流程修复：
+
+1. **定位**: 在源文本中搜索碎片文本定位位置: `text.find(fragment_text)`
+2. **扩展**: 前后扩展找到完整句边界（句首大写 / 句末 `. ! ?`）
+3. **提取**: `re.sub(r'\s+', ' ', text[start:end]).strip()`
+4. **计算偏移**: 完整句中目标词的新字符位置 → 更新 `target_offset`
+5. **验证**: 用 `build_sentence_regex()` 验证完整句在源文本中可匹配:
+   ```python
+   from lib.utils import build_sentence_regex
+   import re
+   assert re.search(build_sentence_regex(complete), source_text), \
+       "sentence must be a continuous substring of source"
+   ```
+6. **更新 JSON**: 替换 `sentence`、`target_offset`、`char_offset`
 
 ---
 

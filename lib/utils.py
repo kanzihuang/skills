@@ -36,6 +36,37 @@ def safe_filename(word: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Fuzzy sentence matching
+# ---------------------------------------------------------------------------
+
+
+def build_sentence_regex(sentence: str) -> str:
+    """Build a regex from sentence words joined by \\s+ for fuzzy matching.
+
+    Strips punctuation from each word so "ephemeral," in the truncated
+    sentence matches "ephemeral" in the source text. Handles newlines,
+    straight/curly quotes, and minor punctuation differences.
+
+    This is useful for Step 2B verification::
+
+        import re
+        from lib.utils import build_sentence_regex
+        re.search(build_sentence_regex(truncated), raw_source_text)
+    """
+    import string
+    _PUNCT = string.punctuation + '“”‘’…—–'
+    words = []
+    for w in sentence.split():
+        w = w.strip(_PUNCT)
+        if w:
+            words.append(re.escape(w))
+    # Join with [^\\w]* to swallow any non-word chars between words
+    # (punctuation, whitespace, newlines, quotes).  \\s+ alone misses
+    # "I, too" (comma after I) or "tenderness \\nand" (newline).
+    return r'[^\w]*'.join(words)
+
+
+# ---------------------------------------------------------------------------
 # Lemmatization (inflectional only — derivational forms preserved)
 # ---------------------------------------------------------------------------
 
