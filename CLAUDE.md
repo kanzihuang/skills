@@ -176,16 +176,43 @@ Step 2B truncation must produce **continuous substrings** of the source text —
 
 **Verify**: after truncation, run `_build_sentence_regex(sentence)` against source sentences. Match → continuous substring ✓. No match → editing detected ✗.
 
-### Intra-batch duplicate WordId → audio collision + sentence overwrite
+### Intra-batch dedup key: (lemma, pos) not surface word form
 
-Two words that lemmatize to the same root (e.g. "boa" + "boas" → both "boa") produce the same WordId, same audio filename (`boa_{suffix}_sent.mp3`), and same card. Before the fix (2026-07-06), `add_new_cards()` only deduplicated against Anki's existing cards — not against other words in the same batch. This caused:
-- The second word's sentence audio **overwrites** the first word's audio file (same filename)
-- The Anki card's Sentence field gets the **second** word's sentence (last write wins)
-- Result: card shows word="boa" but sentence has `<b>boas</b>` — mismatch, wrong audio
+**Change (2026-07-08)**: The intra-batch dedup key was changed from `w["word"]` (surface form) to `(w["lemma"], w["pos"])`. Using surface form caused same-lemma different-POS entries (e.g. `astray` ADJ vs ADV, `virgin` ADJ vs NOUN) to be incorrectly merged into one card. WordId = `{lemma}_{pos}_{suffix}` — POS is included precisely to prevent this.
 
-**Fix (2026-07-06)**: Added `seen_word_ids` set in `add_new_cards()` — tracks WordIds within the current batch. First occurrence wins, subsequent duplicates are skipped BEFORE audio generation. Regression test: `TestIntraBatchDedup` (4 tests) in `test_sync_note.py`.
+Symptom: fewer cards than expected; `astray` ADJ+ADV → only one card. Check: count unique (lemma, pos) pairs vs actual card count.
 
-Symptom: card's Word field ≠ `<b>` text in Sentence field, sentence audio doesn't match displayed text. Check: `grep -c '_sent\.mp3' manifest.json` vs actual card count — duplicate filenames mean collision.
+### Audio filename includes POS to prevent cross-POS collision
+
+**Change (2026-07-08)**: Audio filenames changed from `{lemma}_{suffix}_word/sent.mp3` to `{lemma}_{POS}_{suffix}_word/sent.mp3`. Previously, same-lemma different-POS entries (e.g. `astray` ADJ vs ADV) shared the same audio filename — the second entry's sentence audio silently overwrote the first. Now each (lemma, pos) gets independent audio files.
+
+Symptom: two cards with same lemma but different POS play the same sentence audio. Check: compare `[sound:...]` references in cards with same lemma.
+
+### Audio filename collision detection (defense-in-depth)
+
+**Change (2026-07-08)**: After dedup, `sync_anki.py` verifies that no two entries share the same audio filename prefix `{safe_filename(lemma)}_{pos}`. A collision means two cards would overwrite each other's audio — this should never happen after correct (lemma,pos) dedup, so a hit signals a bug. Also catches edge cases where different lemmas map to the same `safe_filename` output (e.g. `a/b` and `a b` both → `a_b`).
+
+### be_to detection for modern spaCy (JJ tag support)
+
+**Change (2026-07-08)**: `_has_be_to_pattern()` in `match_sentences.py` previously only accepted VBN-tagged tokens. Modern spaCy models (en_core_web_sm) correctly tag psychological adjectives like "astounded" as JJ/ADJ directly — the VBN gate never fired. Extended to accept both VBN and JJ tags, with JJ gated on predicate-adjective dependency relations (acomp, oprd) only. The caller now computes `has_be_to` unconditionally so `be_to=True` propagates to the output even when `_determine_lemma` already returned the surface form via other ADJ signals.
+
+Symptom: `be_to=False` on entries like "was astounded to hear..." despite clear be+adj+to pattern. Check: `grep '"be_to": false'` in match_sentences output for entries with "was/were/is/are + word + to".
+
+### Dialogue-attribution sentence fragments (colon/comma + blank line)
+
+**Change (2026-07-08)**: Some plain-text editions separate dialogue-attribution lines from their spoken text with blank lines:
+
+```
+He looked attentively, then:
+
+"No! That one is already very ill."
+```
+
+PySBD splits these at the blank line, producing colon/comma-ending fragments like `"He looked attentively, then:"`. `_normalize_dialogue_attribution()` collapses `[:,]\n\n"` → `\1 "` BEFORE PySBD segmentation, joining the attribution with its dialogue into a complete sentence.
+
+Two-layer defense: (1) source text normalization in `split_sentences()`, (2) validation hard-errors on colon-ending sentences. The function-word-ending check in `validation.py` also now strips trailing `:;` from the last word before comparing against `_FUNCTION_ENDINGS`, so `"then:"` correctly matches `"then"`.
+
+Symptom: sentences ending with `:` or `,` that look like dialogue lead-ins (e.g. `"He looked attentively, then:"`). Check: `grep ":'$"` or `grep ",'$"` in match_sentences output.
 
 ### POS analysis is per-sentence, not global voting
 
@@ -198,7 +225,7 @@ Symptom: card's Word field ≠ `<b>` text in Sentence field, sentence audio does
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 382 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
+- **Shared tests** live in `lib/tests/` (pytest, 355 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.

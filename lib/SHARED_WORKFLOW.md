@@ -29,6 +29,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 脚本流水线（全书扫一次，句子为外循环）：
 
+0. 源文本预处理：`_normalize_dialogue_attribution()` 合并 `[:,]\n\n"` → `\1 "`（对话引语与上文连成整句）
 1. PySBD 一次切句 + 篇章检测跳过序言
 2. 建 `form_index`：`form_lower → [(idx, entry), ...]`
 3. 遍历每个句子：
