@@ -19,7 +19,7 @@ def _run(args: list[str], input_text: str | None = None) -> subprocess.Completed
     """Run extract_chapter.py with given args."""
     venv_python = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        ".venv", "bin", "python3",
+        "vocab-book", ".venv", "bin", "python3",
     )
     return subprocess.run(
         [venv_python, _SCRIPT] + args,
