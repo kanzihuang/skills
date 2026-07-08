@@ -296,7 +296,7 @@ Symptom: `char_offset` for "ram" pointing to "grammar" instead of "This is a ram
 
 ### Source text HTML wrapper detection
 
-**Change (2026-07-08)**: Step 1 (SKILL.md) and Step 2A-a/b (SHARED_WORKFLOW.md) quality verification now include a plain-text format check: `head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → reject and re-fetch. Also added cache filename validation in SHARED_WORKFLOW.md Step 2A-0: cached files must match `<safe_title>-<uuid8>-full.txt` naming convention; old-format files (e.g. `tlp-full.txt`) trigger a cache miss and re-download.
+**Change (2026-07-08)**: Step 1 (SKILL.md) and Step 2A-a/b (SHARED_WORKFLOW.md) quality verification now include a plain-text format check: `head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → reject and re-fetch. Cache filename validation in SHARED_WORKFLOW.md Step 2A-0: cached files must match `*-<8位hex>-full.txt` format (uuid8 = `[0-9a-f]{8}`); old-format files (e.g. `tlp-full.txt`) trigger a cache miss and re-download. Internet Archive: must use `/download/` path (raw file), not `/stream/` (HTML viewer); URL format: `https://archive.org/download/<id>/<filename>_djvu.txt`.
 
 Symptom: 237KB cached file instead of expected 94KB; `head -c 500` shows HTML tags. Check: `file /tmp/*-full.txt` or `head -c 100` for `<!DOCTYPE`/`<html`.
 

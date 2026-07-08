@@ -78,7 +78,8 @@ head -c 500 /tmp/<safe_title>-*-full.txt
 > 文件 >20KB 且包含书中实际文本。**必须使用英文原版**——双语版中的中文翻译、西里尔字母、guillemet（«»）等非英文内容会污染句子匹配。`match_sentences.py` 遇到此类文本直接拒绝。优先选择 Project Gutenberg（英文版）、Standard Ebooks、Internet Archive 英文原版。**不要使用 ESL 简化版或双语对照版替代**——改写后的句子与原文不符。
 
 拉取后做质量验证（`head -c 500`）：
-- **纯文本格式验证**：`head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → 则文件为 HTML 包装，需换源获取纯文本版本（Internet Archive 使用 `_djvu.txt` 后缀）
+- **纯文本格式验证**：`head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → 则文件为 HTML 包装，需换源获取纯文本版本
+  - Internet Archive：必须使用 `/download/` 路径（文件直链），而非 `/stream/`（HTML 阅读器页面）。即使 URL 以 `_djvu.txt` 结尾，`/stream/` 也会返回 HTML。URL 格式：`https://archive.org/download/<id>/<filename>_djvu.txt`，其中 `<id>` 取自 details 页 URL（`archive.org/details/<id>`），`<filename>` 取自该页下载选项中的 txt 文件名
 - 正文句子是否完整（非章节摘要片段）
 - 有无明显 OCR 损坏（如 `fig ures` → 字母间多余空格）
 - 首句是否与公认经典译本一致（排除 ESL 简化版/改编版/双语版）

@@ -12,7 +12,7 @@
 
 **每次执行 Step 2A 前，先查记忆中是否已记录该书的缓存路径。**
 
-- 记忆命中（如 [[little-prince-source-text]]）→ 验证文件存在 → 验证文件名匹配 `<safe_title>-<uuid8>-full.txt` 格式（与 SKILL.md Step 1 命名规范一致）→ 使用缓存，跳过 2A-a/b
+- 记忆命中 → 验证文件存在 → 验证文件名匹配 `*-<8位hex>-full.txt` 格式（uuid8 = `[0-9a-f]{8}`，与 SKILL.md Step 1 命名规范一致）→ 使用缓存，跳过 2A-a/b
 - 记忆命中但文件缺失（如 /tmp 被清理）→ 当作 cache miss，继续 2A-a/b 搜索下载
 - 记忆命中但文件名不匹配规范（如旧格式 `tlp-full.txt` 无 uuid）→ 当作 cache miss，重新按规范下载并更新记忆
 - 未命中 → 继续搜索
@@ -22,7 +22,7 @@
 WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Project Gutenberg。验证英文原版。
 
 拉取后做质量验证（`head -c 500`）：
-- **纯文本格式验证**：`head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → 则文件为 HTML 包装，需换源获取纯文本版本（Internet Archive 使用 `_djvu.txt` 后缀）
+- **纯文本格式验证**：`head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → 则文件为 HTML 包装，需换源获取纯文本版本（Internet Archive URL 规则详见 SKILL.md Step 1 纯文本格式验证说明）
 - 正文句子是否完整（非章节摘要片段）
 - 有无明显 OCR 损坏（如 `fig ures` → 字母间多余空格）
 - 首句是否与公认经典译本一致（排除 ESL 简化版/改编版/双语版）
