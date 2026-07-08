@@ -490,6 +490,29 @@ class TestPOSCorrections:
         assert boa_entry[0]["pos"] == "NOUN", \
             f"expected NOUN, got {boa_entry[0]['pos']}"
 
+    def test_genuine_propn_preserves_lemma_capitalization(self):
+        """Mid-sentence genuine proper noun → lemma keeps original casing.
+
+        'Jupiter' is a genuine proper noun (never appears lowercase in text).
+        _determine_lemma should return 'Jupiter', not 'jupiter'.
+        The PROPN→NOUN revert guard restores pos=PROPN; this test ensures
+        lemma also preserves the original capitalisation.
+        """
+        result = _run_pipeline(
+            [{"lemma": "jupiter", "rep": "jupiter",
+              "forms": ["jupiter"], "coca_level": 16}],
+            "I knew about planets such as Earth, Jupiter, Mars and Venus.",
+        )
+        words = result["words"]
+        j_entry = [w for w in words if w["lemma"] == "Jupiter"]
+        assert len(j_entry) == 1, (
+            f"expected 1 Jupiter entry, got {len(j_entry)}: "
+            f"{[w['lemma'] for w in words]}"
+        )
+        assert j_entry[0]["pos"] == "PROPN", (
+            f"expected PROPN, got {j_entry[0]['pos']}"
+        )
+
     def test_start_offset_negative_uses_full_text(self):
         """--start-offset -1 disables preamble detection and uses full text.
         Without the fix, text[-1:] returns only the last character, so 0

@@ -154,7 +154,7 @@ def _determine_lemma(token, word: str) -> str:
             lemmas = lemminflect.getLemma(wl, 'NOUN')
             if lemmas:
                 return lemmas[0]
-        return wl
+        return word
 
     # Signal 5: spaCy lemma == surface form — refuses to reduce
     if token.lemma_.lower() == wl:

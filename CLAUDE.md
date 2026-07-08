@@ -358,12 +358,10 @@ spaCy analyses past participles in "be + VBN + by" constructions as verbal passi
 
 This is an inherent limitation of mechanical POS analysis — distinguishing "disheartened by" (emotional state, → ADJ) from "broken by" (action on patient, → VERB) requires semantic understanding.
 
-**Do NOT fix this with hard-coded adjective sets in Python.** The fix is in the workflow:
+**Fix workflow**:
+1. **Step 2F (Claude review)** — detects "be + VBN + by" constructions where the VBN may be an emotional/stative adjective. Test: "very + word" (e.g. "very disheartened" ✓ → ADJ; "very broken" on a window ✗ → VERB). When confirmed, corrects `pos` → `"ADJ"` and `lemma` → surface form in the JSON.
+2. **Do NOT fix this with hard-coded adjective sets in Python.**
 
-1. **Step 2B (Claude review)** must explicitly check for "be + VBN + by" patterns where the VBN is an emotional/stative adjective. Test: "very + word" (e.g. "very disheartened" ✓ → ADJ; "very broken" on a window ✗ → VERB).
-2. When found, Claude corrects `pos` → "ADJ" and `lemma` → surface form in the JSON.
-
-This is the correct separation: Python handles mechanical lemmatization; Claude handles semantic classification during the mandatory review gate.
 
 Symptom: `lemma` is a verb base not appearing in the text (e.g. "dishearten" for "disheartened"). Check: entries where `lemma != word` and `word` ends in `-ed` following a be-form.
 

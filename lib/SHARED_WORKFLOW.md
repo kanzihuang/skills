@@ -12,7 +12,7 @@
 
 **每次执行 Step 2A 前，先查记忆中是否已记录该书的缓存路径。**
 
-- 记忆命中 → 验证文件存在 → 验证文件名匹配 `*-<8位hex>-full.txt` 格式（uuid8 = `[0-9a-f]{8}`，与 SKILL.md Step 1 命名规范一致）→ 使用缓存，跳过 2A-a/b
+- 记忆命中 → 验证文件存在 → 验证文件名匹配 `*-<8位hex>-full.txt` 格式（uuid8 = `[0-9a-f]{8}`，与 SKILL.md Step 1 命名规范一致）→ **验证内容是否为 HTML**（`head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → HTML 检测到 → 当作 cache miss，重新按规范下载并更新记忆）→ 纯文本验证通过 → 使用缓存，跳过 2A-a/b
 - 记忆命中但文件缺失（如 /tmp 被清理）→ 当作 cache miss，继续 2A-a/b 搜索下载
 - 记忆命中但文件名不匹配规范（如旧格式 `tlp-full.txt` 无 uuid）→ 当作 cache miss，重新按规范下载并更新记忆
 - 未命中 → 继续搜索
@@ -115,7 +115,7 @@ fi
 | `lemma` | match_sentences.py 机械产出，Claude 不可修改 |
 | `coca_level` | 从 filter 输出透传 |
 | `sentence` | 书中含该词的完整句子，不含 `<b>` 标签，`target_offset` 定位目标词 |
-| `ipa` | match_sentences.py 从 cmudict 填充；未覆盖词由 Claude 补充 |
+| `ipa` | match_sentences.py 从 cmudict 填充；未覆盖词由 Claude 补充。**格式必须包含 `/` 分隔符**，如 `/sprɪɡ/`，不可写为裸 `sprɪɡ` |
 | `definition_cn` | 格式 `[词性] 释义`，按句中实际用法 |
 | `translation_cn` | DeepL 提供的中文翻译 |
 
@@ -139,6 +139,7 @@ POS 对齐 + 释义准确 + 翻译一致性。`lemma` 不在此步检查（match
 | NOUN+compound 误标 | `dep=compound` 且 `pos=NOUN` → 检查是否实际起形容词作用（如 "virgin forest"）。同词在其他句中为 ADJ 则存疑 |
 | 释义准确 | 代入验证法 + 义项枚举 + 跨句一致性 |
 | 翻译一致性 | `definition_cn` 与 `translation_cn` 语义对齐 |
+| be+VBN+by 情感形容词 | 对 `pos=VERB` + `word` 以 `-ed` 结尾 + 句中存在 "be...-ed...by" 结构的条目，执行 "very + word" 测试（"very disheartened" ✓ → 形容词）。若判定为情感/状态形容词 → `pos`→`ADJ`、`lemma`→`word`（表面词形）、`definition_cn` 改为形容词释义 |
 
 机械检查（word 匹配、IPA 格式、功能词结尾等）由 match_sentences.py 和 sync_anki.py 自动执行。
 
