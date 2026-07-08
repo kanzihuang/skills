@@ -118,6 +118,7 @@ POS 对齐 + 释义准确 + 翻译一致性。`lemma` 不在此步检查（match
 | 检查 | 说明 |
 |------|------|
 | POS 对齐 | `[词性]` 标注与句中实际用法一致 |
+| NOUN+compound 误标 | `dep=compound` 且 `pos=NOUN` → 检查是否实际起形容词作用（如 "virgin forest"）。同词在其他句中为 ADJ 则存疑 |
 | 释义准确 | 代入验证法 + 义项枚举 + 跨句一致性 |
 | 翻译一致性 | `definition_cn` 与 `translation_cn` 语义对齐 |
 
