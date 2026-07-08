@@ -784,11 +784,16 @@ def main() -> None:
         print("Error: 'words' array is empty", file=sys.stderr)
         sys.exit(1)
 
-    # Deduplicate
+    # Deduplicate by (lemma, pos) — not by surface word form.
+    # WordId = {lemma}_{pos}_{suffix}, POS is included precisely so that
+    # the same lemma with different POS (e.g. astray ADJ vs ADV,
+    # virgin ADJ vs NOUN) produces separate cards.
+    # Different surface forms of the same lemma (e.g. boa/boas) share
+    # the same (lemma, pos) key and are correctly deduplicated.
     seen = set()
     deduped = []
     for w in data["words"]:
-        key = w["word"].strip().lower()
+        key = (w["lemma"].strip().lower(), w["pos"].strip().upper())
         if key not in seen:
             seen.add(key)
             deduped.append(w)

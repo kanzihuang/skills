@@ -62,24 +62,30 @@ def hard_truncate(sentence: str, max_len: int = HARD_CUTOFF) -> tuple[str, bool]
     return truncated.rstrip(), True
 
 
-def _has_be_to_pattern(doc, vbn_idx: int) -> bool:
-    """Check if a VBN token is a psychological adjective in 'be VBN to VERB' pattern.
+def _has_be_to_pattern(doc, token_idx: int) -> bool:
+    """Check if a token is a psychological adjective in 'be ADJ/VBN to VERB' pattern.
 
     E.g. 'was astonished to see', 'am surprised to hear'.
+    Modern spaCy models (en_core_web_sm) often tag these as ADJ/JJ
+    rather than VBN, so we accept both.
     """
-    token = doc[vbn_idx]
-    if token.tag_ != "VBN":
+    token = doc[token_idx]
+    if token.tag_ not in ("VBN", "JJ"):
+        return False
+    # ADJ tokens: only check if dep is acomp/acmp/oprd (predicate adjective).
+    # attr is for "X is Y" — not "be ADJ to VERB".
+    if token.tag_ == "JJ" and token.dep_ not in ("acomp", "oprd"):
         return False
     be_forms = {'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being'}
     # Check for be-form before the token
     has_be = any(
         doc[i].text.lower() in be_forms
-        for i in range(max(0, vbn_idx - 3), vbn_idx)
+        for i in range(max(0, token_idx - 3), token_idx)
     )
     if not has_be:
         return False
     # Check for "to" after the token, followed by a VERB
-    for j in range(vbn_idx + 1, min(vbn_idx + 3, len(doc))):
+    for j in range(token_idx + 1, min(token_idx + 3, len(doc))):
         if doc[j].text.lower() == 'to' and j + 1 < len(doc):
             if doc[j + 1].pos_ == 'VERB':
                 return True
@@ -282,11 +288,18 @@ def main():
                 lemma = _determine_lemma(token, token.text)
                 pos = token.pos_
 
-                # be-to pattern check for VBN tokens
-                if token.tag_ == "VBN" and lemma != token_lower:
-                    if _has_be_to_pattern(doc, token.i):
-                        lemma = token_lower
-                        pos = "ADJ"
+                # be-to pattern check for VBN tokens.
+                # Run unconditionally — even when _determine_lemma already
+                # returned the surface form (via other ADJ signals), we
+                # need be_to=True in the output.  Only override lemma/POS
+                # when _determine_lemma did NOT already do so.
+                has_be_to = (
+                    token.tag_ in ("VBN", "JJ")
+                    and _has_be_to_pattern(doc, token.i)
+                )
+                if has_be_to and lemma != token_lower:
+                    lemma = token_lower
+                    pos = "ADJ"
 
                 # PROPN→NOUN: lowercase or sentence-initial proper nouns
                 if pos == "PROPN" and (token.text[0].islower() or token.i == 0):
@@ -313,10 +326,7 @@ def main():
                     'pos': pos,
                     'dep': token.dep_,
                     'spacy_lemma': token.lemma_,
-                    'be_to': (
-                        token.tag_ == "VBN" and
-                        _has_be_to_pattern(doc, token.i)
-                    ),
+                    'be_to': has_be_to,
                     'truncated': was_truncated,
                 }
 

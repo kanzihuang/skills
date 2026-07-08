@@ -382,6 +382,76 @@ class TestIntraBatchDedup:
         assert len(skipped_words) == 2
         assert {w["word"] for w in skipped_words} == {"blinked", "blinking"}
 
+    def test_same_word_different_pos_not_deduped(self):
+        """Same surface form + same lemma but DIFFERENT POS → two cards.
+
+        Regression test for: dedup key was 'word' (surface form), causing
+        e.g. astray/ADJ and astray/ADV to collide.  WordId includes POS
+        precisely to prevent this — the dedup key must use (lemma, pos).
+        """
+        from lib.sync_anki import _make_word_id
+
+        suffix = "test123"
+        # astray as ADJ: "seemed to me neither astray"
+        w_adj = make_word("astray", lemma="astray", pos="ADJ",
+                          sentence="He seemed neither <b>astray</b> nor lost.")
+        # astray as ADV: "gone astray during the night"
+        w_adv = make_word("astray", lemma="astray", pos="ADV",
+                          sentence="If you have gone <b>astray</b> during the night.")
+
+        # Dedup by (lemma, pos) — NOT by surface word form
+        seen: set[tuple] = set()
+        new_words = []
+        skipped_words = []
+        for w in [w_adj, w_adv]:
+            key = (w["lemma"].strip().lower(), w["pos"].strip().upper())
+            if key in seen:
+                skipped_words.append(w)
+                continue
+            seen.add(key)
+            new_words.append(w)
+
+        assert len(new_words) == 2, (
+            f"Same word different POS must NOT be dedupped: "
+            f"ADJ={w_adj['pos']} ADV={w_adv['pos']}"
+        )
+        assert len(skipped_words) == 0
+
+        # WordIds must differ (POS in the suffix position)
+        assert _make_word_id(w_adj, suffix) != _make_word_id(w_adv, suffix), (
+            "Different POS → different WordIds"
+        )
+
+    def test_same_lemma_pos_different_surface_deduped(self):
+        """Different surface forms, same (lemma, pos) → deduplicated (first wins).
+
+        This is the expected behavior: 'boa' and 'boas' both lemma=boa pos=NOUN
+        → same (lemma,pos) key → second skipped.
+        """
+        suffix = "test123"
+        w1 = make_word("boa", lemma="boa", pos="NOUN",
+                       sentence="It was a <b>boa</b> constrictor.")
+        w2 = make_word("boas", lemma="boa", pos="NOUN",
+                       sentence="I drew <b>boas</b> from the outside.")
+
+        seen: set[tuple] = set()
+        new_words = []
+        skipped_words = []
+        for w in [w1, w2]:
+            key = (w["lemma"].strip().lower(), w["pos"].strip().upper())
+            if key in seen:
+                skipped_words.append(w)
+                continue
+            seen.add(key)
+            new_words.append(w)
+
+        assert len(new_words) == 1, (
+            f"Same (lemma,pos) must be deduped, got {len(new_words)}"
+        )
+        assert new_words[0]["word"] == "boa"
+        assert len(skipped_words) == 1
+        assert skipped_words[0]["word"] == "boas"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 4. Audio failure → retry → block (not silently skip)

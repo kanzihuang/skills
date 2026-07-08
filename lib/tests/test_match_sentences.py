@@ -209,6 +209,26 @@ class TestPOSCorrections:
         w = result["words"][0]
         assert w["pos"] == "ADJ", f"expected ADJ, got {w['pos']}"
 
+    def test_be_to_true_when_determine_lemma_already_adj(self):
+        """be_to=True even when _determine_lemma already returns surface form.
+
+        Regression: _determine_lemma may detect ADJ via other signals
+        (e.g. adjectival dep), returning the surface form before the
+        be-to check runs.  The be_to flag must still be set to True
+        when the pattern matches — it's metadata for quality checks.
+        """
+        result = _run_pipeline(
+            [{"lemma": "astounded", "rep": "astounded",
+              "forms": ["astounded"], "coca_level": 7}],
+            "And I was astounded to hear the little fellow reply:",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"expected ADJ, got {w['pos']}"
+        assert w["be_to"] is True, (
+            f"expected be_to=True for 'was astounded to hear', "
+            f"got be_to={w['be_to']}"
+        )
+
     def test_vbg_acomp_lemma_not_reduced(self):
         """VBG + acomp: surface form preserved, not lemmatised to verb base."""
         result = _run_pipeline(
