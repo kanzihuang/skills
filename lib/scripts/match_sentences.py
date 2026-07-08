@@ -32,7 +32,7 @@ def _get_segmenter() -> pysbd.Segmenter:
     return pysbd.Segmenter(language="en", clean=True)
 
 
-_DIALOGUE_ATTRIBUTION_RE = re.compile(r'([:,])[ \t]*\n[ \t]*\n[ \t]*"')
+_DIALOGUE_ATTRIBUTION_RE = re.compile(r'([:,])[ \t]*\n{2,}[ \t]*["“”]')
 
 
 def _normalize_dialogue_attribution(text: str) -> str:
@@ -193,6 +193,28 @@ def _better(old: dict, new: dict) -> bool:
     return True                                                  # pick new
 
 
+def _sentence_char_offset(
+    text: str, sentence: str, target_offset: int, start: int = 0,
+) -> int:
+    """Return absolute char offset of the target word by locating *sentence*
+    in the source text, then adding target_offset.
+
+    Builds a whitespace-tolerant regex from the sentence so that
+    normalization differences (newline→space, dialogue-attribution
+    joining, double-space cleaning) don't prevent matching.
+
+    Returns the absolute offset, or -1 if the sentence cannot be found.
+    """
+    escaped = re.escape(sentence)
+    # Allow any whitespace sequence in the source to match a single space
+    # in the normalized sentence.
+    flexible = re.sub(r'\\ ', r'\\s+', escaped)
+    m = re.search(flexible, text[start:])
+    if m:
+        return start + m.start() + target_offset
+    return -1
+
+
 def _first_word_boundary_offset(text: str, forms: list[str], start: int = 0) -> int:
     """Return char offset of the first \\b-bounded occurrence of any form.
 
@@ -315,6 +337,9 @@ def main():
         if story_start > 0:
             print(f"  [info] Preamble skipped: {story_start} chars", file=sys.stderr)
             start_offset = story_start
+    elif start_offset < 0:
+        # Negative values: disable preamble detection, use full text
+        start_offset = 0
 
     # ── load spaCy ───────────────────────────────────────────────────────
     import spacy
@@ -332,6 +357,14 @@ def main():
     sentences = split_sentences(text[start_offset:])
     text_normalized = _strip_non_alpha(text)
     print(f"  Sentences: {len(sentences)}", file=sys.stderr)
+
+    # Pre-compute set of all-lowercase words in source text.  Used by
+    # PROPN→NOUN conversion: a word that appears in lowercase elsewhere
+    # is a common noun (spaCy mis-tagged it PROPN).  A word that never
+    # appears lowercase (e.g. planet names) is a genuine proper noun.
+    _all_lowercase_words: set[str] = set(
+        t.lower() for t in re.findall(r'\b[a-z]{2,}\b', text)
+    )
 
     # ── Step 2: build form → [(idx, entry)] index ───────────────────────
     form_index: dict[str, list[tuple[int, dict]]] = {}
@@ -411,10 +444,13 @@ def main():
                     lemma = token_lower
                     pos = "ADJ"
 
-                # PROPN→NOUN: lowercase, sentence-initial, or known-vocabulary
-                # proper nouns.  Mid-sentence capitalized common nouns
-                # (e.g. "Boa" in "book, Boa constrictors") are spaCy
-                # mis-classifications — convert if the word is in our filter.
+                # PROPN→NOUN: convert spaCy PROPN tags for words in our
+                # vocabulary — most are common nouns mis-capitalized
+                # (sentence-initial, mid-sentence like "Boa constrictors").
+                # Genuine proper nouns are protected by the revert block
+                # below: if the word never appears in lowercase anywhere
+                # in the text and has no adjective signals, it stays PROPN.
+                _was_propn = (pos == "PROPN")
                 if pos == "PROPN" and (token.text[0].islower() or token.i == 0
                                        or token_lower in form_index):
                     pos = "NOUN"
@@ -444,6 +480,11 @@ def main():
                         adj_lemmas = lemminflect.getLemma(token_lower, 'ADJ')
                         if adj_lemmas and adj_lemmas[0] == token_lower:
                             pos = "ADJ"
+                # ADV→NOUN: dep=dobj contradicts ADV (dobj requires a nominal).
+                # If spaCy tagged a word as ADV but assigned it a direct-object
+                # dependency, the token is almost certainly a NOUN.
+                if pos == "ADV" and token.dep_ == "dobj":
+                    pos = "NOUN"
                 # NOUN/VERB→ADJ: adjectival dependency overrides POS tag.
                 # attr is excluded — it applies to both nouns ("a teacher")
                 # and adjectives ("tall") in predicate position.
@@ -452,10 +493,22 @@ def main():
                 # NOUN+compound→ADJ: spaCy mis-tags some adjectives as noun
                 # compounds (e.g. "primeval forests").  Adjective suffixes
                 # help distinguish from genuine noun compounds ("stone wall").
+                # Also covers PROPN (e.g. "Astronomical" in "International
+                # Astronomical Congress") that survived PROPN→NOUN conversion.
                 _ADJ_SUFFIXES = ("al", "ic", "ous", "ive", "ful", "less", "able", "ible")
                 if (pos == "NOUN" and token.dep_ == "compound"
                         and token.text.lower().endswith(_ADJ_SUFFIXES)):
                     pos = "ADJ"
+
+                # PROPN→NOUN revert: genuine proper nouns (Jupiter, Mars,
+                # Venus) were converted to NOUN by form_index membership.
+                # They never appear in lowercase in the text and have no
+                # adjective signals — revert them to PROPN.
+                # Sentence-initial tokens are exempt: capitalization may be
+                # positional, not a genuine proper-noun signal.
+                if (_was_propn and pos == "NOUN" and token.i != 0
+                        and token_lower not in _all_lowercase_words):
+                    pos = "PROPN"
 
                 key = (lemma, pos)
 
@@ -508,8 +561,15 @@ def main():
                 coca_level = lvl
                 break
 
-        # char_offset: first word-boundary occurrence in story body
-        char_offset = _first_word_boundary_offset(text, all_forms, start_offset)
+        # char_offset: locate the selected sentence in the source text,
+        # then add target_offset.  Falls back to first word-boundary
+        # match when sentence-based search fails (edge case, e.g. when
+        # hard truncation or unusual whitespace prevents matching).
+        char_offset = _sentence_char_offset(
+            text, cand['text'], cand['target_offset'], start_offset,
+        )
+        if char_offset < 0:
+            char_offset = _first_word_boundary_offset(text, all_forms, start_offset)
 
         # IPA: try lemma first, fall back to matched surface form
         ipa = _cmu_ipa(lemma) or _cmu_ipa(cand['matched_form'])

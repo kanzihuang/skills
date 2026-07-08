@@ -221,15 +221,16 @@ def test_sentence_ending_with_content_word_passes():
 
 # ── Punctuation artifacts ──
 
-def test_sentence_ending_with_bare_comma_is_error():
-    """Sentences ending with bare comma are hard errors."""
+def test_sentence_ending_with_bare_comma_is_soft_warning():
+    """Bare comma endings are now a soft warning (may be dialogue-attribution fragment
+    or OCR artifact — neither should block sync; Step 2B handles the fix)."""
     w = make_word(
         word="humble",
         sentence="I resolved to humble myself also,",
     )
     errors = validate_word_entries([w])
-    assert has_error(errors, "humble", "punctuation artifact"), \
-        f"Should detect bare comma ending\nErrors: {errors}"
+    assert not has_error(errors, "humble", "punctuation artifact"), \
+        f"Bare comma ending should not produce hard error (soft warning only)\nErrors: {errors}"
 
 
 # ── Colon-ending sentence (soft warning, was hard error) ──

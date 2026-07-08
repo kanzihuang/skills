@@ -126,6 +126,28 @@ class TestDialogueAttributionNormalization:
         assert ', "It does not matter' in result
         assert '\n\n' not in result
 
+    def test_curly_quote_attribution_joined(self):
+        """Curly quotes '“' / '”' are joined like ASCII quotes."""
+        from lib.scripts.match_sentences import _normalize_dialogue_attribution
+
+        text = 'He replied,\n\n“It does not matter.”'
+        result = _normalize_dialogue_attribution(text)
+        assert ', “It does' in result or ', "It does' in result, (
+            f"curly-quote attribution should be joined, got: {repr(result)}"
+        )
+        assert '\n\n' not in result, "blank lines should be removed"
+
+    def test_triple_newline_attribution_joined(self):
+        """3+ consecutive newlines are collapsed and attribution joined."""
+        from lib.scripts.match_sentences import _normalize_dialogue_attribution
+
+        text = 'He replied,\n\n\n"It does not matter."'
+        result = _normalize_dialogue_attribution(text)
+        assert ', "It does' in result, (
+            f"triple-newline attribution should be joined, got: {repr(result)}"
+        )
+        assert '\n\n\n' not in result, "triple newlines should be removed"
+
     def test_end_to_end_attentively_sentence(self):
         """Full pipeline: attentively gets a complete sentence with dialogue."""
         from lib.scripts.match_sentences import split_sentences
@@ -245,7 +267,7 @@ class TestCmuIpaFallback:
 # ── POS correction ──
 
 
-def _run_pipeline(in_coca: list[dict], text: str) -> dict:
+def _run_pipeline(in_coca: list[dict], text: str, extra_args: list[str] | None = None) -> dict:
     """Run match_sentences.py pipeline on minimal inputs, return words dict."""
     import json, subprocess, tempfile, os
     from pathlib import Path
@@ -267,8 +289,11 @@ def _run_pipeline(in_coca: list[dict], text: str) -> dict:
         _skill_root = _repo / "vocab-book"
         python = _skill_root / ".venv" / "bin" / "python3"
         ms_script = _skill_root / "lib" / "scripts" / "match_sentences.py"
+        cmd = [str(python), str(ms_script), fj_path, txt_path]
+        if extra_args:
+            cmd.extend(extra_args)
         result = subprocess.run(
-            [str(python), str(ms_script), fj_path, txt_path],
+            cmd,
             capture_output=True, text=True, timeout=90,
         )
         idx = result.stdout.index('{\n  "book_title"')
@@ -449,13 +474,14 @@ class TestPOSCorrections:
         """Mid-sentence capitalized common noun tagged PROPN → NOUN.
 
         E.g. "Boa" in "In the book, Boa constrictors swallow..."
-        spaCy mis-tags the capitalized common noun as PROPN; since
-        the word is in our filter vocabulary, convert to NOUN.
+        spaCy mis-tags the capitalized common noun as PROPN.  The word
+        appears in lowercase elsewhere in the text ("a boa"), which is
+        the signal that it's a common noun, not a proper noun.
         """
         result = _run_pipeline(
             [{"lemma": "boa", "rep": "boa",
               "forms": ["boa", "boas"], "coca_level": 12}],
-            "It was written in the book, Boa constrictors swallow their prey.",
+            "It was a boa.  In the book, Boa constrictors swallow their prey.",
         )
         words = result["words"]
         # Find the Boa entry
@@ -463,6 +489,71 @@ class TestPOSCorrections:
         assert len(boa_entry) == 1, f"expected 1 boa entry, got {len(boa_entry)}"
         assert boa_entry[0]["pos"] == "NOUN", \
             f"expected NOUN, got {boa_entry[0]['pos']}"
+
+    def test_start_offset_negative_uses_full_text(self):
+        """--start-offset -1 disables preamble detection and uses full text.
+        Without the fix, text[-1:] returns only the last character, so 0
+        sentences are found and the word is unmatched."""
+        result = _run_pipeline(
+            [{"lemma": "magnificent", "rep": "magnificent",
+              "forms": ["magnificent"], "coca_level": 4}],
+            # Word appears early in the text.  If --start-offset -1 slices
+            # to the last char, the word won't be found.
+            "I saw a magnificent picture in a book.  It was wonderful.",
+            extra_args=["--start-offset", "-1"],
+        )
+        assert len(result["words"]) == 1, (
+            f"expected 1 word, got {len(result['words'])} — "
+            f"text[-1:] bug may still be active"
+        )
+        w = result["words"][0]
+        assert "magnificent" in w["sentence"], (
+            f"sentence should contain 'magnificent', got: {w['sentence']}"
+        )
+
+    def test_char_offset_matches_selected_sentence(self):
+        """When a word appears twice in the text, char_offset must point
+        to the occurrence in the SELECTED sentence, not the first
+        occurrence found by a global scan."""
+        text = (
+            "He demanded, abruptly: Do you come from another planet? "
+            "But he did not reply. "
+            "The little prince asked me abruptly, as if seized by a grave "
+            "doubt, whether sheep eat bushes."
+        )
+        result = _run_pipeline(
+            [{"lemma": "abruptly", "rep": "abruptly",
+              "forms": ["abruptly"], "coca_level": 4}],
+            text,
+        )
+        w = result["words"][0]
+        # Verify the sentence contains "abruptly"
+        assert "abruptly" in w["sentence"], (
+            f"sentence should contain 'abruptly', got: {w['sentence']}"
+        )
+        # Verify char_offset points into the source text at the correct word
+        assert w["char_offset"] >= 0, "char_offset should be non-negative"
+        # Verify the character at char_offset is the start of "abruptly"
+        word_at_offset = text[w["char_offset"]:w["char_offset"] + 8]
+        assert word_at_offset == "abruptly", (
+            f"char_offset {w['char_offset']} should point to 'abruptly', "
+            f"but found {repr(word_at_offset)}.  "
+            f"Selected sentence: {w['sentence']}"
+        )
+
+    def test_adv_dobj_becomes_noun(self):
+        """ADV + dobj (direct object) → NOUN.  dep=dobj contradicts ADV
+        because direct objects must be nominals.  This catches spaCy
+        mis-tags like 'sprig' being tagged ADV instead of NOUN."""
+        result = _run_pipeline(
+            [{"lemma": "sprig", "rep": "sprig",
+              "forms": ["sprig"], "coca_level": 8}],
+            "Then this little seed will stretch itself and begin, timidly at "
+            "first, to push a charming little sprig inoffensively upward "
+            "toward the sun.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "NOUN", f"expected NOUN, got {w['pos']}"
 
 
 # ── char_offset word-boundary matching ──

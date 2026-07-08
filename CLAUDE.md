@@ -241,9 +241,54 @@ Symptom: entries like "constrictor" tagged ADJ with definition "[adj.] 大蟒的
 
 Since the code only reaches this check after confirming the word is in our COCA filter, `token_lower in form_index` is a safe signal: any tracked vocabulary word tagged PROPN is a spaCy misclassification — genuine proper nouns are almost never COCA level 4+.
 
+**Caveat — genuine proper nouns in COCA (2026-07-08)**: Some genuine proper nouns ARE in COCA at various levels (e.g. Jupiter L16, Mars L6, Venus L4).  `token_lower in form_index` incorrectly converts them to NOUN.  A revert guard was added: after all POS corrections, if the word was originally PROPN, is now NOUN (no ADJ rules fired), is NOT sentence-initial, and **never appears in all-lowercase anywhere in the source text** — revert it back to PROPN.  The all-lowercase check is a pre-computed set from the source text (`\b[a-z]{2,}\b`), so it's purely mechanical — no hard-coded proper-noun lists.
+
+Words like "Astronomical" (in "International Astronomical Congress") are PROPN→NOUN (form_index match), then promoted to ADJ by the NOUN+compound suffix rule — they never reach the revert guard.
+
 Note: `_determine_lemma` Signal 4 was NOT changed — `word[0].islower()` there refers to `token.text.lower()[0]` which is always lowercase, so it always enters the NOUN lemmatization branch. The lemma was already correct ("boa"); only the POS tag was wrong.
 
-Symptom: "Boa" tagged PROPN with definition "[n.] 蟒蛇属（动物分类名）" when it should be NOUN. Check: `grep '"pos": "PROPN"'` in match_sentences output.
+Symptom (false positive): "Jupiter" tagged NOUN instead of PROPN. Check: `grep '"lemma": "jupiter"'` in match_sentences output — if `pos` is NOUN, the word never appears lowercase in the source and the revert guard should fix it.
+Symptom (false negative): "Boa" still tagged PROPN. Check: ensure "boa" appears in lowercase elsewhere in the source text. If it only appears capitalized, the revert guard can't distinguish it from a genuine proper noun — add a lowercase occurrence to the source text or accept the PROPN tag.
+
+### PROPN→NOUN revert: proper-noun protection via lowercase-presence check
+
+**Change (2026-07-08)**: After all POS corrections, a revert guard runs: if `_was_propn and pos == "NOUN" and token.i != 0 and token_lower not in _all_lowercase_words` → revert to PROPN.  `_all_lowercase_words` is pre-computed from the source text with `re.findall(r'\b[a-z]{2,}\b', text)` at pipeline start.  Sentence-initial tokens (`token.i == 0`) are exempt from the revert because capitalization may be positional.
+
+The revert runs AFTER the ADJ-promoting rules (NOUN+compound suffix, NOUN/VERB+amod/acomp/oprd), so adjectives in proper-noun phrases ("Astronomical" in "International Astronomical Congress") are correctly promoted to ADJ before the revert check.
+
+Symptom: genuine proper nouns (planet names, person names) tagged NOUN. Check: `grep '"pos": "PROPN"'` in match_sentences output — should be non-zero for texts containing proper nouns.
+
+### ADV→NOUN guard: dep=dobj contradicts ADV
+
+**Change (2026-07-08)**: Added `if pos == "ADV" and token.dep_ == "dobj": pos = "NOUN"` POS correction.  spaCy occasionally mis-tags direct objects as adverbs (e.g. "sprig" in "push a charming little sprig upward").  `dep=dobj` requires a nominal — an adverb cannot be a direct object in Universal Dependencies.  This is a reliable signal of a spaCy POS error.
+
+Guard is conservative: `dep=dobj` is the strongest nominal dependency signal.  Tested against 15+ edge cases — spaCy never produces legitimate ADV+dobj combinations.
+
+Symptom: common nouns tagged ADV in match_sentences output. Check: `grep '"pos": "ADV"'` for words that don't end in -ly and appear as direct objects.
+
+### --start-offset -1 fix: disable preamble detection without text[-1:] slicing
+
+**Change (2026-07-08)**: The `--start-offset` argument's help text says "pass -1 to disable preamble detection", but the code only had `if start_offset == 0:` for preamble detection.  Passing `-1` caused `text[-1:]` slicing (last character only), producing 0 sentences.  Added `elif start_offset < 0: start_offset = 0` branch.
+
+Symptom: 0 sentences found when using `--start-offset -1`. Check: stderr shows "Sentences: 0".
+
+### char_offset now derived from selected sentence, not first global match
+
+**Change (2026-07-08)**: `char_offset` was computed post-hoc by `_first_word_boundary_offset()`, which always returns the FIRST occurrence in the source text.  When a word appears twice and `_better()` selects the sentence from the second occurrence, `char_offset` still pointed to the first.  Fixed by adding `_sentence_char_offset()`: builds a whitespace-tolerant regex from the selected sentence text, searches the source, and computes `char_offset = match_start + target_offset`.  Falls back to `_first_word_boundary_offset()` when sentence-based search fails (edge case: hard truncation or unusual whitespace).
+
+Symptom: `char_offset` points to wrong part of source text (word at that offset doesn't match the sentence). Check: compare `text[char_offset:char_offset+len(word)]` against the entry's `word` field.
+
+### Dialogue-attribution regex: curly quotes + 3+ newlines
+
+**Change (2026-07-08)**: `_DIALOGUE_ATTRIBUTION_RE` was widened from `r'([:,])[ \t]*\n[ \t]*\n[ \t]*"'` to `r'([:,])[ \t]*\n{2,}[ \t]*["“”]'`.  Two gaps fixed: (1) only matched ASCII `"` — added Unicode curly quotes `“` `”` common in Internet Archive OCR texts; (2) only matched exactly 2 newlines — changed to `\n{2,}` to handle 3+ consecutive newlines (the regex runs BEFORE `\n{2,}` normalization in `split_sentences()`).
+
+Symptom: comma/colon-ending sentences surviving to validation despite being obvious dialogue-attribution fragments. Check: `grep ",'$"` or `grep ":'$"` in match_sentences output.
+
+### validation.py check 7e: comma-ending sentences demoted from hard error to soft warning
+
+**Change (2026-07-08)**: Check 7e (punctuation artifact) was split into two tiers: `,[.)]$` pattern stays a hard error (unambiguous OCR debris like "breeze,."); bare `endswith(',')` is now a soft warning (may be a dialogue-attribution fragment that survived normalization, or an OCR artifact — neither should block sync; Step 2B handles the fix).  This matches the existing check 7d which already soft-warns on colon-ending sentences for the same reason.
+
+Symptom: `sync_anki.py` blocked by "punctuation artifact" error on a sentence that looks like dialogue attribution. Check: validation stderr for hard errors on entries ending with bare comma.
 
 ### conj POS inheritance for coordinated structures
 
@@ -325,7 +370,7 @@ Symptom: `lemma` is a verb base not appearing in the text (e.g. "dishearten" for
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 404 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
+- **Shared tests** live in `lib/tests/` (pytest, 410 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.

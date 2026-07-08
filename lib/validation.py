@@ -200,12 +200,22 @@ def validate_word_entries(words: list[dict]) -> list[str]:
                     file=sys.stderr,
                 )
 
-            # 7e. Punctuation artifact
+            # 7e. Punctuation artifact — two tiers:
+            #   - `,.)` or `,)` pattern: unambiguous OCR debris → hard error.
+            #   - bare comma ending: may be dialogue-attribution fragment or
+            #     OCR artifact (same root cause as 7d).  Step 2B should fix
+            #     OCR colon→period/colon→period errors.  Soft warning.
             stripped = clean.rstrip()
-            if re.search(r',[.)]$', stripped) or stripped.endswith(','):
+            if re.search(r',[.)]$', stripped):
                 errors.append(
                     f"[{word}] sentence has punctuation artifact "
                     f"({stripped[-3:]}...) - source-text boundary debris"
+                )
+            elif stripped.endswith(','):
+                print(
+                    f"  [WARN] [{word}] sentence ends with ',' — "
+                    f"possible dialogue-attribution fragment or OCR artifact",
+                    file=sys.stderr,
                 )
 
         # 8. Translation quality checks (soft warnings)
