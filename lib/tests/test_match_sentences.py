@@ -788,6 +788,63 @@ class TestCharOffsetWordBoundary:
 # ── _has_sentence_ending (check_step_completed.py) ──
 
 
+class TestEndOffset:
+    """Verify --end-offset limits sentence matching to a character range."""
+
+    def test_end_offset_excludes_sentences_beyond(self):
+        """Word only in second sentence which is beyond --end-offset → no match."""
+        result = _run_pipeline(
+            [{"lemma": "unique", "rep": "unique",
+              "forms": ["unique"], "coca_level": 5}],
+            "First sentence here. Second sentence with unique word here.",
+            extra_args=["--start-offset", "0", "--end-offset", "25"],
+        )
+        # "Second sentence with unique word here" starts at char 25,
+        # but --end-offset 25 means text[:25] = "First sentence here." only.
+        # So "unique" has no matching sentence → excluded.
+        assert len(result["words"]) == 0
+
+    def test_end_offset_includes_sentence_within_range(self):
+        """Word in a sentence fully within [start:end) → matched."""
+        result = _run_pipeline(
+            [{"lemma": "unique", "rep": "unique",
+              "forms": ["unique"], "coca_level": 5}],
+            "First sentence here. Unique word here end.",
+            extra_args=["--start-offset", "0", "--end-offset", "100"],
+        )
+        # Both sentences are within range → unique should match
+        assert len(result["words"]) >= 1
+        assert any(w["lemma"] == "unique" for w in result["words"])
+
+    def test_end_offset_default_full_text(self):
+        """Without --end-offset, full text is searched (backward compat)."""
+        result = _run_pipeline(
+            [{"lemma": "unique", "rep": "unique",
+              "forms": ["unique"], "coca_level": 5}],
+            "First sentence here. Second sentence with unique word here.",
+            extra_args=["--start-offset", "0"],
+        )
+        # Full text → unique at the end should be matched
+        assert len(result["words"]) >= 1
+        assert any(w["lemma"] == "unique" for w in result["words"])
+
+    def test_end_offset_with_start_offset(self):
+        """Words in [start:end) matched, words beyond end not matched."""
+        # "hello" at char 0, "world" at char 27
+        result = _run_pipeline(
+            [
+                {"lemma": "hello", "rep": "hello", "forms": ["hello"], "coca_level": 5},
+                {"lemma": "world", "rep": "world", "forms": ["world"], "coca_level": 5},
+            ],
+            "Hello is here first. World is beyond the cutoff point here.",
+            extra_args=["--start-offset", "0", "--end-offset", "24"],
+        )
+        words = {w["lemma"] for w in result["words"]}
+        assert "hello" in words
+        # "World" should NOT match (its sentence starts beyond char 24)
+        assert "world" not in words
+
+
 class TestCheckStepCompleted:
     """Test _has_sentence_ending() — fragment detection for Step 2B guard."""
 

@@ -133,3 +133,51 @@ class TestBoundariesFile:
         b_path = _write_temp_json([{"start": len(preamble), "end": len(preamble + chapter)}])
         result = _run([text_path, "--boundaries-file", b_path, "--preamble"])
         assert result.stdout == preamble
+
+    def test_extract_by_explicit_chapter_field(self):
+        """--chapter N matches the 'chapter' field, not array index."""
+        text_path = _write_temp_text("AAAABBBBCCCCDDDD")
+        # Single entry with explicit chapter: 4 → --chapter 4 should work
+        b_path = _write_temp_json([
+            {"chapter": 4, "start": 0, "end": 4},
+        ])
+        result = _run([text_path, "--boundaries-file", b_path, "--chapter", "4"])
+        assert result.returncode == 0
+        assert result.stdout == "AAAA"
+
+    def test_extract_by_mixed_chapter_fields(self):
+        """Non-sequential chapter fields each extract correctly."""
+        text_path = _write_temp_text("CH1_CH2_CH3_CH4_")
+        b_path = _write_temp_json([
+            {"chapter": 1, "start": 0, "end": 4},
+            {"chapter": 4, "start": 4, "end": 8},
+            {"chapter": 7, "start": 8, "end": 12},
+        ])
+        r1 = _run([text_path, "--boundaries-file", b_path, "--chapter", "1"])
+        assert r1.stdout == "CH1_"
+        r4 = _run([text_path, "--boundaries-file", b_path, "--chapter", "4"])
+        assert r4.stdout == "CH2_"
+        r7 = _run([text_path, "--boundaries-file", b_path, "--chapter", "7"])
+        assert r7.stdout == "CH3_"
+
+    def test_extract_chapter_out_of_range_boundaries(self):
+        """--chapter with non-existent chapter field number shows available."""
+        text_path = _write_temp_text("AAAABBBB")
+        b_path = _write_temp_json([
+            {"chapter": 4, "start": 0, "end": 4},
+        ])
+        result = _run([text_path, "--boundaries-file", b_path, "--chapter", "99"])
+        assert result.returncode != 0
+        assert "not found" in result.stderr
+        assert "ch 4" in result.stderr  # available chapters listed
+
+    def test_list_shows_chapter_fields(self):
+        """--list with boundaries-file shows 'ch4:' not array index '1:'."""
+        text_path = _write_temp_text("OneTwoThree")
+        b_path = _write_temp_json([
+            {"chapter": 4, "start": 0, "end": 3},
+            {"chapter": 9, "start": 3, "end": 6},
+        ])
+        result = _run([text_path, "--boundaries-file", b_path, "--list"])
+        assert "ch  4" in result.stdout or "ch 4" in result.stdout
+        assert "ch  9" in result.stdout or "ch 9" in result.stdout

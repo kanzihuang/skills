@@ -317,6 +317,13 @@ def main():
         help="Character offset to skip (preamble detection runs if 0; "
              "pass -1 to disable preamble detection)",
     )
+    parser.add_argument(
+        "--end-offset", type=int, default=None,
+        help="Character offset to stop (exclusive). When set, only text "
+             "[start_offset:end_offset] is searched for sentences. "
+             "Use with --start-offset to limit sentence matching to a "
+             "specific chapter range. Default: search to end of file.",
+    )
     args = parser.parse_args()
 
     json_path = args.filter_json
@@ -365,6 +372,10 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
+    # Validate plain-text format (defence-in-depth against HTML wrappers)
+    from lib.utils import validate_plain_text
+    validate_plain_text(text, text_path)
+
     # ── preamble detection ──────────────────────────────────────────────
     start_offset = args.start_offset
     if start_offset == 0:
@@ -389,7 +400,10 @@ def main():
     total = len(words)
 
     # ── Step 1: split sentences once ─────────────────────────────────────
-    sentences = split_sentences(text[start_offset:])
+    if args.end_offset is not None:
+        sentences = split_sentences(text[start_offset:args.end_offset])
+    else:
+        sentences = split_sentences(text[start_offset:])
     text_normalized = _strip_non_alpha(text)
     print(f"  Sentences: {len(sentences)}", file=sys.stderr)
 

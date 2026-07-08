@@ -216,12 +216,14 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 | `filter_pipeline.py` | 合并过滤流水线 — 标点/大小写清理 → lemmatize → Anki 去重 → COCA 检查 |
 | `lib/sync_anki.py` | 增量同步到 Anki — 信任 JSON lemma，`target_offset` 拼接 `<b>` 标签 |
 | `lib/ankiconnect.py` | AnkiConnect 客户端模块 |
-| `lib/utils.py` | 共享工具 — lemmatize_word, edge_tts_bytes/file, safe_filename |
+| `lib/utils.py` | 共享工具 — lemmatize_word, edge_tts_bytes/file, safe_filename, validate_plain_text |
 | `lib/coca.py` | BNC/COCA 词族等级查询（Nation 2017）|
-| `lib/scripts/match_sentences.py` | 句子匹配 + POS 分析 + lemma + IPA |
+| `lib/scripts/match_sentences.py` | 句子匹配 + POS 分析 + lemma + IPA（支持 `--start-offset` / `--end-offset` 限定范围）|
 | `lib/scripts/translate_deepl.py` | DeepL 翻译 |
+| `lib/scripts/extract_chapter.py` | 章节边界检测 + 提取（支持 `--boundaries-file` 外部边界）|
 | `lib/scripts/audit_deck.py` | 牌组质量审计 |
 | `lib/scripts/check_step_completed.py` | 步骤完成检查点 |
 | `lib/chapter_detect.py` | 章节边界检测（共享模块） |
+| `lib/validation.py` | 词条格式验证 |
 | `lib/data/bnc_coca/` | BNC/COCA 词族数据 |
 | `tests/` | pytest 单元测试套件 |

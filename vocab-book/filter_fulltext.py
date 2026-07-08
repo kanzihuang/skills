@@ -128,6 +128,10 @@ def main() -> None:
         print("Error: no text provided on stdin", file=sys.stderr)
         sys.exit(1)
 
+    # Validate plain-text format (defence-in-depth against HTML wrappers)
+    from lib.utils import validate_plain_text
+    validate_plain_text(text, "stdin")
+
     coca_set = load_coca()
 
     # Generate UUID suffix for WordId/audio namespace isolation

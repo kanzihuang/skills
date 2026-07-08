@@ -53,6 +53,29 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 输出 JSON：每个 `(lemma, pos)` 一个 entry，含 `lemma/word/pos/dep/spacy_lemma/be_to/coca_level/sentence/target_offset/ipa`。句子**不含 `<b>` 标签**。无 `candidates` 数组。
 
+#### 章节范围限定（全文模式中提取单章词汇）
+
+从全文提取单个章节的词汇时，`match_sentences.py` 默认搜索全文本范围，导致跨章句子匹配（如第 4 章的词被匹配到第 8 章的句子）。提供两种方式限定匹配范围：
+
+**方式 A：提取章节文本后作为 `source_text` 传入**（推荐，最简单）
+```bash
+<skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/extract_chapter.py \
+  /tmp/<safe_title>-<uuid8>-full.txt --chapter 4 --output /tmp/<safe_title>-ch4.txt
+
+<skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/match_sentences.py \
+  /tmp/vocab-book-filtered.json /tmp/<safe_title>-ch4.txt
+```
+
+**方式 B：使用 `--start-offset` + `--end-offset` 限定字符范围**
+```bash
+<skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/match_sentences.py \
+  /tmp/vocab-book-filtered.json /tmp/<safe_title>-<uuid8>-full.txt \
+  --start-offset 10322 --end-offset 14556
+```
+`--end-offset` 默认为全文结尾（向后兼容）。`_sentence_char_offset()` 仍搜索全文本以确保 `char_offset` 对应全文位置。
+
+两种方式的区别：方式 A 将搜索范围完全限定在章节文本内；方式 B 的 `char_offset` 仍基于全书偏移（适合后续全文定位）。
+
 ### 2A-d. 版本校验 + 失败处理
 
 源文本获取失败 → 该批次所有单词跳过。

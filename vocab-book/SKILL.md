@@ -97,6 +97,8 @@ head -c 500 /tmp/<safe_title>-*-full.txt
 
 提取后的文本自动排除序言（章节提取从章节标题开始）。后续步骤使用裁剪后的文件。未检测到章节标题时打印警告，使用原始全文本。
 
+> **注意**：`match_sentences.py`（Step 2A）默认在全文本范围内搜索例句。如果只提取了单章节词汇，必须将裁剪后的章节文件作为 `source_text` 传入 `match_sentences.py`，而非原始全文文件。否则词汇会被匹配到其他章节的句子。详见 `lib/SHARED_WORKFLOW.md` Step 2A-c 的「章节范围限定」说明。
+
 **无章节标题的书籍**（如《小王子》Katherine Woods 译本无 CHAPTER I 等标记）：
 
 Claude 阅读全文后根据语义识别章节边界，创建 JSON 边界文件传入 `--boundaries-file`：
@@ -122,7 +124,7 @@ EOF
   --output /tmp/<safe_title>-ch<N>.txt
 ```
 
-`--boundaries-file` 传入后跳过机械章节检测，直接使用外部边界。`--list` 预览确认边界准确后再提取。
+`--boundaries-file` 传入后跳过机械章节检测，直接使用外部边界。`--chapter N` 在 `--boundaries-file` 模式下按 JSON 中 `"chapter"` **字段**匹配（非数组位置）——例如 `{"chapter": 4, ...}` 用 `--chapter 4` 即可提取，无需用 `--chapter 1`。`--list` 预览确认边界准确后再提取。
 
 ### Step 2: 运行 filter_fulltext.py
 

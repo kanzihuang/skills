@@ -70,10 +70,19 @@ def _main() -> None:
         else:
             if args.boundaries_file:
                 print(f"Using external boundaries from {args.boundaries_file}:")
-            for i, b in enumerate(boundaries, 1):
-                length = b["end"] - b["start"]
-                preview = text[b["start"]:b["start"] + 80].replace("\n", " | ")
-                print(f"  {i:2d}. {b['label']:<20s} ({length:>6d} chars)  {preview}…")
+                for b in boundaries:
+                    length = b["end"] - b["start"]
+                    ch = b.get("chapter", "?")
+                    preview = text[b["start"]:b["start"] + 80].replace("\n", " | ")
+                    if isinstance(ch, int):
+                        print(f"  ch{ch:>3d}. {b['label']:<20s} ({length:>6d} chars)  {preview}…")
+                    else:
+                        print(f"  ch{str(ch):>3s}. {b['label']:<20s} ({length:>6d} chars)  {preview}…")
+            else:
+                for i, b in enumerate(boundaries, 1):
+                    length = b["end"] - b["start"]
+                    preview = text[b["start"]:b["start"] + 80].replace("\n", " | ")
+                    print(f"  {i:2d}. {b['label']:<20s} ({length:>6d} chars)  {preview}…")
         return
 
     if args.preamble:
@@ -82,18 +91,38 @@ def _main() -> None:
         else:
             result = text[:boundaries[0]["start"]]
     elif args.chapter is not None:
-        idx = args.chapter - 1
-        if idx < 0 or idx >= len(boundaries):
-            available = ", ".join(
-                f"{i}: '{b['label']}'" for i, b in enumerate(boundaries, 1)
-            )
-            print(
-                f"Error: chapter {args.chapter} not found. "
-                f"Detected chapters: {available or 'none'}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        result = text[boundaries[idx]["start"]:boundaries[idx]["end"]]
+        if args.boundaries_file:
+            # Search by chapter field, not array index.
+            # When boundaries-file entries have explicit "chapter" keys
+            # (e.g. {"chapter": 4, ...}), --chapter N should match
+            # that field rather than requiring the entry to be at
+            # array position N-1.
+            matched = [b for b in boundaries if b.get("chapter") == args.chapter]
+            if not matched:
+                available = ", ".join(
+                    f"ch {b.get('chapter', i + 1)}"
+                    for i, b in enumerate(boundaries)
+                )
+                print(
+                    f"Error: chapter {args.chapter} not found in boundaries. "
+                    f"Available chapters: {available or 'none'}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            result = text[matched[0]["start"]:matched[0]["end"]]
+        else:
+            idx = args.chapter - 1
+            if idx < 0 or idx >= len(boundaries):
+                available = ", ".join(
+                    f"{i}: '{b['label']}'" for i, b in enumerate(boundaries, 1)
+                )
+                print(
+                    f"Error: chapter {args.chapter} not found. "
+                    f"Detected chapters: {available or 'none'}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            result = text[boundaries[idx]["start"]:boundaries[idx]["end"]]
     else:
         # Default: list chapters
         if not boundaries:

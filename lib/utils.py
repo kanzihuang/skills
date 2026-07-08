@@ -245,3 +245,30 @@ def print_progress(i: int, total: int, label: str = ""):
         print("\r" + line, end="", flush=True)
     else:
         print(line, flush=True)
+
+
+def validate_plain_text(text: str, source: str = "source text") -> None:
+    """Check that *text* is plain text, not an HTML wrapper.
+
+    Scans the first 500 characters for common HTML signatures
+    (``<!doctype html>``, ``<html>``, ``<head>``, ``<body>``,
+    ``<meta>``, ``<title>``).  Calls ``sys.exit(1)`` with a
+    clear error message when HTML is detected — the caller does
+    not need to check a return value.
+
+    This is a mechanical defence-in-depth guard.  The same check
+    is also documented as a procedural step in SHARED_WORKFLOW.md
+    (Step 2A-0 / 2A-a/b), but embedding it in Python ensures an
+    HTML-wrapped file can never be silently processed as text.
+    """
+    sample = text[:500].lstrip().casefold()
+    for sig in ("<!doctype html", "<html", "<head", "<body", "<meta", "<title"):
+        if sig in sample:
+            print(
+                f"ERROR: {source} appears to be HTML (found '{sig}'). "
+                f"Use a plain-text version of the book. "
+                f"For Internet Archive, use the /download/ path, "
+                f"not /stream/.",
+                file=sys.stderr,
+            )
+            sys.exit(1)

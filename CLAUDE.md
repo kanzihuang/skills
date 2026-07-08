@@ -358,7 +358,21 @@ Symptom: `char_offset` for "ram" pointing to "grammar" instead of "This is a ram
 
 **Change (2026-07-08)**: Step 1 (SKILL.md) and Step 2A-a/b (SHARED_WORKFLOW.md) quality verification now include a plain-text format check: `head -c 100 <file> | grep -q '<html\|<!DOCTYPE'` → reject and re-fetch. Cache filename validation in SHARED_WORKFLOW.md Step 2A-0: cached files must match `*-<8位hex>-full.txt` format (uuid8 = `[0-9a-f]{8}`); old-format files (e.g. `tlp-full.txt`) trigger a cache miss and re-download. Internet Archive: must use `/download/` path (raw file), not `/stream/` (HTML viewer); URL format: `https://archive.org/download/<id>/<filename>_djvu.txt`.
 
+**Change (2026-07-08)**: Added mechanical defence: `validate_plain_text()` in `lib/utils.py` scans first 500 chars for HTML signatures (`<!doctype html>`, `<html>`, `<head>`, `<body>`, `<meta>`, `<title>`) and calls `sys.exit(1)` when detected. Called in `match_sentences.py` after reading source text, and in `filter_fulltext.py` after reading stdin. Previously detection was purely procedural (Claude shell commands) — an HTML file could be silently processed if the manual check was skipped.
+
 Symptom: 237KB cached file instead of expected 94KB; `head -c 500` shows HTML tags. Check: `file /tmp/*-full.txt` or `head -c 100` for `<!DOCTYPE`/`<html`.
+
+### Cross-chapter sentence matching without --end-offset
+
+**Change (2026-07-08)**: Added `--end-offset` parameter to `match_sentences.py`. When extracting vocabulary for a single chapter, passing the full book text as `source_text` with `--start-offset` alone would search from that offset to EOF, allowing words to be matched to sentences from later chapters (e.g. "grief" in Chapter 4 matched to Chapter 8's sentence). Use `--start-offset` + `--end-offset` to limit the search range, or extract the chapter to a separate file and pass that as `source_text`.
+
+Symptom: word appears in Chapter 4 but its sentence comes from Chapter 8 or 21. Check: compare `char_offset` against known chapter boundary offsets. Fix: add `--end-offset <chapter_end>` to the match_sentences.py command, or use the chapter-extracted file as source_text.
+
+### extract_chapter.py --chapter field matching with --boundaries-file
+
+**Change (2026-07-08)**: When `--boundaries-file` is used, `--chapter N` now searches for a boundary entry whose `chapter` field equals N, rather than using `N-1` as an array index. Previously a single-entry boundaries file `[{"chapter": 4, ...}]` with `--chapter 4` would fail (`idx=3 >= len=1`). `--list` output also changed: shows `ch4:` instead of array position `1:` when using boundaries-file.
+
+Symptom: `--chapter 4 --boundaries-file` exits with "chapter 4 not found" even though the file contains `"chapter": 4`. Workaround was `--chapter 1`.
 
 ### Chapter extraction for books without headings (--boundaries-file)
 
@@ -382,7 +396,7 @@ Symptom: `lemma` is a verb base not appearing in the text (e.g. "dishearten" for
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 410 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
+- **Shared tests** live in `lib/tests/` (pytest, ~435 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.

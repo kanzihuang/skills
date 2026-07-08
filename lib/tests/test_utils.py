@@ -110,3 +110,38 @@ def test_build_sentence_regex_importable():
     assert re.search(pattern, "hello  world.")
     assert re.search(pattern, "hello\nworld.")
     assert not re.search(pattern, "goodbye")
+
+
+class TestValidatePlainText:
+    """Mechanical HTML detection in source text."""
+
+    def test_plain_text_passes(self):
+        """Normal narrative text does not trigger exit."""
+        from lib.utils import validate_plain_text
+        validate_plain_text("Once upon a time there was a little prince.")
+
+    def test_doctype_html_exits(self):
+        """<!DOCTYPE html> triggers SystemExit."""
+        from lib.utils import validate_plain_text
+        with pytest.raises(SystemExit):
+            validate_plain_text("<!DOCTYPE html><html>...")
+
+    def test_html_tag_exits(self):
+        """<html> triggers SystemExit."""
+        from lib.utils import validate_plain_text
+        with pytest.raises(SystemExit):
+            validate_plain_text("<html lang=\"en\"><head>...")
+
+    @pytest.mark.parametrize("sig", ["<head>", "<body>", "<meta ", "<title>"])
+    def test_other_html_signatures_exit(self, sig):
+        """Each HTML signature triggers SystemExit."""
+        from lib.utils import validate_plain_text
+        with pytest.raises(SystemExit):
+            validate_plain_text(sig + " some content")
+
+    def test_html_after_500_chars_not_detected(self):
+        """HTML signatures past the first 500 chars are not scanned."""
+        from lib.utils import validate_plain_text
+        # 500 chars of padding pushes <html> beyond the scan window
+        text = "x" * 500 + "<html>"
+        validate_plain_text(text)  # should not raise
