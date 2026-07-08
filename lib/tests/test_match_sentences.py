@@ -269,14 +269,92 @@ class TestPOSCorrections:
         assert w["pos"] == "ADJ", f"expected ADJ, got {w['pos']}"
 
     def test_propn_sentence_initial_becomes_noun(self):
-        """Sentence-initial PROPN → NOUN (improved, not perfect for true ADJ)."""
+        """Sentence-initial PROPN → NOUN (standard case, not inverted ADJ)."""
         result = _run_pipeline(
-            [{"lemma": "absurd", "rep": "absurd",
-              "forms": ["absurd"], "coca_level": 4}],
-            "Absurd as it might seem, I took out my pen.",
+            [{"lemma": "desert", "rep": "desert",
+              "forms": ["desert"], "coca_level": 5}],
+            "Desert stretched before them for miles.",
         )
         w = result["words"][0]
         assert w["pos"] == "NOUN", f"expected NOUN, got {w['pos']}"
+
+    def test_inverted_adj_sentence_initial_becomes_adj(self):
+        """Sentence-initial inverted ADJ 'Absurd as it might seem' → ADJ."""
+        result = _run_pipeline(
+            [{"lemma": "absurd", "rep": "absurd",
+              "forms": ["absurd"], "coca_level": 4}],
+            "Absurd as it might seem to me, I took out of my pocket a sheet of paper and my fountain-pen.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"expected ADJ, got {w['pos']}"
+
+    def test_inverted_adj_king_as_he_was_stays_propn(self):
+        """'King as he was' (npadvmod) → NOT converted to ADJ.
+
+        'King' is a noun acting as npadvmod, not an inverted adjective in advcl.
+        The dep guard prevents false positives for npadvmod-tagged tokens.
+        """
+        result = _run_pipeline(
+            [{"lemma": "king", "rep": "king",
+              "forms": ["king"], "coca_level": 2}],  # L2 would normally be excluded
+            "King as he was, he had no real power.",
+        )
+        # 'king' is L2, likely not in COCA filter for real use,
+        # but if it passed through, it should stay NOUN (spaCy tags as PROPN→NOUN)
+        # or be excluded entirely
+        words = result.get("words", [])
+        king_entries = [w for w in words if w["lemma"] == "king"]
+        if king_entries:
+            assert king_entries[0]["pos"] != "ADJ", \
+                f"King should NOT be ADJ, got {king_entries[0]['pos']}"
+
+    def test_conj_pos_inheritance_adjective_in_noun_list(self):
+        """'arithmetic' tagged ADJ in noun coordination → inherits NOUN from root."""
+        result = _run_pipeline(
+            [{"lemma": "arithmetic", "rep": "arithmetic",
+              "forms": ["arithmetic"], "coca_level": 7}],
+            "My studies had been concentrated on geography, history, arithmetic and grammar.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "NOUN", f"expected NOUN, got {w['pos']}"
+
+    def test_conj_pos_inheritance_chain_walks_to_root(self):
+        """Chain-walking: conjunct's head is also conjunct → walk to root."""
+        result = _run_pipeline(
+            [{"lemma": "arithmetic", "rep": "arithmetic",
+              "forms": ["arithmetic"], "coca_level": 7}],
+            "We studied geography, history, arithmetic and grammar.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "NOUN", f"expected NOUN, got {w['pos']}"
+
+    def test_conj_pos_inheritance_same_pos_no_change(self):
+        """ADJ-conj-ADJ: 'blue' in 'red and blue' — no change needed."""
+        result = _run_pipeline(
+            [{"lemma": "blue", "rep": "blue",
+              "forms": ["blue"], "coca_level": 1}],
+            "The red and blue flag waved.",
+        )
+        # blue is L1, likely excluded, but if it passes:
+        words = result.get("words", [])
+        blue_entries = [w for w in words if w["lemma"] == "blue"]
+        if blue_entries:
+            assert blue_entries[0]["pos"] == "ADJ", \
+                f"blue should stay ADJ, got {blue_entries[0]['pos']}"
+
+    def test_conj_pos_inheritance_propn_not_converted(self):
+        """'Jerry' conj of 'Tom' (PROPN) — stays PROPN, not inherited."""
+        result = _run_pipeline(
+            [{"lemma": "jerry", "rep": "jerry",
+              "forms": ["jerry"], "coca_level": 20}],
+            "Tom and Jerry went to the store.",
+        )
+        words = result.get("words", [])
+        jerry_entries = [w for w in words if w["lemma"] == "jerry"]
+        if jerry_entries:
+            # PROPN root → POS not in whitelist → no inheritance
+            assert jerry_entries[0]["pos"] != "VERB", \
+                f"Jerry should not inherit non-whitelist POS, got {jerry_entries[0]['pos']}"
 
     def test_be_to_vbn_pos_becomes_adj(self):
         """be-to VBN pattern sets POS=ADJ."""

@@ -335,6 +335,32 @@ def main():
                 if pos == "PROPN" and (token.text[0].islower() or token.i == 0
                                        or token_lower in form_index):
                     pos = "NOUN"
+                # conj POS inheritance: in coordinated structures
+                # (A, B, C and D), spaCy sometimes mis-tags individual
+                # conjuncts (e.g. "arithmetic" as ADJ in a list of NOUNs).
+                # Walk up the conj chain to the coordination root and
+                # inherit its POS when the root has a reliable POS tag.
+                if token.dep_ == "conj":
+                    head_token = token.head
+                    while head_token.dep_ == "conj":
+                        head_token = head_token.head
+                    head_pos = head_token.pos_
+                    if head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos:
+                        pos = head_pos
+                # Sentence-initial inverted ADJ: "Absurd as it might seem"
+                # (= "As absurd as ...").  spaCy often tags these as PROPN
+                # (capitalized at sentence start); PROPN→NOUN then converts
+                # to NOUN.  Detect the "X as" pattern with dep guard
+                # (advcl for inverted adjective clauses, not npadvmod for
+                # noun phrases like "King as he was").
+                if (pos == "NOUN" and token.i == 0
+                        and token.dep_ in ("advcl", "root", "ROOT")):
+                    if (token.i + 1 < len(doc)
+                            and doc[token.i + 1].text.lower() == "as"):
+                        import lemminflect
+                        adj_lemmas = lemminflect.getLemma(token_lower, 'ADJ')
+                        if adj_lemmas and adj_lemmas[0] == token_lower:
+                            pos = "ADJ"
                 # NOUN/VERB→ADJ: adjectival dependency overrides POS tag.
                 # attr is excluded — it applies to both nouns ("a teacher")
                 # and adjectives ("tall") in predicate position.

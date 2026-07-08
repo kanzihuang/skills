@@ -242,6 +242,26 @@ Note: `_determine_lemma` Signal 4 was NOT changed — `word[0].islower()` there 
 
 Symptom: "Boa" tagged PROPN with definition "[n.] 蟒蛇属（动物分类名）" when it should be NOUN. Check: `grep '"pos": "PROPN"'` in match_sentences output.
 
+### conj POS inheritance for coordinated structures
+
+**Change (2026-07-08)**: `match_sentences.py` main loop now inherits POS from the coordination root for `dep=conj` tokens. spaCy sometimes mis-tags individual conjuncts (e.g. "arithmetic" as ADJ in "geography, history, arithmetic and grammar", where all are NOUNs). The fix walks up the `dep=conj` chain to find the coordination root and inherits its POS when `pos != head_pos` and the root has a reliable POS tag (NOUN/VERB/ADJ/ADV).
+
+Chain-walking is critical: in "A, B, C and D", "D" depends on "C" (conj), "C" depends on "B" (conj), "B" depends on "A" (root). Without walking up, "D" would inherit from "C" which is itself a conjunct — the walk finds "A" as the true coordination root.
+
+Guard: `head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos` — only inherits from content-word roots and only when POS actually differs. PROPN roots (e.g. "Tom" in "Tom and Jerry") are not in the whitelist, so PROPN conjuncts stay unchanged.
+
+Symptom: "arithmetic" tagged ADJ in a noun list. Check: `grep '"pos": "ADJ"'` in match_sentences output for words in noun coordination.
+
+### Sentence-initial inverted ADJ detection ("Absurd as it might seem")
+
+**Change (2026-07-08)**: `match_sentences.py` main loop now detects sentence-initial inverted adjective constructions. In "Absurd as it might seem" (= "As absurd as..."), spaCy tags "Absurd" as PROPN (capitalized at sentence start), then PROPN→NOUN converts to NOUN. The fix checks: `pos == "NOUN" AND token.i == 0 AND dep in ("advcl", "root", "ROOT") AND next_token == "as" AND lemminflect ADJ channel returns the surface form`.
+
+Two guards prevent false positives:
+1. `dep_ in ("advcl", "root", "ROOT")` — excludes npadvmod (noun phrases as adverbial modifiers). "King as he was" → dep=npadvmod → NOT converted.
+2. `lemminflect.getLemma(token_lower, 'ADJ')[0] == token_lower` — confirms the word actually has a valid adjective form matching the surface token.
+
+Symptom: "absurd" tagged NOUN in "Absurd as it might seem". Check: `grep '"pos": "NOUN"'` in match_sentences output for sentence-initial words followed by "as".
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.

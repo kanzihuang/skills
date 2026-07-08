@@ -13,6 +13,7 @@
 **每次执行 Step 2A 前，先查记忆中是否已记录该书的缓存路径。**
 
 - 记忆命中（如 [[little-prince-source-text]]）→ 验证文件存在 → 使用缓存，跳过 2A-a/b
+- 记忆命中但文件缺失（如 /tmp 被清理）→ 当作 cache miss，继续 2A-a/b 搜索下载
 - 未命中 → 继续搜索
 
 ### 2A-a/b. 搜索并拉取源文本
@@ -61,7 +62,8 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 截断规则不变：
 - 目标 ≤250 字符，语法完整，含生词上下文
 - 禁止切掉目标词、禁止以连词/功能词开头或结尾
-- 截断后 regex 源文本校验
+- **截断必须从原始源文本做显式字符切片**（`text[start:end]`），不要基于 JSON 中的 sentence 字符串修改——JSON 中的句子经 `_normalize_dialogue_attribution()` 规范化后换行/空格与原始源文本不同
+- **截断后验证**：用 `re.search(_build_sentence_regex(truncated), raw_source_text)` 验证。**不要用 `assert truncated in source_text`** ——精确字符串包含会因规范化差异而误判。此验证的真正价值是防止 Claude 在截断时意外编辑文本（如 "And then look:" → "Look:"），而非验证截断结果在源文本中的存在性
 
 ---
 
