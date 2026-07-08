@@ -232,22 +232,22 @@ def test_sentence_ending_with_bare_comma_is_error():
         f"Should detect bare comma ending\nErrors: {errors}"
 
 
-# ── Colon-ending sentence (dialogue-attribution fragment) ──
+# ── Colon-ending sentence (soft warning, was hard error) ──
 
 
-def test_sentence_ending_with_colon_is_error():
-    """Sentences ending with ':' are dialogue-attribution fragments — hard error."""
+def test_sentence_ending_with_colon_is_soft_warning():
+    """Colon-ending sentences are now a soft warning, not a hard error."""
     w = make_word(
         word="attentively",
         sentence="He looked attentively, then:",
     )
     errors = validate_word_entries([w])
-    assert has_error(errors, "attentively", "dialogue-attribution"), \
-        f"Should detect colon ending\nErrors: {errors}"
+    assert not has_error(errors, "attentively", "dialogue-attribution"), \
+        f"Colon ending should not produce hard error (soft warning only)\nErrors: {errors}"
 
 
 def test_then_colon_caught_as_function_word():
-    """'then:' is stripped to 'then' and caught by function-word check."""
+    """'then:' is stripped to 'then' and caught by function-word check even with colon."""
     w = make_word(
         word="attentively",
         sentence="He looked attentively, then:",
@@ -296,3 +296,47 @@ def test_sentence_at_min_length_passes():
     errors = validate_word_entries([w])
     assert not has_error(errors, "horn", "too short"), \
         f"Sentence ≥{MIN_SENTENCE_LENGTH} chars should pass\nErrors: {errors}"
+
+
+# ── Irregular past-tense verb detection (Issue 2) ──
+
+
+def test_irregular_past_tense_not_false_positive():
+    """Sentences with irregular past-tense verbs should not trigger 'no finite verb'."""
+    w = make_word(
+        word="acquaintance",
+        sentence="And so I made the acquaintance of the little prince.",
+        target_offset=12,
+    )
+    errors = validate_word_entries([w])
+    assert isinstance(errors, list)
+    # "made" is irregular past tense — should NOT trigger finite-verb warning.
+    # The soft warning goes to stderr, so errors list should have no finite-verb errors.
+    assert not has_error(errors, "acquaintance", "finite verb"), \
+        f"Irregular past 'made' should not trigger finite-verb warning\nErrors: {errors}"
+
+
+def test_genuine_noun_phrase_still_warns():
+    """Pure noun phrase without any verb form still passes validation (soft warning only)."""
+    w = make_word(
+        word="tenderness",
+        sentence="the tenderness of smiling faces",
+    )
+    errors = validate_word_entries([w])
+    # No hard errors — soft warnings go to stderr.
+    assert isinstance(errors, list)
+
+
+# ── Single CJK character definition (Issue 6) ──
+
+
+def test_single_cjk_character_definition_no_warning():
+    """A single CJK character (e.g., 角=horn) should not trigger CJK warning."""
+    w = make_word(
+        word="horn",
+        definition_cn="角",
+        sentence="He blew his horn very loudly.",
+        target_offset=12,
+    )
+    errors = validate_word_entries([w])
+    assert isinstance(errors, list)
