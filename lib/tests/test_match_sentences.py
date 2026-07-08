@@ -100,20 +100,29 @@ class TestDialogueAttributionNormalization:
         )
 
     def test_multiple_attributions_in_text(self):
-        """Multiple colon-attribution patterns all joined."""
+        """Multiple colon/comma-attribution patterns all joined."""
         from lib.scripts.match_sentences import _normalize_dialogue_attribution
 
         text = (
             'He looked attentively, then:\n\n"No! Too ill."\n\n'
-            'I drew:\n\n"He has gone to sleep..."'
+            'He replied,\n\n"It does not matter."'
         )
         result = _normalize_dialogue_attribution(text)
         assert ': "No!' in result
-        assert ': "He has' in result
+        assert ', "It does' in result
         # Paragraph breaks between unrelated lines should remain
         assert '\n\n' in result, (
             "paragraph break after dialogue close-quote should remain"
         )
+
+    def test_comma_attribution_joined(self):
+        """'He replied,\\n\\n\"It does not matter.\"' → ', \"It does...'"""
+        from lib.scripts.match_sentences import _normalize_dialogue_attribution
+
+        text = 'He replied,\n\n"It does not matter. Draw me a sheep."'
+        result = _normalize_dialogue_attribution(text)
+        assert ', "It does not matter' in result
+        assert '\n\n' not in result
 
     def test_end_to_end_attentively_sentence(self):
         """Full pipeline: attentively gets a complete sentence with dialogue."""
