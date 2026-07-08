@@ -805,6 +805,31 @@ def main() -> None:
         print(f"Note: deduplicated {len(data['words']) - len(deduped)} word(s)\n")
     data["words"] = deduped
 
+    # Verify no two entries share the same audio filename prefix.
+    # The prefix is {safe_filename(lemma)}_{pos} — same prefix means
+    # both word and sentence audio files would collide.
+    # This is a defense-in-depth check: the (lemma,pos) dedup above
+    # should prevent this, but a bug in dedup logic could silently
+    # produce audio collisions (see commit 64c0b18).
+    audio_keys: dict[str, list[str]] = {}
+    for w in data["words"]:
+        lemma = w.get("lemma", "").strip() or w["word"]
+        pos = w.get("pos", "").strip()
+        safe = safe_filename(lemma)
+        prefix = f"{safe}_{pos}" if pos else safe
+        if prefix not in audio_keys:
+            audio_keys[prefix] = []
+        audio_keys[prefix].append(w["word"])
+    collisions = {k: v for k, v in audio_keys.items() if len(v) > 1}
+    if collisions:
+        print("Error: audio filename collision detected:", file=sys.stderr)
+        for prefix, words in collisions.items():
+            print(f"  prefix '{prefix}_*': {len(words)} words — {', '.join(words)}",
+                  file=sys.stderr)
+        print("  Each (lemma,pos) must have a unique audio prefix. "
+              "Check dedup logic.", file=sys.stderr)
+        sys.exit(1)
+
     # Pre-fill IPA from cmudict before validation.
     # Claude may leave ipa empty — cmudict fills it automatically for known words.
     # Only words truly not in cmudict will still have empty ipa and fail validation

@@ -459,6 +459,86 @@ class TestIntraBatchDedup:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 6. Audio filename collision detection — same prefix → hard error
+# ═══════════════════════════════════════════════════════════════════
+
+class TestAudioFilenameCollision:
+    """Defense-in-depth: verify no two entries share an audio filename prefix.
+
+    The prefix is {safe_filename(lemma)}_{pos}.  Two entries with the
+    same prefix would overwrite each other's word + sentence audio.
+    The (lemma,pos) dedup in main() should prevent this, so a collision
+    here signals a bug in dedup logic.
+    """
+
+    def test_same_lemma_pos_different_surface_collides(self):
+        """'boa' and 'boas' both lemma=boa pos=NOUN → same audio prefix → caught."""
+        from lib.utils import safe_filename
+
+        words = [
+            {"lemma": "boa", "pos": "NOUN", "word": "boa"},
+            {"lemma": "boa", "pos": "NOUN", "word": "boas"},
+        ]
+        prefixes = {}
+        collisions = {}
+        for w in words:
+            lemma = w.get("lemma", "") or w["word"]
+            pos = w.get("pos", "")
+            prefix = f"{safe_filename(lemma)}_{pos}" if pos else safe_filename(lemma)
+            prefixes.setdefault(prefix, []).append(w["word"])
+        collisions = {k: v for k, v in prefixes.items() if len(v) > 1}
+        assert len(collisions) == 1, "boa+boas same (lemma,pos) should collide"
+        assert "boa_NOUN" in collisions
+
+    def test_same_lemma_different_pos_no_collision(self):
+        """'astray' ADJ and ADV → different prefixes → no collision."""
+        from lib.utils import safe_filename
+
+        words = [
+            {"lemma": "astray", "pos": "ADJ", "word": "astray"},
+            {"lemma": "astray", "pos": "ADV", "word": "astray"},
+        ]
+        prefixes = {}
+        for w in words:
+            lemma = w.get("lemma", "") or w["word"]
+            pos = w.get("pos", "")
+            prefix = f"{safe_filename(lemma)}_{pos}" if pos else safe_filename(lemma)
+            prefixes.setdefault(prefix, []).append(w["word"])
+        collisions = {k: v for k, v in prefixes.items() if len(v) > 1}
+        assert len(collisions) == 0, (
+            f"ADJ vs ADV must have different audio prefixes, got {collisions}"
+        )
+
+    def test_safe_filename_collision_different_lemmas(self):
+        """Different lemmas that safe_filename() maps to same string → caught.
+
+        e.g. lemma='a/b' and lemma='a b' both → safe='a_b'.
+        Dedup uses raw lemma and won't merge them, but audio files collide.
+        """
+        from lib.utils import safe_filename
+
+        # Verify the premise: these really do map to the same safe string
+        assert safe_filename("a/b") == safe_filename("a b") == "a_b", \
+            "test premise: safe_filename must map both to 'a_b'"
+
+        words = [
+            {"lemma": "a/b", "pos": "NOUN", "word": "ab1"},
+            {"lemma": "a b", "pos": "NOUN", "word": "ab2"},
+        ]
+        prefixes = {}
+        for w in words:
+            lemma = w.get("lemma", "") or w["word"]
+            pos = w.get("pos", "")
+            prefix = f"{safe_filename(lemma)}_{pos}" if pos else safe_filename(lemma)
+            prefixes.setdefault(prefix, []).append(w["word"])
+        collisions = {k: v for k, v in prefixes.items() if len(v) > 1}
+        assert len(collisions) == 1, (
+            f"Different lemmas mapping to same safe string must be caught, "
+            f"got {collisions}"
+        )
+        assert "a_b_NOUN" in collisions
+
+# ═══════════════════════════════════════════════════════════════════
 # 4. Audio failure → retry → block (not silently skip)
 # ═══════════════════════════════════════════════════════════════════
 
