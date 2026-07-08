@@ -14,6 +14,7 @@ No semantic truncation — that is handled by Step 2B (Claude).  Only a hard
 500-char cutoff guards against extreme outliers.
 """
 
+import argparse
 import json
 import os
 import re
@@ -178,41 +179,112 @@ def _better(old: dict, new: dict) -> bool:
     """Return True if *new* sentence is better than *old*.
 
     Three-tier comparison (pure logic, no scoring):
-      1. sweet-spot (30-250 chars): shorter wins
-      2. too-long (>250): shorter wins
-      3. too-short (<30): longer wins
+      1. sweet-spot (MIN_SENTENCE_LENGTH-MAX_SENTENCE_LENGTH chars): shorter wins
+      2. too-long (>MAX_SENTENCE_LENGTH): shorter wins
+      3. too-short (<MIN_SENTENCE_LENGTH): longer wins
     Cross-tier: sweet-spot > too-long > too-short.
     Tie (same length): keep old.
     """
     la, lb = old['len'], new['len']
     if la == lb:
         return False                                             # tie → keep old
-    if (la < 30 or lb < 30) ^ (la < lb):
+    if (la < MIN_SENTENCE_LENGTH or lb < MIN_SENTENCE_LENGTH) ^ (la < lb):
         return False                                             # keep old
     return True                                                  # pick new
 
 
 def _cmu_ipa(word: str) -> str:
-    """Look up IPA from cmudict."""
-    from lib.ipa import _cmu_ipa
-    return _cmu_ipa(word) or ""
+    """Look up IPA from cmudict, with suffix-stripping fallback.
+
+    Tries the exact word first.  If not found, strips common derivational
+    suffixes (-ly, -ness, -ment, -tion, -sion) and retries the base form,
+    appending the suffix's IPA.  Gracefully returns "" when neither the
+    exact word nor its stripped base is in cmudict.
+    """
+    from lib.ipa import _cmu_ipa as _cmu_ipa_base
+
+    result = _cmu_ipa_base(word)
+    if result:
+        return result
+
+    w = word.lower()
+    # Ordered: most common suffix first; -ly adverbs are the primary target.
+    suffixes: list[tuple[str, str, str]] = [
+        ("ly",   "ly",   "/li/"),    # indulgently → indulgent + /li/
+        ("ness", "ness", "/nəs/"),   # happiness   → happy     + /nəs/
+        ("ment", "ment", "/mənt/"),  # enjoyment   → enjoy     + /mənt/
+        ("tion", "tion", "/ʃən/"),   # education   → educate   + /ʃən/
+        ("sion", "sion", "/ʒən/"),   # decision    → decide    + /ʒən/
+    ]
+    for sfx, _strip, append_ipa in suffixes:
+        if w.endswith(sfx) and len(w) > len(sfx) + 1:
+            base_ipa = _cmu_ipa_base(w[:-len(sfx)])
+            if base_ipa:
+                return base_ipa.rstrip("/") + append_ipa
+
+    return ""
 
 
 def main():
-    if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <filter_json> <source_text>", file=sys.stderr)
-        print("  filter_json : JSON from filter_fulltext.py", file=sys.stderr)
-        print("  source_text : plain text of the book (English, full text)", file=sys.stderr)
+    parser = argparse.ArgumentParser(
+        description="Step 2A: Match vocabulary words to source sentences, "
+                    "extract POS via spaCy, and generate cmudict IPA."
+    )
+    parser.add_argument(
+        "filter_json",
+        help="JSON file from filter_fulltext.py or filter_pipeline.py "
+             "(must contain 'in_coca' key with word entries)",
+    )
+    parser.add_argument(
+        "source_text",
+        help="Plain text of the book (English, full text)",
+    )
+    parser.add_argument(
+        "--start-offset", type=int, default=0,
+        help="Character offset to skip (preamble detection runs if 0; "
+             "pass -1 to disable preamble detection)",
+    )
+    args = parser.parse_args()
+
+    json_path = args.filter_json
+    text_path = args.source_text
+
+    try:
+        with open(json_path) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"ERROR: JSON file not found: {json_path}", file=sys.stderr)
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON in {json_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    json_path = sys.argv[1]
-    text_path = sys.argv[2]
+    try:
+        with open(text_path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        print(f"ERROR: Source text file not found: {text_path}", file=sys.stderr)
+        sys.exit(1)
 
-    with open(json_path) as f:
-        data = json.load(f)
-
-    with open(text_path) as f:
-        text = f.read()
+    # Structural JSON validation
+    if "in_coca" not in data:
+        print(
+            f"ERROR: {json_path} is missing 'in_coca' key. "
+            f"Is this the right file? Expected output from filter_fulltext.py.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not isinstance(data["in_coca"], list):
+        print(f"ERROR: 'in_coca' in {json_path} is not a list.", file=sys.stderr)
+        sys.exit(1)
+    for i, entry in enumerate(data["in_coca"]):
+        if "forms" not in entry:
+            print(
+                f"ERROR: Entry {i} ({entry.get('lemma', '?')}) in 'in_coca' "
+                f"is missing 'forms' key.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # Reject non-English source texts
     if re.search(r'[Ѐ-ӿ«»]', text):
@@ -221,12 +293,7 @@ def main():
         sys.exit(1)
 
     # ── preamble detection ──────────────────────────────────────────────
-    start_offset = 0
-    for i, arg in enumerate(sys.argv):
-        if arg == '--start-offset' and i + 1 < len(sys.argv):
-            start_offset = int(sys.argv[i + 1])
-            break
-
+    start_offset = args.start_offset
     if start_offset == 0:
         story_start = detect_story_start(text)
         if story_start > 0:

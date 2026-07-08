@@ -5,7 +5,8 @@ Reads WeRead bookmarklist API JSON from stdin, processes everything in-process,
 and outputs final filtered results.
 
 Usage:
-    curl ... | python filter_pipeline.py [--anki-dedup same-book] [--book-id <bookId>] [--json-out <path>]
+    curl ... | python filter_pipeline.py [--anki-dedup same-book] [--book-id <bookId>] \\
+        [--book-title "Title"] [--book-author "Author"] [--json-out <path>]
 
 Output sections:
     SUMMARY: X highlights → Y lemmas → A in Anki → B excluded → C final
@@ -106,6 +107,8 @@ def main():
     # Parse args
     anki_dedup: str = ""               # "" | "same-book"
     book_id: Optional[str] = None
+    book_title: Optional[str] = None
+    book_author: Optional[str] = None
     json_out_path: Optional[str] = None
     args = sys.argv[1:]
     i = 0
@@ -119,6 +122,12 @@ def main():
             i += 2
         elif args[i] == "--book-id" and i + 1 < len(args):
             book_id = args[i + 1]
+            i += 2
+        elif args[i] == "--book-title" and i + 1 < len(args):
+            book_title = args[i + 1]
+            i += 2
+        elif args[i] == "--book-author" and i + 1 < len(args):
+            book_author = args[i + 1]
             i += 2
         elif args[i] == "--json-out" and i + 1 < len(args):
             json_out_path = args[i + 1]
@@ -258,6 +267,9 @@ def main():
     # --- JSON output (structured, for Claude to avoid manual transcription) ---
     if json_out_path:
         json_out = {
+            "book_title": book_title or "",
+            "book_author": book_author or "",
+            "book_id": book_id or "",
             "summary": {
                 "highlights": n_highlights,
                 "lemmas": n_lemmas,

@@ -94,6 +94,8 @@ def main() -> None:
     basic_min: int = 0
     basic_max: int = 0
     json_out_path: Optional[str] = None
+    book_title: Optional[str] = None
+    book_author: Optional[str] = None
 
     args = sys.argv[1:]
     i = 0
@@ -106,6 +108,12 @@ def main() -> None:
             i += 2
         elif args[i] == "--json-out" and i + 1 < len(args):
             json_out_path = args[i + 1]
+            i += 2
+        elif args[i] == "--book-title" and i + 1 < len(args):
+            book_title = args[i + 1]
+            i += 2
+        elif args[i] == "--book-author" and i + 1 < len(args):
+            book_author = args[i + 1]
             i += 2
         else:
             i += 1
@@ -210,6 +218,8 @@ def main() -> None:
     # -- JSON output ----------------------------------------------------------
     if json_out_path:
         json_out = {
+            "book_title": book_title or "",
+            "book_author": book_author or "",
             "suffix": suffix,
             "summary": {
                 "total_words": total_raw_words,

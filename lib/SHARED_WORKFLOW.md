@@ -20,6 +20,13 @@
 
 WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Project Gutenberg。验证英文原版。
 
+拉取后做质量验证（`head -c 500`）：
+- 正文句子是否完整（非章节摘要片段）
+- 有无明显 OCR 损坏（如 `fig ures` → 字母间多余空格）
+- 首句是否与公认经典译本一致（排除 ESL 简化版/改编版/双语版）
+- **标点质量**：检查是否有异常的冒号滥用（冒号误代句号是常见 OCR 错误）、连写字（"th e"）、双重空格
+- 有问题 → 换源重新拉取，不要用损坏文本
+
 ### 2A-c. match_sentences.py — 全量候选 + POS 分组 + lemma + IPA
 
 ```bash
@@ -56,8 +63,15 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 > - 序言/非正文句子（`char_offset` 靠前、内容为作者简介/编辑导语）
 > - 语法不完整的句子片段
 > - 语义不匹配的候选句
+> - **OCR 标点错误**：句尾 `:` 或 `,` 在语法完整的句子中实为 OCR 对句号的误识别（常见于 Internet Archive 文本，罕见于 Project Gutenberg）。不同于 `_normalize_dialogue_attribution()` 处理的对话归属片段（`:\n\n"`），这些是源文本本身的标点错误
 
-**目标词由 `target_offset` 定位**（不含 `<b>` 标签）。其余逻辑不变：完整性检查 → 长句截断 → 源文本手动提取。
+**目标词由 `target_offset` 定位**（不含 `<b>` 标签）。其余逻辑不变：完整性检查 → **OCR 标点修正** → 长句截断 → 源文本手动提取。
+
+**OCR 标点修正规则**：
+- 检查句子末尾标点：若句尾为 `:` 或 `,` 且句子语法完整（有主语+谓语），且冒号/逗号后面的内容不是对话引语 → 可能是 OCR 对句号的误识别
+- **修正方法**：将句尾 `:` 或 `,` 替换为 `.`。仅修改句子最后一个字符——不要修改句中任何标点
+- 安全原因：此修改发生在 Step 2B（Claude 审查），先于 Step 2C（DeepL 翻译）和 Step 2F（验证）——翻译不会受影响，且替换后的句子仍是源文本的连续子串
+- 非 OCR 错误不要改：句子引导下文的合法冒号（如列表/解释说明）保持不变，`_normalize_dialogue_attribution()` 已处理的对话归属也保持不变
 
 截断规则不变：
 - 目标 ≤250 字符，语法完整，含生词上下文
@@ -125,6 +139,20 @@ POS 对齐 + 释义准确 + 翻译一致性。`lemma` 不在此步检查（match
 | 翻译一致性 | `definition_cn` 与 `translation_cn` 语义对齐 |
 
 机械检查（word 匹配、IPA 格式、功能词结尾等）由 match_sentences.py 和 sync_anki.py 自动执行。
+
+### 进入 Step 2G 前的必检清单
+
+`sync_anki.py` 要求 JSON 中以下字段非空，缺失将 crash：
+
+| 字段 | 检查 |
+|------|------|
+| `book_title` | 必须非空（用于自动推导牌组名） |
+| `book_author` | 必须非空（用于自动推导牌组名） |
+| `suffix` 或 `book_id` | 至少一个存在（用于 WordId/音频命名空间隔离） |
+| `words` | 必须是非空数组 |
+
+> **vocab-book**: `filter_fulltext.py --book-title "Title" --book-author "Author"` 可自动填充前两项。
+> **vocab-anki**: `filter_pipeline.py --book-title "Title" --book-author "Author"` 可自动填充前两项；也可由 Step 1 的 WeRead API 响应中提取。
 
 ---
 

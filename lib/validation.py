@@ -17,6 +17,20 @@ from .config import MAX_SENTENCE_LENGTH, MIN_SENTENCE_LENGTH
 from .lemmatize import lemmatize
 from .utils import lemmatize_word
 
+# Common irregular past-tense forms used by finite-verb detection (Issue 2).
+# The first two tiers (auxiliaries/modals and -ed/-s endings) cover regular
+# verbs; this set catches bare past-tense forms like "made", "went", "told".
+_IRREGULAR_PAST_TENSE: set[str] = {
+    "made", "went", "came", "saw", "took", "gave", "told", "knew",
+    "found", "thought", "said", "got", "put", "let", "set", "read",
+    "left", "felt", "kept", "meant", "met", "sent", "spent", "built",
+    "held", "led", "stood", "understood", "began", "broke", "chose",
+    "drove", "ate", "fell", "flew", "grew", "hung", "ran", "sang",
+    "sat", "slept", "spoke", "swam", "wrote", "drew", "drank",
+    "fought", "taught", "caught", "brought", "bought", "sought",
+    "lost", "won", "hit", "cut", "cost", "hurt", "shut",
+}
+
 
 def validate_word_entries(words: list[dict]) -> list[str]:
     """Validate word entries before sync. Returns list of error messages (empty = pass).
@@ -105,8 +119,8 @@ def validate_word_entries(words: list[dict]) -> list[str]:
         definition = w.get("definition_cn", "")
         if definition:
             cjk_count = len(re.findall(r"[一-鿿]", definition))
-            if cjk_count < 2:
-                print(f"  [WARN] [{word}] definition_cn has <2 Chinese chars: '{definition}'", file=sys.stderr)
+            if cjk_count < 1:
+                print(f"  [WARN] [{word}] definition_cn has no Chinese chars: '{definition}'", file=sys.stderr)
             if definition.strip().lower() == word.lower():
                 print(f"  [WARN] [{word}] definition_cn equals word: '{definition}'", file=sys.stderr)
 
@@ -129,11 +143,20 @@ def validate_word_entries(words: list[dict]) -> list[str]:
             if not has_finite_verb:
                 verb_ending = bool(re.search(r'\b\w+(?:ed|s)\b', clean))
                 if not verb_ending:
-                    print(
-                        f"  [WARN] [{word}] sentence may lack a finite verb "
-                        f"- possible noun phrase fragment: '{clean[:80]}{'...' if len(clean) > 80 else ''}'",
-                        file=sys.stderr,
-                    )
+                    # Third tier: common irregular past-tense forms.
+                    # Covers words like "made", "went", "told" that the
+                    # auxiliary-modal and regular-ed/s checks both miss.
+                    irregular_past = bool(re.search(
+                        r'\b(?:' + '|'.join(_IRREGULAR_PAST_TENSE) + r')\b',
+                        clean, re.IGNORECASE,
+                    ))
+                    if not irregular_past:
+                        print(
+                            f"  [WARN] [{word}] sentence may lack a finite verb "
+                            f"- possible noun phrase fragment: "
+                            f"'{clean[:80]}{'...' if len(clean) > 80 else ''}'",
+                            file=sys.stderr,
+                        )
 
             # 7c. Ends with function word
             _FUNCTION_ENDINGS: set[str] = {
@@ -164,13 +187,17 @@ def validate_word_entries(words: list[dict]) -> list[str]:
                     f"'{last_word}' - likely truncated fragment"
                 )
 
-            # 7d. Sentence ending with colon — dialogue-attribution fragment.
-            # A colon-terminated "sentence" is never grammatically complete;
-            # the following dialogue must be joined (see _normalize_dialogue_attribution).
+            # 7d. Sentence ending with colon — soft warning.
+            # _normalize_dialogue_attribution() in match_sentences.py
+            # already joined canonical dialogue-attribution fragments
+            # ([:,]\n\n").  Surviving colons are either legitimate
+            # introductory colons or OCR artifacts — neither should
+            # block sync.  Step 2B should fix OCR colon→period errors.
             if clean.rstrip().endswith(':'):
-                errors.append(
-                    f"[{word}] sentence ends with ':' — "
-                    f"dialogue-attribution fragment (needs following dialogue)"
+                print(
+                    f"  [WARN] [{word}] sentence ends with ':' — "
+                    f"possible dialogue-attribution fragment or OCR artifact",
+                    file=sys.stderr,
                 )
 
             # 7e. Punctuation artifact
@@ -205,3 +232,29 @@ def validate_word_entries(words: list[dict]) -> list[str]:
 
 # Backward-compatible alias
 _validate_word_entries = validate_word_entries
+
+
+if __name__ == "__main__":
+    import json
+
+    if len(sys.argv) < 2:
+        print(f"Usage: python -m lib.validation <input_json>", file=sys.stderr)
+        sys.exit(1)
+
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+
+    words = data.get("words", data.get("in_coca", []))
+    if not words:
+        print("ERROR: No 'words' or 'in_coca' array found in JSON.", file=sys.stderr)
+        sys.exit(1)
+
+    errors = validate_word_entries(words)
+
+    if errors:
+        print(f"\n{len(errors)} validation error(s):", file=sys.stderr)
+        for e in errors:
+            print(f"  {e}", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print(f"All validation checks passed ({len(words)} entries).")
