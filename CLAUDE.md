@@ -183,6 +183,8 @@ Step 2B truncation must produce **continuous substrings** of the source text —
 
 **Verify**: after truncation, run `build_sentence_regex(sentence)` (`from lib.utils import build_sentence_regex`) against source sentences. Match → continuous substring ✓. No match → editing detected ✗.
 
+**Known exception — OCR compound-word hyphenation repair**: `build_sentence_regex` may produce false negatives when Step 2B fixes OCR spacing around hyphens in compound words (e.g., `"fair-to- middling"` → `"fair-to-middling"`). The fixed sentence has one token (`fair-to-middling`) but the source text still has the space-separated original (`fair-to- middling`). The regex `fair\-to\-middling` cannot match across the space. When the only difference is hyphen-space normalization, verify with `fixed_sentence.replace('- ', '-').replace(' -', '-') in source_text` instead. See `lib/SHARED_WORKFLOW.md` Step 2B for details.
+
 ### Blank-line sentence fragmentation (PySBD + source text artifacts)
 
 When source text contains blank lines within a sentence (e.g. `"bigger \n\n\n\nthan himself"`), PySBD treats `\n\n` as a sentence boundary, splitting the sentence into fragments. `_normalize_dialogue_attribution()` handles `[:,]\n{2,}["""]` (attribution→dialogue), but does not cover blank lines within sentences without attribution markers.

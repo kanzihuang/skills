@@ -77,6 +77,8 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 两种方式的区别：方式 A 将搜索范围完全限定在章节文本内；方式 B 的 `char_offset` 仍基于全书偏移（适合后续全文定位）。
 
+> 对于无章节标题的书籍（如《小王子》Katherine Woods 译本），需使用 `--boundaries-file` 机制提取章节。详见 SKILL.md Step 1 的「无章节标题的书籍」小节。
+
 ### 2A-d. 版本校验 + 失败处理
 
 源文本获取失败 → 该批次所有单词跳过。
@@ -101,11 +103,18 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 - 安全原因：此修改发生在 Step 2B（Claude 审查），先于 Step 2C（DeepL 翻译）和 Step 2F（验证）——翻译不会受影响，且替换后的句子仍是源文本的连续子串
 - 非 OCR 错误不要改：句子引导下文的合法冒号（如列表/解释说明）保持不变，`_normalize_dialogue_attribution()` 已处理的对话归属也保持不变
 
+**OCR 连字符空格修复**：Internet Archive 文本中常见连字符后有多余空格（如 `"fair-to- middling"`）。修正方法：移除连字符两侧多余空格 → `"fair-to-middling"`。此修正先于截断和 DeepL 翻译。
+
 截断规则不变：
 - 目标 ≤250 字符，语法完整，含生词上下文
 - 禁止切掉目标词、禁止以连词/功能词开头或结尾
 - **截断必须从原始源文本做显式字符切片**（`text[start:end]`），不要基于 JSON 中的 sentence 字符串修改——JSON 中的句子经 `_normalize_dialogue_attribution()` 规范化后换行/空格与原始源文本不同
 - **截断后验证**：用 `re.search(build_sentence_regex(truncated), raw_source_text)` 验证（函数位于 `lib/utils.py`，通过 `from lib.utils import build_sentence_regex` 导入）。**不要用 `assert truncated in source_text`** ——精确字符串包含会因规范化差异而误判。此验证的真正价值是防止 Claude 在截断时意外编辑文本（如 "And then look:" → "Look:"），而非验证截断结果在源文本中的存在性
+
+> **已知限制 — OCR 复合词修正后 build_sentence_regex 可能误报**：如果截断时修复了 OCR 连字符空格 artifact（如 `"fair-to- middling"` → `"fair-to-middling"`），`build_sentence_regex` 会将修复后的连字符词视为一个 token（`fair\-to\-middling`），而源文本中仍为空格分隔，导致正则匹配失败。这是预期的误报。处理方式：
+> - 改用显式子串检查：`fixed_sentence.replace('- ', '-').replace(' -', '-') in source_text` 验证连续性
+> - 或确认差异仅为连字符空格后跳过正则验证
+> - 此限制不会影响非 OCR 修复的截断验证
 
 ### 修复因源文本空行产生的碎片句子
 
@@ -122,7 +131,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
    assert re.search(build_sentence_regex(complete), source_text), \
        "sentence must be a continuous substring of source"
    ```
-6. **更新 JSON**: 替换 `sentence`、`target_offset`、`char_offset`
+6. **更新 JSON**: 替换 `sentence`、`target_offset`。若修复仅改变目标词之后的文本（扩展被截断的句尾），`target_offset` 不变；若在目标词之前插入文本，需重新计算。`char_offset` = 完整句在源文本中的起始位置（`text.find(complete_sentence)`）+ 新 `target_offset`
 
 ---
 

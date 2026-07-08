@@ -163,7 +163,7 @@ cat /tmp/<safe_title>-*-full.txt | \
 - `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C）
 - **Step 2E**: 生成释义 + 补 cmudict 未覆盖 IPA + 异读词投票（Claude，N agents 并行，≤25 词/agent，**不碰 lemma**）
 - **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent，**不可绕过**）
-- `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步（Step 2G + Step 2H，根据 `target_offset` 拼接 `<b>` 标签）
+- `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步脚本（Step 2G + Step 2H）。此脚本使用相对导入，仅能以模块方式运行：`cd <skill_dir> && .venv/bin/python -m lib.sync_anki <args>`。同步时根据 `target_offset` 拼接 `<b>` 标签
 
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
