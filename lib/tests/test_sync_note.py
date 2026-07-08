@@ -38,35 +38,40 @@ def make_word(word="test", sentence=None, **overrides):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 1. Audio filename format — {lemma}_{bookId}_word/sent.mp3
+# 1. Audio filename format — {lemma}_{POS}_{bookId}_word/sent.mp3
 # ═══════════════════════════════════════════════════════════════════
 
 class TestAudioFilenameFormat:
-    """Audio filenames must include bookId to namespace audio globally."""
+    """Audio filenames include bookId and POS to namespace audio globally.
+
+    POS is required to prevent audio collisions when the same lemma
+    appears with different parts of speech (e.g. astray ADJ vs ADV
+    → astray_ADJ_xxx_sent.mp3 vs astray_ADV_xxx_sent.mp3).
+    """
 
     def test_word_audio_includes_book_id(self):
-        note = build_note_entry(make_word("test"), ipa="/tɛst/", book_id="12345")
-        assert "[sound:test_12345_word.mp3]" == note["fields"]["WordAudio"]
+        note = build_note_entry(make_word("test", pos="NOUN"), ipa="/tɛst/", book_id="12345")
+        assert "[sound:test_NOUN_12345_word.mp3]" == note["fields"]["WordAudio"]
 
     def test_sentence_audio_includes_book_id(self):
-        note = build_note_entry(make_word("test"), ipa="/tɛst/", book_id="12345")
-        assert "[sound:test_12345_sent.mp3]" == note["fields"]["SentenceAudio"]
+        note = build_note_entry(make_word("test", pos="NOUN"), ipa="/tɛst/", book_id="12345")
+        assert "[sound:test_NOUN_12345_sent.mp3]" == note["fields"]["SentenceAudio"]
 
     def test_audio_uses_lemma_when_provided(self):
         """When lemma differs from surface form, audio filenames use lemma."""
         note = build_note_entry(
-            make_word("pondered"), ipa="/ˈpɑːndər/",
+            make_word("pondered", pos="VERB"), ipa="/ˈpɑːndər/",
             book_id="22720170", lemma="ponder",
         )
-        assert "[sound:ponder_22720170_word.mp3]" == note["fields"]["WordAudio"]
-        assert "[sound:ponder_22720170_sent.mp3]" == note["fields"]["SentenceAudio"]
+        assert "[sound:ponder_VERB_22720170_word.mp3]" == note["fields"]["WordAudio"]
+        assert "[sound:ponder_VERB_22720170_sent.mp3]" == note["fields"]["SentenceAudio"]
 
     def test_audio_falls_back_to_word_when_no_lemma(self):
         """When no lemma provided, audio filenames fall back to surface form."""
         note = build_note_entry(
-            make_word("boa"), ipa="/ˈboʊʌ/", book_id="22720170",
+            make_word("boa", pos="NOUN"), ipa="/ˈboʊʌ/", book_id="22720170",
         )
-        assert "[sound:boa_22720170_word.mp3]" == note["fields"]["WordAudio"]
+        assert "[sound:boa_NOUN_22720170_word.mp3]" == note["fields"]["WordAudio"]
 
     def test_different_books_same_lemma_produce_different_filenames(self):
         """Same lemma across different books must not collide in media store."""

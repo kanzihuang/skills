@@ -210,6 +210,8 @@ def _process_one_word(
     # Trust the lemma from match_sentences.py (authoritative, per-sentence spaCy analysis).
     # Falls back to the word itself if lemma is missing (degraded mode).
     lemma = w.get("lemma", "").strip() or word
+    pos = w.get("pos", "").strip()
+    pos_part = f"_{pos}" if pos else ""
 
     safe = safe_filename(lemma)
 
@@ -222,12 +224,12 @@ def _process_one_word(
 
     if not no_audio:
         # Word audio: Edge TTS on lemma (with IPA if available).
-        #   Include book_id — heteronyms like "wound" have different
-        #   pronunciations in different books.
+        #   Include book_id + POS — same lemma different POS (e.g.
+        #   astray ADJ vs ADV) must not share audio filenames.
         if ipa:
             tts = edge_tts_bytes(lemma, ipa=ipa)
             if tts:
-                audio_uploads.append((f"{safe}_{book_id}_word.mp3", tts))
+                audio_uploads.append((f"{safe}{pos_part}_{book_id}_word.mp3", tts))
             else:
                 raise RuntimeError(
                     f"Word audio generation failed for '{lemma}' "
@@ -235,12 +237,12 @@ def _process_one_word(
                 )
 
         # Sentence audio: Edge TTS on cleaned sentence.
-        #   Include book_id in filename — different books have different
-        #   sentences for the same lemma (e.g. "beautiful" in two books).
+        #   Include book_id + POS in filename — different POS have
+        #   different sentences and must not collide.
         clean = re.sub(r"<[^>]+>", "", w["sentence"])
         sent_tts = edge_tts_bytes(clean)
         if sent_tts:
-            audio_uploads.append((f"{safe}_{book_id}_sent.mp3", sent_tts))
+            audio_uploads.append((f"{safe}{pos_part}_{book_id}_sent.mp3", sent_tts))
         else:
             raise RuntimeError(
                 f"Sentence audio generation failed for '{word}' "
@@ -277,8 +279,10 @@ def build_note_entry(
     surface = word_data["word"].strip().lower()
     safe_lemma = safe_filename(lemma) if lemma else safe_filename(surface)
     word_id = _make_word_id(word_data, book_id, resolved_lemma=lemma)
-    word_audio_ref = f"[sound:{safe_lemma}_{book_id}_word.mp3]"
-    sent_audio_ref = f"[sound:{safe_lemma}_{book_id}_sent.mp3]"
+    pos = word_data.get("pos", "").strip()
+    pos_part = f"_{pos}" if pos else ""
+    word_audio_ref = f"[sound:{safe_lemma}{pos_part}_{book_id}_word.mp3]"
+    sent_audio_ref = f"[sound:{safe_lemma}{pos_part}_{book_id}_sent.mp3]"
 
     # Insert <b> tags around the target word using target_offset.
     # Sentence is stored without tags — we add them here for Anki display.
