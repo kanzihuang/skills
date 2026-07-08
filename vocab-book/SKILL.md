@@ -139,6 +139,7 @@ fi
 cat /tmp/<safe_title>-*-full.txt | \
 <skill_dir>/.venv/bin/python3 <skill_dir>/filter_fulltext.py \
   --basic-range 3-10 \
+  --book-title "Book Title" --book-author "Author Name" \
   --json-out /tmp/vocab-book-filtered.json
 ```
 

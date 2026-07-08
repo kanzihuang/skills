@@ -132,11 +132,15 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
   -H "Authorization: Bearer $WEREAD_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"api_name":"/book/bookmarklist","bookId":"<bookId>","skill_version":"1.0.3"}' | \
-<skill_dir>/.venv/bin/python3 <skill_dir>/filter_pipeline.py --anki-dedup same-book --book-id <bookId> --json-out /tmp/vocab-anki-filtered-<bookId>.json
+<skill_dir>/.venv/bin/python3 <skill_dir>/filter_pipeline.py \
+	  --anki-dedup same-book --book-id <bookId> \
+	  --book-title "<Book Title>" --book-author "<Author Name>" \
+	  --json-out /tmp/vocab-anki-filtered-<bookId>.json
 ```
 
 - `--anki-dedup same-book`：启用同书 Anki 去重（查已有卡片）；若 Step 0b 确认全库 0 张 Vocabulary Card 笔记，可省略此 flag 跳过 Anki 查询
 - `--book-id <bookId>`：bookId 标识，用于 WordId 构建 + 同书去重目标
+- `--book-title` / `--book-author`：书籍元数据，用于自动推导牌组名（从 Step 1 WeRead API 获取）
 - `--json-out <path>`：将过滤结果写入结构化 JSON 文件，供 Step 2B/2E Claude 读取填充 `excluded` 数组，避免手动转录
 
 输出分为四段：`SUMMARY:` 行、`---IN_COCA---` 表、`---EXCLUDED---` 表、`---ANKI_SKIPPED---` 表（Anki 已有卡片，仅当存在时出现）。同时写入对应的结构化 JSON 到 `--json-out` 路径。

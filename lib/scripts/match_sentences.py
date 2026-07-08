@@ -324,6 +324,18 @@ def main():
              "Use with --start-offset to limit sentence matching to a "
              "specific chapter range. Default: search to end of file.",
     )
+    parser.add_argument(
+        "--json-out",
+        help="Write JSON output to PATH instead of stdout",
+    )
+    parser.add_argument(
+        "--book-title",
+        help="Override book title (if missing or empty in input JSON)",
+    )
+    parser.add_argument(
+        "--book-author",
+        help="Override book author (if missing or empty in input JSON)",
+    )
     args = parser.parse_args()
 
     json_path = args.filter_json
@@ -659,8 +671,8 @@ def main():
           file=sys.stderr)
 
     output = {
-        'book_title': data.get('book_title', ''),
-        'book_author': data.get('book_author', ''),
+        'book_title': args.book_title if args.book_title else data.get('book_title', ''),
+        'book_author': args.book_author if args.book_author else data.get('book_author', ''),
         'deck_name': data.get('deck_name', ''),
         'source_text_path': text_path,
         'suffix': data.get('suffix', ''),
@@ -668,7 +680,11 @@ def main():
         'excluded': data.get('excluded', []),
     }
 
-    print(json.dumps(output, ensure_ascii=False, indent=2))
+    if args.json_out:
+        with open(args.json_out, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
+    else:
+        print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':

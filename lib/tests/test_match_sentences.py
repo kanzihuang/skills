@@ -867,3 +867,106 @@ class TestCheckStepCompleted:
         assert _has_sentence_ending(
             '“Once upon a time there was a prince.”'
         ) is True
+
+
+def _run_pipeline_json_out(in_coca: list[dict], text: str,
+                           extra_args: list[str] | None = None) -> dict:
+    """Run match_sentences.py with --json-out, return parsed output dict.
+
+    Unlike _run_pipeline() which parses stdout, this reads the --json-out file
+    and verifies stdout is clean (no JSON leaked to stdout).
+    """
+    import json, subprocess, tempfile, os
+    from pathlib import Path
+
+    filter_json = {
+        "suffix": "test00000000",
+        "in_coca": in_coca,
+    }
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as fj:
+        json.dump(filter_json, fj)
+        fj_path = fj.name
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as ft:
+        ft.write(text)
+        txt_path = ft.name
+
+    out_path = fj_path + ".out.json"
+
+    try:
+        _repo = Path(__file__).resolve().parent.parent.parent  # skills/
+        _skill_root = _repo / "vocab-book"
+        python = _skill_root / ".venv" / "bin" / "python3"
+        ms_script = _skill_root / "lib" / "scripts" / "match_sentences.py"
+        cmd = [str(python), str(ms_script), fj_path, txt_path,
+               "--json-out", out_path]
+        if extra_args:
+            cmd.extend(extra_args)
+        result = subprocess.run(
+            cmd,
+            capture_output=True, text=True, timeout=90,
+        )
+        with open(out_path) as f:
+            output = json.load(f)
+        # Return stdout too for verification
+        output['_test_stdout'] = result.stdout
+        return output
+    finally:
+        for p in [fj_path, txt_path, out_path]:
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+class TestJsonOut:
+    """Verify --json-out flag writes clean JSON to file, not stdout."""
+
+    def test_json_out_writes_clean_file(self):
+        """--json-out writes JSON to file; stdout has no JSON content."""
+        in_coca = [{"lemma": "hello", "rep": "hello", "forms": ["hello"],
+                     "coca_level": 5}]
+        text = "Hello world. This is a test."
+        result = _run_pipeline_json_out(in_coca, text)
+        stdout = result.pop('_test_stdout', '')
+        # stdout should NOT contain JSON output
+        assert '"book_title"' not in stdout
+        assert '"words"' not in stdout
+        # Output file should have the expected keys
+        assert 'words' in result
+        assert len(result['words']) >= 1
+
+    def test_json_out_content_matches_stdout(self):
+        """Output with --json-out is identical in content to stdout output."""
+        in_coca = [{"lemma": "hello", "rep": "hello", "forms": ["hello"],
+                     "coca_level": 5}]
+        text = "Hello world. This is a test."
+
+        # Get stdout output (no --json-out)
+        result_stdout = _run_pipeline(in_coca, text)
+
+        # Get file output (with --json-out)
+        result_file = _run_pipeline_json_out(in_coca, text)
+        result_file.pop('_test_stdout', None)
+
+        # Compare key fields (ignore source_text_path which differs per run)
+        assert len(result_stdout['words']) == len(result_file['words'])
+        assert result_stdout['book_title'] == result_file['book_title']
+        assert result_stdout['book_author'] == result_file['book_author']
+        assert result_stdout['suffix'] == result_file['suffix']
+
+    def test_book_metadata_override(self):
+        """--book-title/--book-author override empty values in input JSON."""
+        in_coca = [{"lemma": "hello", "rep": "hello", "forms": ["hello"],
+                     "coca_level": 5}]
+        text = "Hello world. This is a test."
+
+        # Run without override — should get empty strings
+        result_no_meta = _run_pipeline(in_coca, text)
+        assert result_no_meta['book_title'] == ''
+        assert result_no_meta['book_author'] == ''
+
+        # Run with JSON-out and overrides
+        result_with_meta = _run_pipeline_json_out(in_coca, text, extra_args=[
+            "--book-title", "Test Book",
+            "--book-author", "Test Author",
+        ])
+        assert result_with_meta['book_title'] == 'Test Book'
+        assert result_with_meta['book_author'] == 'Test Author'

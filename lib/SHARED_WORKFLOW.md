@@ -34,7 +34,8 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 ```bash
 <skill_dir>/.venv/bin/python3 <skill_dir>/lib/scripts/match_sentences.py \
   /tmp/vocab-anki-input-<tmp_id>.json \
-  <source_text_path>
+  <source_text_path> \
+  --json-out /tmp/vocab-anki-input-<tmp_id>.json
 ```
 
 脚本流水线（全书扫一次，句子为外循环）：
