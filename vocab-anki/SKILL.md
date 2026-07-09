@@ -137,6 +137,8 @@ json.dump(d,sys.stdout)
 " | <skill_dir>/.venv/bin/python3 <skill_dir>/filter_pipeline.py ...
 ```
 
+> **Warning**: Do NOT use `2>&1` in this pipe — it merges stderr into stdout, breaking JSON parsing in `filter_pipeline.py`. The inline Python script writes only JSON to stdout; `print(..., file=sys.stderr)` output stays on stderr and does not interfere with the pipe.
+
 在 Step 2A 中，使用**全文源文本**进行句子匹配，不要用 `--start-offset`/`--end-offset` 限制范围。
 
 ```bash
