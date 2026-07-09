@@ -485,6 +485,71 @@ commands for splitting JSON into ≤25-word chunks, launching parallel agents,
 and merging results.  See `lib/SHARED_WORKFLOW.md` Step 2E for the documented
 pattern.
 
+### smart_truncate no longer forces word-boundary truncation
+
+**Change (2026-07-09)**: `smart_truncate()` step 3d (word-boundary fallback) has been
+removed.  When no sentence-ending punctuation (`.!?`) is found within `max_len` chars,
+the function now returns the original sentence unchanged with `was_truncated=False`.
+Entries with `len(sentence) > 250` are then flagged `_needs_manual` for Step 2B
+Claude review.
+
+Previously, smart_truncate would truncate at the last word boundary before `max_len`,
+producing fragments like `"…and started"` without terminal punctuation.  A missing
+period is a cosmetic issue, but truncating mid-clause at an arbitrary word boundary
+produces unreadable sentences — worse than leaving the entry for manual review.
+
+Symptom: `was_truncated=False` for sentences >250 chars with no internal `.`, `!`, or `?`.
+Check: `grep '"sentence":' | awk 'length($0) > 250'` after Step 2B-0.
+
+### Non-body-text auto-exclusion (`_is_non_body_text`)
+
+**Change (2026-07-09)**: `process_words()` in `match_sentences.py` now automatically
+skips entries whose matched sentence comes from non-body-text sections.  Detection
+is purely mechanical — no hard-coded word lists:
+
+| Pattern | Example |
+|---------|---------|
+| ALL CAPS title list (≥25 chars) | `"THE OLD MAN AND THE SEA ACROSS THE RIVER…"` |
+| Copyright / legal boilerplate | `"IF THE BOOK IS UNDER COPYRIGHT…"` |
+| Producer / transcriber credit | `"Produced by Al Haines"` |
+| Dedication (≤6 words) | `"TO MAX PERKINS"` |
+| End-of-text marker | `"[End of The Old Man and the Sea…]"` |
+
+Previously, COCA-valid words from bibliography, copyright, and dedication sections
+were matched to non-body-text sentences and had to be manually excluded in Step 2B.
+
+Symptom: bibliography titles or copyright lines appearing as sentence text.
+Check: entries with `sentence` starting with ALL CAPS or boilerplate phrases.
+
+### Step 2B fragment repair: never use `\n` as sentence boundary
+
+**Change (2026-07-09)**: `lib/SHARED_WORKFLOW.md` Step 2B fragment repair workflow now
+explicitly documents correct sentence-boundary detection.  When walking backward in
+the source text to find the true sentence start, ONLY treat `. ! ?` followed by
+space + uppercase letter as a boundary — never `\n`.
+
+Using `\n` as a boundary (e.g., `while start > 0 and source_text[start-1] not in
+'.!?\\n'`) causes paragraph-internal newlines (e.g., `"huge,\\nstupid"`) to be
+treated as sentence starts, creating lowercase-start fragments like
+`"stupid loggerheads…"`.
+
+Symptom: sentence text starts with lowercase letter.  Check: `grep '"sentence": "[a-z]'`.
+
+### Step 2E JSON format: ASCII quotes only, pre-merge validation
+
+**Change (2026-07-09)**: Step 2E agents MUST use Python's `json.dump(data, f,
+ensure_ascii=False, indent=2)` to write chunk files.  All JSON keys and string
+values must use ASCII straight quotes (`"` U+0022) — curly/smart quotes
+(`"` `"` `'` `'`) break `json.load()`.  A pre-merge validation step
+(`for f in chunks/*.json; do python3 -c "import json; json.load(open('$f'))"`)
+has been added to the merge workflow.
+
+`check_step_completed.py --step 2E-verify` scans the merged output for curly
+quotes in all string fields.
+
+Symptom: `json.JSONDecodeError` when merging chunks.  Check: run
+`check_step_completed.py --step 2E-verify` on the merged JSON.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
