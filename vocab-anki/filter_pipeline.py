@@ -83,13 +83,22 @@ def query_anki_existing(ac: AnkiConnect, book_id: str) -> set[str]:
             return set()
 
         # Fetch WordId field for found notes
+        # WordId format: {lemma}_{pos}_{bookId}
+        # Dedup key is {lemma}_{pos} — same lemma with different POS
+        # should NOT be deduped (e.g. "walk_NOUN" ≠ "walk_VERB").
         info = ac.notes_info(note_ids)
         lemmas = set()
         for note in info:
             word_id = note.get("fields", {}).get("WordId", {}).get("value", "")
             if word_id and "_" in word_id:
-                lemma = word_id.rsplit("_", 1)[0]
-                lemmas.add(lemma.lower())
+                # Extract {lemma}_{pos} from {lemma}_{pos}_{bookId}
+                lemma_pos = word_id.rsplit("_", 1)[0]
+                lemmas.add(lemma_pos.lower())
+                # Also add bare lemma for surface-form matching in
+                # _lemma_handled (filter stage lacks POS knowledge).
+                parts = lemma_pos.split("_", 1)
+                if len(parts) == 2:
+                    lemmas.add(parts[0].lower())
         return lemmas
 
     except AnkiConnectError as e:

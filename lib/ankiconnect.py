@@ -344,8 +344,13 @@ class AnkiConnect:
             for note in info:
                 word_id = note.get("fields", {}).get("WordId", {}).get("value", "")
                 if word_id and "_" in word_id:
-                    lemma = word_id.rsplit("_", 1)[0]
-                    lemmas.add(lemma.lower())
+                    # WordId: {lemma}_{pos}_{bookId}
+                    lemma_pos = word_id.rsplit("_", 1)[0]
+                    lemmas.add(lemma_pos.lower())
+                    # Also add bare lemma for callers that lack POS context
+                    parts = lemma_pos.split("_", 1)
+                    if len(parts) == 2:
+                        lemmas.add(parts[0].lower())
             return lemmas
         except AnkiConnectError:
             return set()
@@ -357,8 +362,10 @@ class AnkiConnect:
 
         Searches all notes whose WordId ends with ``_{book_id}``, then
         uses ``cardsInfo`` to look up the deck name of the first match.
-        Returns ``(deck_name, note_count)``.  If no existing cards are
-        found, returns ``(None, 0)``.
+        Returns the **top-level** deck name (stripping subdeck hierarchy
+        like ``::COCA 4`` and the `` - 分级词汇`` suffix for highlight-
+        mode decks).  Returns ``(deck_name, note_count)``.  If no existing
+        cards are found, returns ``(None, 0)``.
 
         Used by ``sync_anki`` to prevent deck-name drift across batches
         (e.g. accent variations in author names).
@@ -373,6 +380,13 @@ class AnkiConnect:
                 return None, count
             info = self._call("cardsInfo", cards=[card_ids[0]])
             deck_name: str | None = info[0]["deckName"] if info else None
+            # Strip subdeck hierarchy and " - 分级词汇" suffix.
+            # A card in "X - 分级词汇::X - 分级词汇 - COCA 4" should
+            # resolve to the parent "X", not the graded subdeck.
+            if deck_name and "::" in deck_name:
+                deck_name = deck_name.split("::")[0]
+            if deck_name and deck_name.endswith(" - 分级词汇"):
+                deck_name = deck_name[:-len(" - 分级词汇")]
             return deck_name, count
         except AnkiConnectError:
             return None, 0

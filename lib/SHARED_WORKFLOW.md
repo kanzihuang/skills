@@ -335,7 +335,7 @@ cd <skill_dir> && .venv/bin/python3 \
 | `coca_level` | 从 filter 输出透传 |
 | `sentence` | 书中含该词的完整句子，不含 `<b>` 标签，`target_offset` 定位目标词 |
 | `ipa` | match_sentences.py 从 cmudict 填充；未覆盖词由 Claude 补充。**格式必须包含 `/` 分隔符**，如 `/sprɪɡ/`，不可写为裸 `sprɪɡ` |
-| `definition_cn` | 格式 `[词性] 释义`，按句中实际用法 |
+| `definition_cn` | 格式 `[pos.] 释义`。pos 必须用英文缩写，**不可使用中文**（如 `[名]`/`[动]`）：NOUN→`[n.]`、VERB→`[v.]`、ADJ→`[adj.]`、ADV→`[adv.]`、ADP→`[prep.]`、PROPN→`[n.]` |
 | `translation_cn` | DeepL 提供的中文翻译 |
 
 ### 例句规则

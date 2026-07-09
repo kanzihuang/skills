@@ -416,13 +416,19 @@ def _better(old: dict, new: dict) -> bool:
 
 def _sentence_char_offset(
     text: str, sentence: str, target_offset: int, start: int = 0,
+    forms: list[str] | None = None,
 ) -> int:
     """Return absolute char offset of the target word by locating *sentence*
-    in the source text, then adding target_offset.
+    in the source text, then searching for the word.
 
     Builds a whitespace-tolerant regex from the sentence so that
     normalization differences (newline→space, dialogue-attribution
     joining, double-space cleaning) don't prevent matching.
+
+    When *forms* is provided, uses word-boundary search from the match
+    position instead of adding *target_offset* directly — this avoids
+    position drift caused by character-removing normalizations (e.g.
+    ``_normalize_dialogue_attribution`` collapsing ``\\n\\n`` → `` ``).
 
     Returns the absolute offset, or -1 if the sentence cannot be found.
     """
@@ -432,7 +438,19 @@ def _sentence_char_offset(
     flexible = re.sub(r'\\ ', r'\\s+', escaped)
     m = re.search(flexible, text[start:])
     if m:
-        return start + m.start() + target_offset
+        match_start = start + m.start()
+        if forms:
+            # Search for any form from the match position using word
+            # boundaries — robust against normalization position drift.
+            for form in forms:
+                if not form:
+                    continue
+                fm = re.search(r'\b' + re.escape(form) + r'\b',
+                               text[match_start:], re.IGNORECASE)
+                if fm:
+                    return match_start + fm.start()
+            return -1
+        return match_start + target_offset
     return -1
 
 
@@ -895,6 +913,7 @@ def process_words(
         # hard truncation or unusual whitespace prevents matching).
         char_offset = _sentence_char_offset(
             text, cand['text'], cand['target_offset'], start_offset,
+            forms=all_forms,
         )
         if char_offset < 0:
             char_offset = _first_word_boundary_offset(text, all_forms, start_offset)
