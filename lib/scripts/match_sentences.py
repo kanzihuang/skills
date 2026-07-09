@@ -197,30 +197,31 @@ def smart_truncate(
     target_offset: int,
     max_len: int = MAX_SENTENCE_LENGTH,
 ) -> tuple[str, int, bool]:
-    """Truncate *sentence* from the END only, preserving *target_word*.
+    """Truncate *sentence* to ≤ *max_len*, preserving *target_word*.
 
-    *target_offset* is always preserved because the sentence start never
-    changes — only the tail is shortened.  Returns
-    ``(new_sentence, target_offset, was_truncated)``.
+    Two-phase approach:
 
-    1. If ``len(sentence) ≤ max_len`` → unchanged.
-    2. If *target_word* would be cut off → unchanged (can't truncate).
-    3. Scan backwards from *max_len* to find the best truncation point,
-       checking whether each candidate position lies inside an unclosed
-       double-quoted passage:
+    **Phase 1 — end-truncation.**  When the target word's end offset
+    falls within *max_len*, scan backwards from *max_len* for the best
+    truncation point:
 
        a. Sentence-ending punctuation ``.!?`` OUTSIDE quotes → best.
        b. Inside an OPENING quote → walk back to just before that ``"``,
           then verify the text before the quote is a complete sentence
           (ends with ``.!?`` and not with a function word / comma).
-          Complete → truncate there.  Not complete → unchanged.
+          Complete → truncate there.
        c. Inside a CLOSED quote → balanced, continue scanning.
-       d. No punctuation found → return original sentence unchanged
-          (Step 2B will handle it).
 
-    4. Check last word is not a function word → back up further if needed.
-    5. Return ``(new_sentence, target_offset, was_truncated)``.
+    Check last word is not a function word → back up further if needed.
 
+    **Phase 2 — beginning-truncation fallback.**  When end-truncation
+    alone cannot get under *max_len* (target word is near the end of a
+    very long sentence), scan forward for sentence boundaries
+    (``.!?`` + space + capital letter) and pick the one that gives
+    the longest result ≤ *max_len*.  *target_offset* is recalculated
+    for the new start position.
+
+    Returns ``(new_sentence, target_offset, was_truncated)``.
     NEVER returns ``None`` — if truncation is impossible the ORIGINAL
     sentence is returned with ``was_truncated=False``.  The caller checks
     ``len(result) > max_len`` and flags the entry for manual review.
@@ -230,54 +231,86 @@ def smart_truncate(
 
     # Target word must fit within the truncated sentence.
     target_end = target_offset + len(target_word)
-    if target_end > max_len:
-        return sentence, target_offset, False
 
-    # ── 3. Scan backwards from max_len ──────────────────────────────────
-    scan_end = min(max_len, len(sentence))
+    # ── Phase 1: end-truncation (only when target fits) ─────────────────
     best_pos: int | None = None
 
-    # 3a. Look for sentence-ending punctuation outside quotes.
-    for i in range(scan_end - 1, target_end - 1, -1):
-        ch = sentence[i]
-        if ch in ('.', '!', '?'):
-            if not _is_inside_opening_quote(sentence, i):
-                best_pos = i + 1  # include the punctuation
-                break
-            # else: punctuation inside an unclosed quote — skip it
-        elif ch == '"':
-            if _is_inside_opening_quote(sentence, i):
-                # 3b. Inside an opening quote → walk back to before it.
-                quote_pos = sentence.rfind('"', 0, i + 1)
-                pre_quote = sentence[:quote_pos].rstrip()
-                if pre_quote and pre_quote[-1] in ('.', '!', '?'):
-                    last_w = pre_quote.split()[-1].strip().rstrip(';:')
-                    if last_w.lower() not in SENTENCE_END_FUNCTION_WORDS:
-                        if not pre_quote.rstrip().endswith(','):
-                            best_pos = len(pre_quote)
-                            break
-                # pre-quote text is not a complete sentence — keep
-                # scanning (fall through to 3d later).
-                continue
-            # else: 3c. Inside a CLOSED quote — balanced, keep scanning.
+    if target_end <= max_len:
+        scan_end = min(max_len, len(sentence))
 
-    if best_pos is None:
-        # No sentence-ending punctuation found within max_len.
-        # Return the original sentence unchanged — Step 2B will handle it.
-        return sentence, target_offset, False
+        # 3a. Look for sentence-ending punctuation outside quotes.
+        for i in range(scan_end - 1, target_end - 1, -1):
+            ch = sentence[i]
+            if ch in ('.', '!', '?'):
+                if not _is_inside_opening_quote(sentence, i):
+                    best_pos = i + 1  # include the punctuation
+                    break
+                # else: punctuation inside an unclosed quote — skip it
+            elif ch == '"':
+                if _is_inside_opening_quote(sentence, i):
+                    # 3b. Inside an opening quote → walk back to before it.
+                    quote_pos = sentence.rfind('"', 0, i + 1)
+                    pre_quote = sentence[:quote_pos].rstrip()
+                    if pre_quote and pre_quote[-1] in ('.', '!', '?'):
+                        last_w = pre_quote.split()[-1].strip().rstrip(';:')
+                        if last_w.lower() not in SENTENCE_END_FUNCTION_WORDS:
+                            if not pre_quote.rstrip().endswith(','):
+                                best_pos = len(pre_quote)
+                                break
+                    # pre-quote text is not a complete sentence — keep
+                    # scanning (fall through to 3d later).
+                    continue
+                # else: 3c. Inside a CLOSED quote — balanced, keep scanning.
 
-    # ── 4. Back up past trailing function word ──────────────────────────
-    result = sentence[:best_pos].rstrip()
-    last_word = result.split()[-1].strip().lower().rstrip(':;')
-    while last_word in SENTENCE_END_FUNCTION_WORDS:
-        # back up one more word
-        result = result.rsplit(' ', 1)[0].rstrip()
-        if not result or len(result) <= target_end:
-            # backed up too far — keep original
-            return sentence, target_offset, False
+    if best_pos is not None:
+        # ── 4. Back up past trailing function word ──────────────────────
+        result = sentence[:best_pos].rstrip()
         last_word = result.split()[-1].strip().lower().rstrip(':;')
+        while last_word in SENTENCE_END_FUNCTION_WORDS:
+            # back up one more word
+            result = result.rsplit(' ', 1)[0].rstrip()
+            if not result or len(result) <= target_end:
+                # backed up too far — fall through to Phase 2
+                best_pos = None
+                break
+            last_word = result.split()[-1].strip().lower().rstrip(':;')
+        if best_pos is not None:
+            return result, target_offset, True
 
-    return result, target_offset, True
+    # ── Phase 2: beginning-truncation fallback ─────────────────────────
+    # End-truncation alone cannot get the sentence under max_len (target
+    # word is near the end of a very long sentence, or no sentence-ending
+    # punctuation was found within range).  Try removing content from the
+    # beginning by scanning forward for sentence boundaries.
+    # Only accept ".!?" followed by space + capital letter as a valid
+    # sentence start.  Pick the boundary that gives the longest result
+    # ≤ max_len (best context).
+
+    # Search range: from where the sentence would start if target_word
+    # were at the very end, up to just before target_offset.
+    scan_start = max(0, target_offset - max_len + len(target_word))
+    best_start: int | None = None
+    for i in range(scan_start, target_offset):
+        if (sentence[i] in '.!?'
+                and i + 2 < len(sentence)
+                and sentence[i + 1] == ' '
+                and sentence[i + 2].isupper()):
+            new_start = i + 2  # skip ". " to start at the capital letter
+            new_len = len(sentence) - new_start
+            if new_len <= max_len:
+                if best_start is None:
+                    best_start = new_start
+                # Keep the FIRST valid boundary found — since we scan
+                # forward, earlier boundaries produce LONGER results
+                # (more text left in sentence = better context).
+
+    if best_start is not None:
+        new_sentence = sentence[best_start:]
+        new_target_offset = target_offset - best_start
+        return new_sentence, new_target_offset, True
+
+    # Neither end- nor beginning-truncation could get under max_len.
+    return sentence, target_offset, False
 
 
 def _has_be_to_pattern(doc, token_idx: int) -> bool:
@@ -800,6 +833,18 @@ def process_words(
                 # and adjectives ("tall") in predicate position.
                 if pos in ("NOUN", "VERB") and token.dep_ in ("amod", "acomp", "oprd"):
                     pos = "ADJ"
+                # VBN + advmod child → ADJ: an adverb directly modifying
+                # a past participle is a strong signal of adjectival usage
+                # (e.g. "completely abashed", "very surprised").  In UD,
+                # manner adverbs modifying genuine passive verbs attach to
+                # the auxiliary, not the participle — so advmod→VBN is
+                # reliably adjectival without needing hard-coded word lists.
+                if pos == "VERB" and token.tag_ == "VBN":
+                    for child in token.children:
+                        if child.dep_ == "advmod":
+                            pos = "ADJ"
+                            lemma = token_lower
+                            break
                 # NOUN+compound→ADJ: spaCy mis-tags some adjectives as noun
                 # compounds (e.g. "primeval forests").  Adjective suffixes
                 # help distinguish from genuine noun compounds ("stone wall").

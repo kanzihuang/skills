@@ -213,6 +213,18 @@ safely truncated are returned unchanged with ``_needs_manual: true``.
    ```
 6. **更新 JSON**: 替换 `sentence`、`target_offset`。若修复仅改变目标词之后的文本（扩展被截断的句尾），`target_offset` 不变；若在目标词之前插入文本，需重新计算。`char_offset` = 完整句在源文本中的起始位置（`text.find(complete_sentence)`）+ 新 `target_offset`
 
+> **Note on char_offset**: `smart_truncate()` (Step 2B-0) now handles beginning-truncation
+> automatically via Phase 2, recalculating `target_offset` and preserving correctness.
+> Manual `char_offset` updates are only needed when Claude manually truncates from the
+> beginning in Step 2B (rare after the Phase 2 enhancement).  Use:
+> ```python
+> # Find the new sentence in the source text and recompute char_offset
+> import re; m = re.search(build_sentence_regex(new_sentence), source_text)
+> if m: new_char_offset = m.start() + new_target_offset
+> ```
+> Note that `sync_anki.py` does not consume `char_offset` — it is a metadata field
+> for external tooling.
+
 ### Step 2B.5: target_offset Verification (MUST run after truncation)
 
 After truncation and fragment repair, verify all ``target_offset`` values

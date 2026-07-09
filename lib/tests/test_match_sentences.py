@@ -1227,8 +1227,9 @@ class TestSmartTruncate:
         assert sent == long_sent
         assert to == 16
 
-    def test_target_offset_preserved(self):
-        """target_offset never changes — sentence start is never modified."""
+    def test_target_offset_preserved_end_truncation(self):
+        """target_offset never changes during end-truncation — sentence
+        start is not modified in Phase 1."""
         long_sent = (
             "I really enjoy walking through the forest on a beautiful "
             "spring morning when the birds are singing and the flowers "
@@ -1237,8 +1238,9 @@ class TestSmartTruncate:
         _, to, _ = smart_truncate(long_sent, "forest", 31, max_len=120)
         assert to == 31
 
-    def test_target_word_beyond_limit(self):
-        """Target word extends beyond max_len — returned unchanged."""
+    def test_target_word_beyond_limit_no_boundary(self):
+        """Target word extends beyond max_len with no sentence boundary
+        before it — Phase 2 finds nothing → returned unchanged."""
         long_sent = "x" * 200 + " target yyy"
         sent, to, was_trunc = smart_truncate(
             long_sent, "target", 201, max_len=100,
@@ -1321,6 +1323,60 @@ class TestSmartTruncate:
         else:
             # It found a valid truncation path via 3a/3b
             assert len(sent) <= 250
+
+    def test_beginning_truncation_tedious_case(self):
+        """406-char quoted passage with target word near the end —
+        Phase 2 truncates from the beginning to fit within 250."""
+        sent = (
+            '"When you\'ve finished your own toilet in the morning, then it '
+            'is time to attend to the toilet of your planet, just so, with '
+            'the greatest care. You must see to it that you pull up regularly '
+            'all the baobabs, at the very first moment when they can be '
+            'distinguished from the rosebushes, which they resemble so closely '
+            'in their earliest youth. It is very tedious work," the little '
+            'prince added, "but very easy."'
+        )
+        assert len(sent) > 250
+        tedious_offset = sent.find("tedious")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "tedious", tedious_offset, max_len=250,
+        )
+        assert was_trunc is True
+        assert len(result) <= 250
+        assert result[new_to:new_to + len("tedious")] == "tedious"
+        assert result[0].isupper()
+        assert result.rstrip()[-1] in '.!?"\''
+
+    def test_beginning_truncation_picks_longest(self):
+        """Phase 2 picks the first (longest) valid start ≤ max_len for best
+        context.  Since we scan forward, earlier boundaries give longer text."""
+        sent = (
+            "First sentence with enough words. Second sentence also has many "
+            "words here and adds more content to push things along. Third "
+            "sentence continues the narrative with additional padding here. "
+            "Fourth sentence with the target word here."
+        )
+        target_offset = sent.find("target")
+        assert target_offset > 200, "target must be beyond max_len for Phase 2"
+        result, new_to, was_trunc = smart_truncate(
+            sent, "target", target_offset, max_len=200,
+        )
+        assert was_trunc is True
+        # First valid boundary is "Second sentence..." — the longest ≤ 200
+        assert result.startswith("Second sentence")
+        assert "Fourth sentence" in result
+        assert result[new_to:new_to + len("target")] == "target"
+
+    def test_beginning_truncation_no_valid_boundary(self):
+        """No '.!? + space + capital' boundary before target word —
+        Phase 2 returns unchanged."""
+        sent = "x" * 300 + " target yyy"
+        target_offset = sent.find("target")
+        result, to, was_trunc = smart_truncate(
+            sent, "target", target_offset, max_len=100,
+        )
+        assert was_trunc is False
+        assert result == sent
 
 
 class TestIsNonBodyText:
