@@ -120,6 +120,25 @@ Content-Type: application/json
 > 原形提取 → Anki 去重 → COCA 检查。
 > **禁止 Claude 在 echo 中传递数据**——所有数据通过 stdin/stdout 在进程间流通。
 
+**指定章节**：当用户要求特定章节（如"第 2 章"）时，在管道传入 `filter_pipeline.py` 之前从 WeRead API 响应中预过滤 `updated[]` 数组。匹配 `chapterUid` 并保留完整 `chapters[]` 数组：
+
+```bash
+# 先查 chapters[] 找目标章节的 chapterUid，再过滤
+curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
+  -H "Authorization: Bearer $WEREAD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"api_name":"/book/bookmarklist","bookId":"<bookId>","skill_version":"1.0.3"}' | \
+python3 -c "
+import json,sys; d=json.load(sys.stdin)
+target_ch = [c for c in d['chapters'] if 'Chapter <N>' in c['title']]
+# 找到 chapterUid: target_ch[0]['chapterUid']
+d['updated']=[h for h in d['updated'] if h['chapterUid']==<chapterUid>]
+json.dump(d,sys.stdout)
+" | <skill_dir>/.venv/bin/python3 <skill_dir>/filter_pipeline.py ...
+```
+
+在 Step 2A 中，使用**全文源文本**进行句子匹配，不要用 `--start-offset`/`--end-offset` 限制范围。
+
 ```bash
 # 确保 venv 存在（仅首次）
 if [ ! -d <skill_dir>/.venv ]; then
@@ -161,7 +180,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 - `coca_level`：该词在 Nation BNC/COCA 词族中的等级（1-25），供 `sync_anki.py` 自动频次分级使用
 - `chapters`：该词所有出现的章节列表（按 `chapterUid` 升序）；词在多个章节被划线时含多个条目
 - `chapterUid` 为 WeRead 内部章节 ID，`chapterTitle` 为章节标题（如 "Chapter 10"）
-- Step 2A 用此信息在源文本中定位章节范围，优先在该范围内搜索句子
+- `chapters` 为参考信息，供 Step 2A 手动定位时查看该词出现的章节
 
 > **Claude 注意**：若输出 `SUMMARY: 0 highlights → 0 lemmas`，在判定"没有划线"之前先用 `head -c 500` 查看原始 API 响应，确认 `updated` 字段确实存在且为空数组，排除 API 调用失败。
 
@@ -190,7 +209,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 **划线模式特有调整**：
 - `<tmp_id>` 使用微信读书 `bookId`
 - WordId = `{lemma}_{pos}_{bookId}`，音频文件 = `{lemma}_{pos}_{bookId}_word.mp3` / `_sent.mp3`
-- 句子匹配时利用 JSON 中 `in_coca[].chapters` 字段做章节优先匹配
+- 句子匹配使用全文源文本，不做章节范围限制
 - Anki 去重已在 Step 1d 完成；`sync_anki.py` 另在音频生成前执行批内 WordId 去重
 - 牌组名：`{English Title} ({Author})`（无分级后缀）
 
