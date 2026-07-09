@@ -10,7 +10,7 @@ import pytest
 
 # Path to the extract_chapter script
 _SCRIPT = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
     "lib", "scripts", "extract_chapter.py",
 )
 
@@ -18,7 +18,7 @@ _SCRIPT = os.path.join(
 def _run(args: list[str], input_text: str | None = None) -> subprocess.CompletedProcess:
     """Run extract_chapter.py with given args."""
     venv_python = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
         "vocab-book", ".venv", "bin", "python3",
     )
     return subprocess.run(
