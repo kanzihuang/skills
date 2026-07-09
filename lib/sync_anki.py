@@ -796,13 +796,28 @@ def main() -> None:
     # the same (lemma, pos) key and are correctly deduplicated.
     seen = set()
     deduped = []
+    dedup_details: list[str] = []
     for w in data["words"]:
         key = (w["lemma"].strip().lower(), w["pos"].strip().upper())
         if key not in seen:
             seen.add(key)
             deduped.append(w)
+        else:
+            dedup_details.append(
+                f"    {w.get('word', '?')} (lemma={w.get('lemma', '?')}, "
+                f"pos={w.get('pos', '?')}) — dropped, kept first occurrence"
+            )
     if len(deduped) < len(data["words"]):
-        print(f"Note: deduplicated {len(data['words']) - len(deduped)} word(s)\n")
+        dropped = len(data["words"]) - len(deduped)
+        print(f"\n[DEDUP] {dropped} duplicate (lemma, pos) entries "
+              f"dropped from batch:")
+        for detail in dedup_details:
+            print(detail, file=sys.stderr)
+        print(
+            "  This may indicate Step 2F POS fix collisions. "
+            "Review the dropped entries and adjust POS if needed.\n",
+            file=sys.stderr,
+        )
     data["words"] = deduped
 
     # Verify no two entries share the same audio filename prefix.

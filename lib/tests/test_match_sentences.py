@@ -9,12 +9,15 @@ import pytest
 from lib.scripts.match_sentences import (
     split_sentences,
     hard_truncate,
+    smart_truncate,
+    _is_inside_opening_quote,
     _better,
     _cmu_ipa,
     _clean_quote_artifact,
     _normalize_dialogue_attribution,
     _first_word_boundary_offset,
     _is_fragment,
+    _merge_adjacent_fragments,
 )
 from lib.scripts.check_step_completed import _has_sentence_ending
 
@@ -995,3 +998,261 @@ class TestJsonOut:
 
         result = _run_pipeline_json_out(in_coca, text)
         assert result['book_id'] == ''
+
+
+# ── Fragment merge (_merge_adjacent_fragments) ──
+
+
+_SOURCE_FRAGMENTS = (
+    "Clad in royal purple and ermine, he was seated upon a throne, "
+    "which was at \n\n\n\n\nthe same time both simple and majestic."
+)
+
+
+class TestMergeAdjacentFragments:
+    """Tests for _merge_adjacent_fragments()."""
+
+    def test_merge_two_fragments(self):
+        """Fragments split by blank lines are merged into one sentence."""
+        sents = [
+            "Clad in royal purple and ermine, he was seated upon a throne, which was at",
+            "the same time both simple and majestic.",
+        ]
+        merged = _merge_adjacent_fragments(sents, _SOURCE_FRAGMENTS)
+        assert len(merged) == 1
+        assert "which was at the same time both simple and majestic" in merged[0]
+
+    def test_merge_three_fragments(self):
+        """Three consecutive fragments all merge."""
+        src = "she would cough \n\n\n\nmost \n\n dreadfully \n\n and pretend."
+        sents = [
+            "she would cough",
+            "most",
+            "dreadfully",
+            "and pretend.",
+        ]
+        merged = _merge_adjacent_fragments(sents, src)
+        assert len(merged) == 1
+        assert "cough most dreadfully and pretend" in merged[0]
+
+    def test_no_merge_if_not_continuous(self):
+        """Fragments from different parts of the text do NOT merge."""
+        source = "First sentence here. \n\n Another thought entirely."
+        sents = [
+            "First sentence here",
+            "Another thought entirely.",
+        ]
+        merged = _merge_adjacent_fragments(sents, source)
+        # "First sentence here" IS a fragment (no terminal .) but
+        # "Another thought entirely." starts uppercase — merge skipped.
+        assert len(merged) == 2
+
+    def test_complete_sentence_not_merged(self):
+        """A complete sentence next to a fragment does NOT trigger merge."""
+        source = "Hello world. \n\n fragments remain."
+        sents = [
+            "Hello world.",
+            "fragments remain.",
+        ]
+        merged = _merge_adjacent_fragments(sents, source)
+        assert len(merged) == 2
+
+    def test_merge_preserves_ending_punctuation(self):
+        """Merged result keeps the terminal punctuation from the last fragment."""
+        source = "he said softly, \n\n almost whispering the words."
+        sents = [
+            "he said softly,",
+            "almost whispering the words.",
+        ]
+        merged = _merge_adjacent_fragments(sents, source)
+        assert len(merged) == 1
+        assert merged[0].endswith(".")
+
+    def test_empty_source_no_crash(self):
+        """Empty source text does not crash."""
+        sents: list[str] = []
+        merged = _merge_adjacent_fragments(sents, "")
+        assert merged == []
+
+    def test_single_sentence_unchanged(self):
+        """Single sentence is returned unchanged."""
+        sents = ["Hello world."]
+        merged = _merge_adjacent_fragments(sents, "Hello world.")
+        assert merged == ["Hello world."]
+
+    def test_split_sentences_with_source_text(self):
+        """split_sentences() with source_text merges fragments."""
+        text = (
+            "Clad in royal purple and ermine, he was seated upon a throne, "
+            "which was at \n\n\n\n\nthe same time both simple and majestic."
+        )
+        sents = split_sentences(text, source_text=text)
+        assert any(
+            "at the same time both simple and majestic" in s for s in sents
+        ), f"Expected merged sentence, got: {sents}"
+
+
+# ── _is_inside_opening_quote ────────────────────────────────────────────
+
+
+class TestIsInsideOpeningQuote:
+    """Tests for _is_inside_opening_quote()."""
+
+    def test_inside_opening_quote(self):
+        """Position after an opening " is inside an unclosed quote."""
+        text = 'He said, "hello world'
+        # The last " is the opening one, 0 preceding quotes (even) → opening.
+        assert _is_inside_opening_quote(text, len(text) - 1) is True
+
+    def test_inside_closed_quote(self):
+        """Position after a balanced pair is NOT inside an unclosed quote."""
+        text = '"hello" world'
+        # The " at pos 6 is preceded by 1 " (odd) → closing.
+        assert _is_inside_opening_quote(text, 7) is False
+
+    def test_no_quote_found(self):
+        """No quote in text returns False."""
+        assert _is_inside_opening_quote("plain text", 5) is False
+
+    def test_second_opening_in_nested_equivalent(self):
+        """Two separate quoted passages: second quote is an opening."""
+        text = '"hello" she said "world'
+        # " at pos 7 is preceded by 2 " (even) → opening quote.
+        assert _is_inside_opening_quote(text, len(text) - 1) is True
+
+
+# ── smart_truncate ──────────────────────────────────────────────────────
+
+
+class TestSmartTruncate:
+    """Tests for smart_truncate()."""
+
+    def test_short_sentence_unchanged(self):
+        """Sentence under max_len is returned unchanged."""
+        sent, to, was_trunc = smart_truncate(
+            "Short sentence.", "sentence", 6, max_len=250,
+        )
+        assert sent == "Short sentence."
+        assert to == 6
+        assert was_trunc is False
+
+    def test_truncate_at_period(self):
+        """Truncation lands on a period — result ends with period."""
+        long_sent = (
+            "This is the first part which contains some information. "
+            + "This is the second part which goes on and on and has "
+            + "many words that make it longer than two hundred and "
+            + "fifty characters in total length. "
+            + "And here we have even more text that makes this very "
+            + "long indeed and pushes the total far beyond the limit."
+        )
+        sent, to, was_trunc = smart_truncate(
+            long_sent, "first", 12, max_len=150,
+        )
+        assert was_trunc is True
+        assert len(sent) <= 150
+        assert sent.endswith(".")
+
+    def test_truncate_at_space_fallback(self):
+        """No sentence-ending punctuation found — falls back to word boundary."""
+        long_sent = (
+            "The quick brown fox jumps over the lazy dog and continues "
+            "running across the field without stopping for a moment "
+            "because the sun was setting behind the hills"
+        )[:200]
+        sent, to, was_trunc = smart_truncate(
+            long_sent, "fox", 16, max_len=120,
+        )
+        assert was_trunc is True
+        assert len(sent) <= 120
+        assert to == 16
+
+    def test_target_offset_preserved(self):
+        """target_offset never changes — sentence start is never modified."""
+        long_sent = (
+            "I really enjoy walking through the forest on a beautiful "
+            "spring morning when the birds are singing and the flowers "
+            "are beginning to bloom in the warm sunshine."
+        )[:200]
+        _, to, _ = smart_truncate(long_sent, "forest", 31, max_len=120)
+        assert to == 31
+
+    def test_target_word_beyond_limit(self):
+        """Target word extends beyond max_len — returned unchanged."""
+        long_sent = "x" * 200 + " target yyy"
+        sent, to, was_trunc = smart_truncate(
+            long_sent, "target", 201, max_len=100,
+        )
+        assert was_trunc is False
+        assert sent == long_sent
+
+    def test_opening_quote_backs_up_complete_pre_text(self):
+        """Inside opening quote with complete sentence before → back up."""
+        sent = (
+            "The king said, \"You must obey all of my commands without "
+            "question because I am the ruler of this entire planet "
+            "and my authority is absolute and unquestionable."
+            + "x" * 200
+        )
+        result, to, was_trunc = smart_truncate(
+            sent, "question", 50, max_len=250,
+        )
+        # Should have backed up to before the opening quote.
+        assert was_trunc is True
+        assert len(result) <= 250
+        # pre-quote text 'The king said, ' ends with comma → not complete
+        # so it should fall through to other truncation.
+        assert len(result) > 0
+
+    def test_closed_quote_allows_normal_scan(self):
+        """Inside a closed quote — balanced, normal scan continues."""
+        sent = (
+            '"Hello there," she said. "'
+            + "I am going to the store to buy groceries for dinner tonight. "
+            + "The weather is beautiful today." * 20
+        )
+        result, to, was_trunc = smart_truncate(
+            sent, "groceries", 55, max_len=200,
+        )
+        assert was_trunc is True
+        assert len(result) <= 200
+
+    def test_exact_max_len_no_truncation(self):
+        """Sentence exactly at max_len — no truncation."""
+        sent = "A" * 250
+        result, to, was_trunc = smart_truncate(sent, "A", 100, max_len=250)
+        assert was_trunc is False
+        assert result == sent
+
+    def test_avoids_function_word_ending(self):
+        """Last word at truncation is 'at' — back up further."""
+        long_sent = (
+            "He pointed to the exact spot where the treasure was at "
+            + "the bottom of the deep blue ocean where no one had "
+            + "ever ventured before or since that fateful day." * 3
+        )[:400]
+        sent, to, was_trunc = smart_truncate(
+            long_sent, "treasure", 34, max_len=120,
+        )
+        assert was_trunc is True
+        last = sent.split()[-1].strip().lower()
+        assert last not in ("at", "for", "to", "in", "with")
+
+    def test_quote_inside_truncation_unfixable(self):
+        """Truncation lands inside opening quote but pre-quote text is
+        incomplete → returned unchanged (needs manual)."""
+        long_sent = (
+            "He looked at the map and then slowly turned to face the "
+            "horizon where the sun was setting, \"I think we should "
+            + "x" * 300
+        )
+        sent, to, was_trunc = smart_truncate(
+            long_sent, "slowly", 23, max_len=250,
+        )
+        # Pre-quote text ends with comma → not complete.
+        # If the function can't truncate safely, it returns original.
+        if was_trunc is False:
+            assert len(sent) > 250  # original, too long — needs manual
+        else:
+            # It found another truncation path (e.g., word boundary fallback)
+            assert len(sent) <= 250

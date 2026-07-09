@@ -24,7 +24,8 @@ import pysbd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lib.chapter_detect import detect_story_start
-from lib.config import HARD_CUTOFF, MIN_SENTENCE_LENGTH, MAX_SENTENCE_LENGTH
+from lib.config import HARD_CUTOFF, MIN_SENTENCE_LENGTH, MAX_SENTENCE_LENGTH, SENTENCE_END_FUNCTION_WORDS
+from lib.utils import build_sentence_regex
 
 
 def _get_segmenter() -> pysbd.Segmenter:
@@ -56,8 +57,13 @@ def _normalize_dialogue_attribution(text: str) -> str:
     return _DIALOGUE_ATTRIBUTION_RE.sub(r'\1 "', text)
 
 
-def split_sentences(text: str) -> list[str]:
-    """Split text into sentences using PySBD."""
+def split_sentences(text: str, source_text: str | None = None) -> list[str]:
+    """Split text into sentences using PySBD.
+
+    If *source_text* is provided, adjacent fragment sentences (split by
+    blank lines in the source) are merged and verified as continuous
+    substrings of *source_text*.
+    """
     text = _normalize_dialogue_attribution(text)
     text = re.sub(r'\n{2,}', '\n\n', text)
     text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
@@ -65,7 +71,10 @@ def split_sentences(text: str) -> list[str]:
     seg = _get_segmenter()
     sentences = seg.segment(text)
     sentences = [_clean_quote_artifact(s.strip()) for s in sentences]
-    return [s for s in sentences if s]
+    sentences = [s for s in sentences if s]
+    if source_text is not None:
+        sentences = _merge_adjacent_fragments(sentences, source_text)
+    return sentences
 
 
 def _strip_non_alpha(text: str) -> str:
@@ -105,6 +114,55 @@ def _is_fragment(sentence: str) -> bool:
     return False
 
 
+def _merge_adjacent_fragments(
+    sentences: list[str], source_text: str,
+) -> list[str]:
+    """Merge adjacent fragment sentences split by blank lines in the source.
+
+    PySBD treats ``\\n\\n`` as a sentence boundary.  When the original text
+    has blank lines *within* a sentence (OCR / formatting artifact), the
+    result is two fragments: one ending without terminal punctuation and
+    another starting with lowercase.  ``_normalize_dialogue_attribution()``
+    already handles ``[:,]\\n\\n\"`` dialogue patterns — this function
+    catches the remaining cases.
+
+    The merge is verified against *source_text* using
+    ``build_sentence_regex()`` to ensure the merged result is a continuous
+    substring of the original.  Merges are applied repeatedly until stable.
+
+    Returns a new list with merges applied.
+    """
+    if len(sentences) < 2:
+        return list(sentences)
+
+    result = list(sentences)
+    changed = True
+    while changed:
+        changed = False
+        merged = []
+        i = 0
+        while i < len(result):
+            s = result[i]
+            if (
+                _is_fragment(s)
+                and i + 1 < len(result)
+                and result[i + 1].strip()
+                and result[i + 1].strip()[0].islower()
+            ):
+                candidate = s + " " + result[i + 1]
+                # Verify the merged candidate is a continuous substring
+                # of the source text.
+                if re.search(build_sentence_regex(candidate), source_text):
+                    merged.append(candidate)
+                    i += 2
+                    changed = True
+                    continue
+            merged.append(s)
+            i += 1
+        result = merged
+    return result
+
+
 def hard_truncate(sentence: str, max_len: int = HARD_CUTOFF) -> tuple[str, bool]:
     """Truncate at the last word boundary within max_len chars."""
     if len(sentence) <= max_len:
@@ -114,6 +172,115 @@ def hard_truncate(sentence: str, max_len: int = HARD_CUTOFF) -> tuple[str, bool]
     if last_space > 0:
         truncated = truncated[:last_space]
     return truncated.rstrip(), True
+
+
+def _is_inside_opening_quote(text: str, pos: int) -> bool:
+    """Return True if *pos* is inside an unclosed double-quoted passage.
+
+    Finds the last ``"`` at or before *pos* and counts how many ``"``
+    precede it.  An even count means that ``"`` is an OPENING quote whose
+    matching close is still missing — so *pos* is inside an unclosed quote.
+
+    Returns False when no ``"`` is found at or before *pos*.
+    """
+    last_quote = text.rfind('"', 0, pos + 1)
+    if last_quote < 0:
+        return False
+    quotes_before = text[:last_quote].count('"')
+    return quotes_before % 2 == 0  # even → opening
+
+
+def smart_truncate(
+    sentence: str,
+    target_word: str,
+    target_offset: int,
+    max_len: int = MAX_SENTENCE_LENGTH,
+) -> tuple[str, int, bool]:
+    """Truncate *sentence* from the END only, preserving *target_word*.
+
+    *target_offset* is always preserved because the sentence start never
+    changes — only the tail is shortened.  Returns
+    ``(new_sentence, target_offset, was_truncated)``.
+
+    1. If ``len(sentence) ≤ max_len`` → unchanged.
+    2. If *target_word* would be cut off → unchanged (can't truncate).
+    3. Scan backwards from *max_len* to find the best truncation point,
+       checking whether each candidate position lies inside an unclosed
+       double-quoted passage:
+
+       a. Sentence-ending punctuation ``.!?`` OUTSIDE quotes → best.
+       b. Inside an OPENING quote → walk back to just before that ``"``,
+          then verify the text before the quote is a complete sentence
+          (ends with ``.!?`` and not with a function word / comma).
+          Complete → truncate there.  Not complete → unchanged.
+       c. Inside a CLOSED quote → balanced, continue scanning.
+       d. No punctuation found → fall back to last word boundary.
+
+    4. Check last word is not a function word → back up further if needed.
+    5. Return ``(new_sentence, target_offset, was_truncated)``.
+
+    NEVER returns ``None`` — if truncation is impossible the ORIGINAL
+    sentence is returned with ``was_truncated=False``.  The caller checks
+    ``len(result) > max_len`` and flags the entry for manual review.
+    """
+    if len(sentence) <= max_len:
+        return sentence, target_offset, False
+
+    # Target word must fit within the truncated sentence.
+    target_end = target_offset + len(target_word)
+    if target_end > max_len:
+        return sentence, target_offset, False
+
+    # ── 3. Scan backwards from max_len ──────────────────────────────────
+    scan_end = min(max_len, len(sentence))
+    best_pos: int | None = None
+
+    # 3a. Look for sentence-ending punctuation outside quotes.
+    for i in range(scan_end - 1, target_end - 1, -1):
+        ch = sentence[i]
+        if ch in ('.', '!', '?'):
+            if not _is_inside_opening_quote(sentence, i):
+                best_pos = i + 1  # include the punctuation
+                break
+            # else: punctuation inside an unclosed quote — skip it
+        elif ch == '"':
+            if _is_inside_opening_quote(sentence, i):
+                # 3b. Inside an opening quote → walk back to before it.
+                quote_pos = sentence.rfind('"', 0, i + 1)
+                pre_quote = sentence[:quote_pos].rstrip()
+                if pre_quote and pre_quote[-1] in ('.', '!', '?'):
+                    last_w = pre_quote.split()[-1].strip().rstrip(';:')
+                    if last_w.lower() not in SENTENCE_END_FUNCTION_WORDS:
+                        if not pre_quote.rstrip().endswith(','):
+                            best_pos = len(pre_quote)
+                            break
+                # pre-quote text is not a complete sentence — keep
+                # scanning (fall through to 3d later).
+                continue
+            # else: 3c. Inside a CLOSED quote — balanced, keep scanning.
+
+    # 3d. Fall back to the last word boundary.
+    if best_pos is None:
+        truncated = sentence[:scan_end].rstrip()
+        last_space = truncated.rfind(' ')
+        if last_space > target_end:
+            best_pos = last_space
+        else:
+            # can't truncate without cutting the target word
+            return sentence, target_offset, False
+
+    # ── 4. Back up past trailing function word ──────────────────────────
+    result = sentence[:best_pos].rstrip()
+    last_word = result.split()[-1].strip().lower().rstrip(':;')
+    while last_word in SENTENCE_END_FUNCTION_WORDS:
+        # back up one more word
+        result = result.rsplit(' ', 1)[0].rstrip()
+        if not result or len(result) <= target_end:
+            # backed up too far — keep original
+            return sentence, target_offset, False
+        last_word = result.split()[-1].strip().lower().rstrip(':;')
+
+    return result, target_offset, True
 
 
 def _has_be_to_pattern(doc, token_idx: int) -> bool:
@@ -413,9 +580,11 @@ def main():
 
     # ── Step 1: split sentences once ─────────────────────────────────────
     if args.end_offset is not None:
-        sentences = split_sentences(text[start_offset:args.end_offset])
+        source_slice = text[start_offset:args.end_offset]
+        sentences = split_sentences(source_slice, source_slice)
     else:
-        sentences = split_sentences(text[start_offset:])
+        source_slice = text[start_offset:]
+        sentences = split_sentences(source_slice, source_slice)
     text_normalized = _strip_non_alpha(text)
     print(f"  Sentences: {len(sentences)}", file=sys.stderr)
 

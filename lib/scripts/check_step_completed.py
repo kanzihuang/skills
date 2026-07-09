@@ -88,7 +88,7 @@ def _check_2f(words: list[dict]) -> list[str]:
         dfn = w.get("definition_cn", "")
         if not dfn:
             warnings.append(f"[{word}] missing definition_cn")
-        elif not re.match(r"^\[(n\.|v\.|adj\.|adv\.|prep\.|conj\.)\]\s+\S", dfn):
+        elif not re.match(r"^\[(n\.|v\.|adj\.|adv\.|prep\.|conj\.|interj\.)\]\s+\S", dfn):
             warnings.append(
                 f"[{word}] definition_cn format unexpected: '{dfn[:60]}'"
             )
@@ -102,13 +102,77 @@ def _check_2f(words: list[dict]) -> list[str]:
     return warnings
 
 
+def _check_target_offset(words: list[dict]) -> list[str]:
+    """Verify target_offset points to the correct word in the sentence.
+
+    Runs the same check as validate_word_entries() but only on sentence,
+    word, and target_offset fields — no IPA or definition_cn required.
+    Intended for post-Step-2B verification, before content generation.
+    """
+    warnings: list[str] = []
+    for w in words:
+        word = w.get("word", "")
+        sent = w.get("sentence", "")
+        offset = w.get("target_offset", -1)
+        if offset >= 0 and offset + len(word) <= len(sent):
+            sent_word = sent[offset:offset + len(word)]
+            if sent_word.lower() != word.lower():
+                warnings.append(
+                    f"[{word}] target_offset {offset} points to "
+                    f"'{sent_word}' instead of '{word}'"
+                )
+        elif offset >= 0:
+            warnings.append(
+                f"[{word}] target_offset {offset} out of range "
+                f"for sentence length {len(sent)}"
+            )
+    return warnings
+
+
+def _check_duplicates(words: list[dict]) -> list[str]:
+    """Detect (lemma, pos) duplicate entries that will be silently dropped.
+
+    Step 2F POS fixes (especially be+VBN+by → ADJ) can create collisions.
+    """
+    seen: dict[tuple[str, str], dict] = {}
+    duplicates: list[str] = []
+    for w in words:
+        key = (
+            w.get("lemma", "").strip().lower(),
+            w.get("pos", "").strip().upper(),
+        )
+        if key in seen:
+            first = seen[key]
+            duplicates.append(
+                f"[{w.get('word', '?')}] ({w.get('lemma', '?')}, "
+                f"{w.get('pos', '?')}) collides with "
+                f"[{first.get('word', '?')}] — would be dropped at sync"
+            )
+        else:
+            seen[key] = w
+    return duplicates
+
+
+def _check_2e(words: list[dict]) -> list[str]:
+    """Check if Step 2E (content generation) was executed.
+
+    Signs of SKIP:
+      - Any word missing definition_cn
+      - Any word missing ipa
+      - definition_cn not matching expected [pos] format
+    """
+    return _check_2f(words)  # same checks as 2F for field completeness
+
+
 def _main() -> None:
     parser = argparse.ArgumentParser(
         description="Check that mandatory Claude workflow steps were completed."
     )
     parser.add_argument("input_json", help="Path to vocab-anki input JSON")
     parser.add_argument(
-        "--step", choices=["2B", "2F", "all"], default="all",
+        "--step",
+        choices=["2B", "2B-verify", "2E", "2F", "2F-dup", "all"],
+        default="all",
         help="Which step to check (default: all)",
     )
     args = parser.parse_args()
@@ -127,6 +191,22 @@ def _main() -> None:
             )
             all_warnings.extend(f"  {w}" for w in w2b)
 
+    if args.step in ("2B-verify", "all"):
+        w2bv = _check_target_offset(words)
+        if w2bv:
+            all_warnings.append(
+                f"target_offset verification FAILED ({len(w2bv)} issue(s)):"
+            )
+            all_warnings.extend(f"  {w}" for w in w2bv)
+
+    if args.step in ("2E", "all"):
+        w2e = _check_2e(words)
+        if w2e:
+            all_warnings.append(
+                f"Step 2E may have been SKIPPED ({len(w2e)} issue(s)):"
+            )
+            all_warnings.extend(f"  {w}" for w in w2e)
+
     if args.step in ("2F", "all"):
         w2f = _check_2f(words)
         if w2f:
@@ -134,6 +214,14 @@ def _main() -> None:
                 f"Step 2F may have been SKIPPED ({len(w2f)} issue(s)):"
             )
             all_warnings.extend(f"  {w}" for w in w2f)
+
+    if args.step in ("2F-dup", "all"):
+        w2fd = _check_duplicates(words)
+        if w2fd:
+            all_warnings.append(
+                f"Duplicate (lemma, pos) entries detected ({len(w2fd)}):"
+            )
+            all_warnings.extend(f"  {w}" for w in w2fd)
 
     if all_warnings:
         for line in all_warnings:

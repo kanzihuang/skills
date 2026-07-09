@@ -42,6 +42,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 0. 源文本预处理：`_normalize_dialogue_attribution()` 合并 `[:,]\n\n"` → `\1 "`（对话引语与上文连成整句）
 1. PySBD 一次切句 + 篇章检测跳过序言
+1a. 碎片合并：`_merge_adjacent_fragments()` 自动合并被源文本空行切分的相邻碎片句（如 `"which was at"` + `"the same time both simple and majestic."`），通过 `build_sentence_regex()` 验证合并结果是源文本的连续子串
 2. 建 `form_index`：`form_lower → [(idx, entry), ...]`
 3. 遍历每个句子：
    a. 快速 pre-filter（简单 token 查 form_index）
@@ -83,17 +84,71 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 源文本获取失败 → 该批次所有单词跳过。
 
-**已知局限**: `split_sentences()` 将空行（`\n\n`）视为句边界。当源文本在句中包含空行时（通常为 OCR 或排版 artifact），PySBD 会将其切为多个碎片。碎片句由 `_is_fragment()` 自动标记（`is_fragment=True`），`check_step_completed.py --step 2B` 可自动检测缺少句末标点的可疑句子。详见下方 Step 2B 的修复流程。
+**已知局限**: 当源文本在句中包含空行时（通常为 OCR 或排版 artifact），PySBD 会将其切为多个碎片。`_merge_adjacent_fragments()` 自动合并验证通过的大多数碎片。无法自动合并的碎片仍由 `_is_fragment()` 标记（`is_fragment=True`），在 Step 2B 中手动修复。
 
 ---
 
 ## Step 2B: 句子审核 + 完整性校验 + 长句截断（Claude，1 agent）
 
-> ⚠️ **不可绕过（MUST）**。Claude 的阅读能力是 Python 无法替代的——只有 Claude 能识别：
-> - 序言/非正文句子（`char_offset` 靠前、内容为作者简介/编辑导语）
-> - 语法不完整的句子片段
-> - 语义不匹配的候选句
-> - **OCR 标点错误**：句尾 `:` 或 `,` 在语法完整的句子中实为 OCR 对句号的误识别（常见于 Internet Archive 文本，罕见于 Project Gutenberg）。不同于 `_normalize_dialogue_attribution()` 处理的对话归属片段（`:\n\n"`），这些是源文本本身的标点错误
+> ⚠️ **不可绕过（MUST）**。
+
+### 2B-0. 自动截断预处理
+
+Before manual editing, run mechanical truncation on all sentences exceeding
+`MAX_SENTENCE_LENGTH` (250 chars).  This provides a best-effort first pass
+that preserves the target word and avoids function-word endings.  Claude
+then reviews and refines only the entries still marked ``_needs_manual``.
+
+```bash
+cd <skill_dir> && .venv/bin/python3 -c "
+import json, sys
+sys.path.insert(0, 'lib')
+from scripts.match_sentences import smart_truncate
+
+with open('/tmp/vocab-anki-input-<tmp_id>.json') as f:
+    data = json.load(f)
+
+needs_manual = 0
+auto_truncated = 0
+for w in data['words']:
+    sent = w.get('sentence', '')
+    word = w.get('word', '')
+    to = w.get('target_offset', -1)
+    if to >= 0 and len(sent) > 250:
+        new_sent, new_to, was_trunc = smart_truncate(sent, word, to)
+        w['sentence'] = new_sent
+        w['target_offset'] = new_to
+        if was_trunc:
+            w['_auto_truncated'] = True
+            auto_truncated += 1
+        elif len(new_sent) > 250:
+            w['_needs_manual'] = True
+            needs_manual += 1
+            print(f'  NEEDS MANUAL: {w[\"lemma\"]} ({len(new_sent)} chars)')
+
+with open('/tmp/vocab-anki-input-<tmp_id>.json', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+
+print(f'Auto-truncated: {auto_truncated}, Needs manual: {needs_manual}')
+"
+```
+
+`smart_truncate()` only shortens from the END — *target_offset* is always
+preserved.  It scans backwards from the 250-char limit for sentence-ending
+punctuation (``.!?``).  If the scan lands inside an unclosed double-quoted
+passage, it walks back to before the opening quote and verifies the
+pre-quote text is a complete sentence.  A final check avoids ending on a
+function word (``at``, ``for``, ``with``, …).  Sentences that cannot be
+safely truncated are returned unchanged with ``_needs_manual: true``.
+
+### 2B. 手动审核（Claude）
+
+审核重点：
+- ``_needs_manual`` 标记的条目 — 需手工截断或修复
+- ``_auto_truncated`` 标记的条目 — 确认截断位置语义合理
+- 序言/非正文句子（`char_offset` 靠前、内容为作者简介/编辑导语）
+- 语法不完整的句子片段
+- **OCR 标点错误**：句尾 `:` 或 `,` 在语法完整的句子中实为 OCR 对句号的误识别
 
 **目标词由 `target_offset` 定位**（不含 `<b>` 标签）。其余逻辑不变：完整性检查 → **OCR 标点修正** → 长句截断 → 源文本手动提取。
 
@@ -133,6 +188,21 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
    ```
 6. **更新 JSON**: 替换 `sentence`、`target_offset`。若修复仅改变目标词之后的文本（扩展被截断的句尾），`target_offset` 不变；若在目标词之前插入文本，需重新计算。`char_offset` = 完整句在源文本中的起始位置（`text.find(complete_sentence)`）+ 新 `target_offset`
 
+### Step 2B.5: target_offset Verification (MUST run after truncation)
+
+After truncation and fragment repair, verify all ``target_offset`` values
+still point to the correct word.  This catches off-by-one errors before
+they reach Step 2H sync validation.
+
+```bash
+cd <skill_dir> && .venv/bin/python3 \
+  <skill_dir>/lib/scripts/check_step_completed.py \
+  /tmp/vocab-anki-input-<tmp_id>.json --step 2B-verify
+```
+
+A ``check_step_completed.py --step all`` also runs this check
+automatically.
+
 ---
 
 ## Step 2C: DeepL 翻译
@@ -158,6 +228,62 @@ fi
 **lemma 由 match_sentences.py 机械产出，Claude 不可修改。**
 
 分批：≤25 词/agent。参考翻译生成释义，释义应与翻译语义一致。
+
+### 批处理操作流程
+
+当条目 >25 时，拆分为 ≤25 词/批次的 chunk 文件并行处理：
+
+**1. 主 agent 拆分 JSON：**
+
+```bash
+cd <skill_dir>
+.venv/bin/python3 -c "
+import json, math
+with open('/tmp/vocab-anki-input-<tmp_id>.json') as f:
+    data = json.load(f)
+words = data['words']
+chunk_size = 25
+for i in range(0, len(words), chunk_size):
+    chunk = dict(data)
+    chunk['words'] = words[i:i+chunk_size]
+    with open(f'/tmp/vocab-anki-chunk-{i//chunk_size:02d}.json', 'w') as out:
+        json.dump(chunk, out, ensure_ascii=False, indent=2)
+print(f'Split {len(words)} words into {math.ceil(len(words)/chunk_size)} chunks')
+"
+```
+
+**2. 启动并行 Agent：** 每 4-5 个 chunk 启动一个 Agent，
+每个 Agent 处理其分配的 chunk 文件（Read → 生成 definition_cn + IPA → Write）。
+
+**3. 合并结果：**
+
+```bash
+cd <skill_dir>
+.venv/bin/python3 -c "
+import json, glob, os
+chunks = sorted(glob.glob('/tmp/vocab-anki-chunk-*.json'),
+                key=lambda p: int(p.split('-chunk-')[1].split('.')[0]))
+words = []
+for path in chunks:
+    with open(path) as f:
+        words.extend(json.load(f)['words'])
+    os.unlink(path)
+with open('/tmp/vocab-anki-input-<tmp_id>.json') as f:
+    data = json.load(f)
+data['words'] = words
+with open('/tmp/vocab-anki-input-<tmp_id>.json', 'w') as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+print(f'Merged {len(words)} words from {len(chunks)} chunks')
+"
+```
+
+**4. 验证完整性：**
+
+```bash
+cd <skill_dir> && .venv/bin/python3 \
+  <skill_dir>/lib/scripts/check_step_completed.py \
+  /tmp/vocab-anki-input-<tmp_id>.json --step 2E
+```
 
 ### 字段说明
 
@@ -208,6 +334,21 @@ POS 对齐 + 释义准确 + 翻译一致性。`lemma` 不在此步检查（match
 
 > **vocab-book**: `filter_fulltext.py --book-title "Title" --book-author "Author"` 可自动填充前两项。
 > **vocab-anki**: `filter_pipeline.py --book-title "Title" --book-author "Author"` 可自动填充前两项；也可由 Step 1 的 WeRead API 响应中提取。
+
+### Step 2F.5: Duplicate Check (run before Step 2G)
+
+Step 2F POS fixes (especially be+VBN+by → ADJ) can create ``(lemma, pos)``
+collisions.  Run duplicate detection to catch them before sync:
+
+```bash
+cd <skill_dir> && .venv/bin/python3 \
+  <skill_dir>/lib/scripts/check_step_completed.py \
+  /tmp/vocab-anki-input-<tmp_id>.json --step 2F-dup
+```
+
+If duplicates are found, merge the entries or adjust POS to avoid the
+collision.  ``sync_anki.py`` will also print details of any entries it
+drops at sync time.
 
 ---
 

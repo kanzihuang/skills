@@ -138,19 +138,19 @@ def test_good_entry_passes():
 # ── Soft warnings (these go to stderr, not returned as errors) ──
 
 def test_sentence_starts_lowercase():
-    """Sentence fragment starting lowercase — soft warning."""
+    """Sentence fragment starting lowercase — now a HARD error."""
     w = make_word(word="aboard",
                   sentence="and then, with the boy's aid, hoisted her aboard.")
     errors = validate_word_entries([w])
-    assert isinstance(errors, list)
+    assert has_error(errors, "aboard", "lowercase")
 
 
 def test_noun_phrase_fragment():
-    """Pure noun phrase without finite verb — soft warning."""
+    """Pure noun phrase without finite verb and lowercase start — hard error."""
     w = make_word(word="tenderness",
                   sentence="the tenderness of smiling faces")
     errors = validate_word_entries([w])
-    assert isinstance(errors, list)
+    assert has_error(errors, "tenderness", "lowercase")
 
 
 def test_ipa_chinese_characters():
@@ -173,7 +173,7 @@ def test_truncation_never_produces_lowercase_start():
         translation_cn="双臂交替地拉线。",
     )
     errors = validate_word_entries([w])
-    assert isinstance(errors, list)
+    assert has_error(errors, "alternately", "lowercase")
 
 
 def test_truncation_preserves_b_tag():

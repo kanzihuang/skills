@@ -158,8 +158,8 @@ cat /tmp/<safe_title>-*-full.txt | \
 > 以下步骤与 vocab-anki 共享。详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`。
 
 关键路径（`<skill_dir>` 内 `lib/` 前缀）：
-- `<skill_dir>/lib/scripts/match_sentences.py` — 句子匹配 + per-sentence spaCy POS 分析 + (lemma,pos) 分组 + cmudict IPA（Step 2A，一站式机械分析）
-- **Step 2B**: 完整性校验 + 语义截断（Claude，1 agent，**不可绕过**，目标词由 `target_offset` 定位）
+- `<skill_dir>/lib/scripts/match_sentences.py` — 句子匹配 + per-sentence spaCy POS 分析 + (lemma,pos) 分组 + cmudict IPA + 碎片自动合并 + `smart_truncate()` 自动截断（Step 2A，一站式机械分析）
+- **Step 2B**: `smart_truncate()` 机械预截断 → Claude 手动审核 `_needs_manual` 标记条目（1 agent，**不可绕过**，目标词由 `target_offset` 定位）
 - `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C）
 - **Step 2E**: 生成释义 + 补 cmudict 未覆盖 IPA + 异读词投票（Claude，N agents 并行，≤25 词/agent，**不碰 lemma**）
 - **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent，**不可绕过**）
@@ -196,6 +196,8 @@ cat /tmp/<safe_title>-*-full.txt | \
 - **UUID 后缀隔离**：每次运行生成唯一 UUID，WordId = `{lemma}_{pos}_{suffix}` 确保跨批/跨 POS 不冲突
 - **per-sentence POS 分析**：spaCy 在具体句子上判定词性，不全局投票。lemma 机械化产出，Claude 不参与
 - **序言自动过滤**：`match_sentences.py` 自动跳过前言
-- **Claude + Python 分离**：Claude 做知识工作（释义、句子审核），Python 做机械工作（POS、lemma、TTS、同步、过滤、IPA）
+- **Claude + Python 分离**：Claude 做知识工作（释义、句子审核），Python 做机械工作（POS、lemma、TTS、同步、过滤、IPA、截断、碎片合并）
 - **例句来自源文本机械匹配**：不依赖 Claude 记忆
-- **质量门禁不可绕过**：Step 2B（句子审核）和 Step 2F（内容验证）无 SKIP 条件
+- **质量门禁不可绕过**：Step 2B（`smart_truncate()` 预截断 + Claude 审核）和 Step 2F（内容验证）无 SKIP 条件
+- **碎片自动合并**：`split_sentences()` 自动检测并合并被源文本空行切分的相邻碎片句
+- **截断后验证**：`check_step_completed.py --step 2B-verify` 验证 target_offset 正确；`--step 2F-dup` 检测 POS 修复产生的重复

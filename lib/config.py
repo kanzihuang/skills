@@ -27,6 +27,27 @@ REQUEST_TIMEOUT = 10           # seconds per HTTP request
 # ── match_sentences.py ──────────────────────────────────────────────────────
 HARD_CUTOFF = 500              # chars — mechanical cutoff before semantic truncation
 
+# ── smart_truncate() / validate_word_entries() ──────────────────────────────
+# Words that indicate a truncated fragment when found at the end of a
+# sentence.  Used by smart_truncate() to avoid ending on a function word,
+# and by validate_word_entries() to flag likely truncated fragments.
+SENTENCE_END_FUNCTION_WORDS: frozenset[str] = frozenset({
+    "from", "with", "at", "for", "to", "of", "in", "on", "by",
+    "about", "into", "onto", "upon", "within", "without", "through",
+    "across", "along", "around", "before", "after", "between",
+    "among", "during", "until", "against", "toward", "towards",
+    "over", "under", "behind", "beside", "beneath",
+    "and", "but", "or", "nor", "so", "yet", "because",
+    "although", "though", "while", "when", "where",
+    "since", "if", "unless", "as",
+    "had", "has", "was", "were", "could", "would", "should",
+    "also", "even", "just", "still", "then", "now", "only",
+    "quite", "rather", "almost", "very", "too", "already",
+    "always", "never", "often", "here", "there", "again",
+    "once", "soon", "ever", "indeed", "hardly", "merely",
+    "nearly", "else",
+})
+
 # ── translate_deepl.py ──────────────────────────────────────────────────────
 BATCH_SIZE = 50                # DeepL batch translation size
 CONTEXT_SENTENCES = 2          # source sentences before/after target for context

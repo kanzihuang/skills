@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import sys
 
-from .config import MAX_SENTENCE_LENGTH, MIN_SENTENCE_LENGTH
+from .config import MAX_SENTENCE_LENGTH, MIN_SENTENCE_LENGTH, SENTENCE_END_FUNCTION_WORDS
 from .lemmatize import lemmatize
 from .utils import lemmatize_word
 
@@ -124,15 +124,14 @@ def validate_word_entries(words: list[dict]) -> list[str]:
             if definition.strip().lower() == word.lower():
                 print(f"  [WARN] [{word}] definition_cn equals word: '{definition}'", file=sys.stderr)
 
-        # 7. Sentence fragment detection (soft warnings)
+        # 7. Sentence fragment detection
         clean = re.sub(r"<[^>]+>", "", sentence).strip()
         if clean:
             first_char = clean[0]
             if first_char.isalpha() and first_char.islower():
-                print(
-                    f"  [WARN] [{word}] sentence starts with lowercase "
-                    f"'{first_char}' - may be a truncated fragment",
-                    file=sys.stderr,
+                errors.append(
+                    f"[{word}] sentence starts with lowercase "
+                    f"'{first_char}' - likely a truncated fragment"
                 )
 
             has_finite_verb = bool(
@@ -159,29 +158,13 @@ def validate_word_entries(words: list[dict]) -> list[str]:
                         )
 
             # 7c. Ends with function word
-            _FUNCTION_ENDINGS: set[str] = {
-                "from", "with", "at", "for", "to", "of", "in", "on", "by",
-                "about", "into", "onto", "upon", "within", "without", "through",
-                "across", "along", "around", "before", "after", "between",
-                "among", "during", "until", "against", "toward", "towards",
-                "over", "under", "behind", "beside", "beneath",
-                "and", "but", "or", "nor", "so", "yet", "because",
-                "although", "though", "while", "when", "where",
-                "since", "if", "unless", "until", "as",
-                "had", "has", "was", "were", "could", "would", "should",
-                "also", "even", "just", "still", "then", "now", "only",
-                "quite", "rather", "almost", "very", "too", "already",
-                "always", "never", "often", "here", "there", "again",
-                "once", "soon", "ever", "indeed", "hardly", "merely",
-                "nearly", "else",
-            }
             last_word = re.split(r'\s+', clean.rstrip('"\'') + ' ')[-2].strip().lower()
             # Strip trailing colon/semicolon before comparing —
             # "then:" should match "then" in the function word set.
             # Do NOT strip periods or commas — those are legitimate
             # sentence endings (e.g. "came back again." is fine).
             last_word = last_word.rstrip(':;')
-            if last_word in _FUNCTION_ENDINGS:
+            if last_word in SENTENCE_END_FUNCTION_WORDS:
                 errors.append(
                     f"[{word}] sentence ends with function word "
                     f"'{last_word}' - likely truncated fragment"
