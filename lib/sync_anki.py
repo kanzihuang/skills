@@ -366,12 +366,26 @@ def sync(
         # already exist under a different deck name, reuse that one.
         # Prevents accent / spelling drift across batches
         # (e.g. "Saint-Exupery" vs "Saint-Exupéry").
+        #
+        # When found_deck is a subdeck (e.g. "X - 分级词汇::X - 分级词汇
+        # - COCA 4"), extract the top-level parent.  For highlight mode
+        # (book_id without suffix), also strip the " - 分级词汇" suffix
+        # since highlight cards belong in the plain deck.
         if namespace_id:
             found_deck, count = ac.find_deck_for_book_id(namespace_id)
             if found_deck and found_deck != deck_name:
-                print(f'  Note: using existing deck "{found_deck}" '
-                      f'(found {count} cards with bookId={namespace_id})')
-                deck_name = found_deck
+                resolved = found_deck
+                # Subdeck hierarchy → extract top-level parent
+                if "::" in resolved:
+                    resolved = resolved.split("::")[0]
+                # Highlight mode: strip graded suffix from parent
+                if data.get("book_id") and not data.get("suffix"):
+                    if resolved.endswith(" - 分级词汇"):
+                        resolved = resolved[:-len(" - 分级词汇")]
+                if resolved != deck_name:
+                    print(f'  Note: using existing deck "{resolved}" '
+                          f'(found {count} cards with bookId={namespace_id})')
+                    deck_name = resolved
 
     # Format band names with the resolved deck name as prefix.
     # e.g. "COCA 4" → "The Little Prince (Antoine de Saint-Exupéry) - COCA 4"
