@@ -214,7 +214,8 @@ def smart_truncate(
           (ends with ``.!?`` and not with a function word / comma).
           Complete → truncate there.  Not complete → unchanged.
        c. Inside a CLOSED quote → balanced, continue scanning.
-       d. No punctuation found → fall back to last word boundary.
+       d. No punctuation found → return original sentence unchanged
+          (Step 2B will handle it).
 
     4. Check last word is not a function word → back up further if needed.
     5. Return ``(new_sentence, target_offset, was_truncated)``.
@@ -259,15 +260,10 @@ def smart_truncate(
                 continue
             # else: 3c. Inside a CLOSED quote — balanced, keep scanning.
 
-    # 3d. Fall back to the last word boundary.
     if best_pos is None:
-        truncated = sentence[:scan_end].rstrip()
-        last_space = truncated.rfind(' ')
-        if last_space > target_end:
-            best_pos = last_space
-        else:
-            # can't truncate without cutting the target word
-            return sentence, target_offset, False
+        # No sentence-ending punctuation found within max_len.
+        # Return the original sentence unchanged — Step 2B will handle it.
+        return sentence, target_offset, False
 
     # ── 4. Back up past trailing function word ──────────────────────────
     result = sentence[:best_pos].rstrip()
@@ -571,6 +567,39 @@ def main():
         print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
+_NON_BODY_PATTERNS = [
+    # ALL CAPS title list / bibliography: ≥25 chars, all uppercase letters
+    # (with spaces, apostrophes, hyphens).  Excludes short headings like
+    # "CHAPTER I" (too short) or normal dialogue ALL CAPS words.
+    (re.compile(r'^[A-Z][A-Z\s\'\-]{24,}$'), "all_caps_title"),
+    # Copyright / legal boilerplate — matched case-insensitively against
+    # the first line of the sentence.
+    (re.compile(r'(?i)\b(?:COPYRIGHT|DISTRIBUTE|PROOFREADER|REDISTRIBUTE)\b'), "copyright"),
+    # Producer / transcriber credit lines that appear at the start or end
+    # of Project Gutenberg / Distributed Proofreaders texts.
+    (re.compile(r'(?i)^(?:Produced by|Distributed Proofreaders|A Distributed Proofreaders)'), "producer_credit"),
+    # Dedication: "TO …" with ≤6 words (short lines, no body-text content).
+    (re.compile(r'^TO\s+(?:\w+\s*){1,6}$'), "dedication"),
+    # End-of-text markers: "[End of …]", "End of the Project …", etc.
+    (re.compile(r'^\[?End\s+of\s+(the\s+)?'), "end_marker"),
+]
+
+
+def _is_non_body_text(sentence: str) -> bool:
+    """Return True if *sentence* comes from a non-body-text section.
+
+    Checks mechanical patterns only — no hard-coded word lists.
+    Matches against the first non-empty line of the sentence.
+    """
+    first_line = sentence.split('\n')[0].strip()
+    if not first_line:
+        return False
+    for pattern, _reason in _NON_BODY_PATTERNS:
+        if pattern.search(first_line):
+            return True
+    return False
+
+
 def process_words(
     data: dict,
     text: str,
@@ -839,6 +868,11 @@ def process_words(
         )
         if char_offset < 0:
             char_offset = _first_word_boundary_offset(text, all_forms, start_offset)
+
+        # Skip entries whose matched sentence comes from non-body-text
+        # sections (bibliography, copyright, dedication, etc.).
+        if _is_non_body_text(cand['text']):
+            continue
 
         # IPA: try lemma first, fall back to matched surface form
         ipa = _cmu_ipa(lemma) or _cmu_ipa(cand['matched_form'])

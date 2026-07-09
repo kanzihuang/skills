@@ -176,7 +176,29 @@ safely truncated are returned unchanged with ``_needs_manual: true``.
 当 `match_sentences.py` 的输出包含不完整句子时（特征：`is_fragment=True`、不以 `. ! ?` 结尾、源文本中同一句的后半部分以空行隔开），按以下流程修复：
 
 1. **定位**: 在源文本中搜索碎片文本定位位置: `text.find(fragment_text)`
-2. **扩展**: 前后扩展找到完整句边界（句首大写 / 句末 `. ! ?`）
+2. **扩展**: 前后扩展找到完整句边界：
+
+   向前找句首（只认 `. ! ?` 后面跟空格+大写字母，或文本开头）：
+   ```python
+   start = fragment_start
+   while start > 0:
+       if source_text[start - 1] in '.!?':
+           after = source_text[start:start + 5].lstrip()
+           if start == 0 or (after and after[0].isupper()):
+               break
+       start -= 1
+   ```
+
+   向后找句末（下一个 `. ! ?`）：
+   ```python
+   end = fragment_start + len(fragment_text)
+   while end < len(source_text) and source_text[end] not in '.!?':
+       end += 1
+   if end < len(source_text):
+       end += 1  # include the punctuation
+   ```
+
+   > ⚠️ **Pitfall**: 不要用 `\n` 作为句子边界。段落内的单换行（`\n`）是排版换行而非句边界。错误示例：`while start > 0 and source_text[start-1] not in '.!?\n'` 会把 `huge,\nstupid` 的 `\n` 当句首，产生 "stupid loggerheads..." 小写开头碎片。
 3. **提取**: `re.sub(r'\s+', ' ', text[start:end]).strip()`
 4. **计算偏移**: 完整句中目标词的新字符位置 → 更新 `target_offset`
 5. **验证**: 用 `build_sentence_regex()` 验证完整句在源文本中可匹配:
@@ -255,7 +277,24 @@ print(f'Split {len(words)} words into {math.ceil(len(words)/chunk_size)} chunks'
 **2. 启动并行 Agent：** 每 4-5 个 chunk 启动一个 Agent，
 每个 Agent 处理其分配的 chunk 文件（Read → 生成 definition_cn + IPA → Write）。
 
-**3. 合并结果：**
+> ⚠️ **JSON 格式要求**：Agent 写入 chunk 文件时必须使用 Python 的
+> `json.dump(data, f, ensure_ascii=False, indent=2)`，**禁止使用 Write
+> 工具直接写入 JSON**。所有 JSON 键和字符串值必须使用 ASCII 直引号
+> (`"` U+0022)，严禁弯引号/智能引号（`"` `"` `'` `'`）。
+> 弯引号会导致 `json.load()` 解析失败，整个合并步骤崩溃。
+
+**3. 验证 chunk 文件（合并前）：**
+
+```bash
+cd <skill_dir>
+for f in /tmp/vocab-anki-chunk-*.json; do
+    .venv/bin/python3 -c "import json; json.load(open('$f'))" || {
+        echo "FAILED: $f — JSON is broken. Re-run the agent for this chunk."; exit 1; }
+done
+echo "All chunk files valid"
+```
+
+**4. 合并结果：**
 
 ```bash
 cd <skill_dir>
@@ -277,7 +316,7 @@ print(f'Merged {len(words)} words from {len(chunks)} chunks')
 "
 ```
 
-**4. 验证完整性：**
+**5. 验证完整性：**
 
 ```bash
 cd <skill_dir> && .venv/bin/python3 \

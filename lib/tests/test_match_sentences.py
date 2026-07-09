@@ -1208,8 +1208,13 @@ class TestSmartTruncate:
         assert len(sent) <= 150
         assert sent.endswith(".")
 
-    def test_truncate_at_space_fallback(self):
-        """No sentence-ending punctuation found — falls back to word boundary."""
+    def test_no_punctuation_returns_unchanged(self):
+        """No sentence-ending punctuation found — return original unchanged.
+
+        The old behaviour truncated at the last word boundary, producing
+        fragments without terminal punctuation.  Now we return the original
+        sentence so Step 2B can review it manually.
+        """
         long_sent = (
             "The quick brown fox jumps over the lazy dog and continues "
             "running across the field without stopping for a moment "
@@ -1218,8 +1223,8 @@ class TestSmartTruncate:
         sent, to, was_trunc = smart_truncate(
             long_sent, "fox", 16, max_len=120,
         )
-        assert was_trunc is True
-        assert len(sent) <= 120
+        assert was_trunc is False
+        assert sent == long_sent
         assert to == 16
 
     def test_target_offset_preserved(self):
@@ -1241,8 +1246,9 @@ class TestSmartTruncate:
         assert was_trunc is False
         assert sent == long_sent
 
-    def test_opening_quote_backs_up_complete_pre_text(self):
-        """Inside opening quote with complete sentence before → back up."""
+    def test_opening_quote_pre_text_not_complete(self):
+        """Inside opening quote but pre-quote text is incomplete (ends with
+        comma) → returned unchanged for Step 2B manual review."""
         sent = (
             "The king said, \"You must obey all of my commands without "
             "question because I am the ruler of this entire planet "
@@ -1252,15 +1258,16 @@ class TestSmartTruncate:
         result, to, was_trunc = smart_truncate(
             sent, "question", 50, max_len=250,
         )
-        # Should have backed up to before the opening quote.
-        assert was_trunc is True
-        assert len(result) <= 250
-        # pre-quote text 'The king said, ' ends with comma → not complete
+        # pre-quote text 'The king said, ' ends with comma → not complete.
+        # Without word-boundary fallback, returns original.
+        assert was_trunc is False
+        assert result == sent
         # so it should fall through to other truncation.
         assert len(result) > 0
 
-    def test_closed_quote_allows_normal_scan(self):
-        """Inside a closed quote — balanced, normal scan continues."""
+    def test_closed_quote_no_punctuation_in_range(self):
+        """Punctuation exists but is inside quotes — no reachable boundary
+        within max_len → returned unchanged."""
         sent = (
             '"Hello there," she said. "'
             + "I am going to the store to buy groceries for dinner tonight. "
@@ -1269,8 +1276,10 @@ class TestSmartTruncate:
         result, to, was_trunc = smart_truncate(
             sent, "groceries", 55, max_len=200,
         )
-        assert was_trunc is True
-        assert len(result) <= 200
+        # The period after "tonight" is inside an opening quote.
+        # Without word-boundary fallback, the original is returned.
+        assert was_trunc is False
+        assert len(result) > 200  # unchanged
 
     def test_exact_max_len_no_truncation(self):
         """Sentence exactly at max_len — no truncation."""
@@ -1279,8 +1288,8 @@ class TestSmartTruncate:
         assert was_trunc is False
         assert result == sent
 
-    def test_avoids_function_word_ending(self):
-        """Last word at truncation is 'at' — back up further."""
+    def test_no_punctuation_in_max_len_range(self):
+        """No reachable punctuation within max_len → returned unchanged."""
         long_sent = (
             "He pointed to the exact spot where the treasure was at "
             + "the bottom of the deep blue ocean where no one had "
@@ -1289,9 +1298,10 @@ class TestSmartTruncate:
         sent, to, was_trunc = smart_truncate(
             long_sent, "treasure", 34, max_len=120,
         )
-        assert was_trunc is True
-        last = sent.split()[-1].strip().lower()
-        assert last not in ("at", "for", "to", "in", "with")
+        # The only periods are beyond max_len (120 chars).
+        # Without word-boundary fallback, the original is returned.
+        assert was_trunc is False
+        assert sent == long_sent
 
     def test_quote_inside_truncation_unfixable(self):
         """Truncation lands inside opening quote but pre-quote text is
@@ -1309,5 +1319,68 @@ class TestSmartTruncate:
         if was_trunc is False:
             assert len(sent) > 250  # original, too long — needs manual
         else:
-            # It found another truncation path (e.g., word boundary fallback)
+            # It found a valid truncation path via 3a/3b
             assert len(sent) <= 250
+
+
+class TestIsNonBodyText:
+    """Tests for _is_non_body_text() — detecting bibliography, copyright, etc."""
+
+    def test_all_caps_title_list(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        assert _is_non_body_text(
+            "THE OLD MAN AND THE SEA ACROSS THE RIVER AND INTO THE TREES"
+        ) is True
+
+    def test_all_caps_too_short(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        # "THE END" is only 7 chars, below 25-char threshold
+        assert _is_non_body_text("THE END") is False
+
+    def test_copyright_boilerplate(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        assert _is_non_body_text(
+            "IF THE BOOK IS UNDER COPYRIGHT IN YOUR COUNTRY, DO NOT DOWNLOAD"
+        ) is True
+
+    def test_producer_credit(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        assert _is_non_body_text(
+            "Produced by Al Haines"
+        ) is True
+
+    def test_distributed_proofreaders(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        assert _is_non_body_text(
+            "A Distributed Proofreaders Canada Ebook"
+        ) is True
+
+    def test_dedication(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        assert _is_non_body_text("TO MAX PERKINS") is True
+
+    def test_dedication_too_long(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        # Dedication with >6 words — not excluded (real dedications are short).
+        # Mixed case so it doesn't trigger the ALL_CAPS pattern.
+        assert _is_non_body_text(
+            "To my dearest wife and my wonderful children"
+        ) is False
+
+    def test_end_marker(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        assert _is_non_body_text(
+            "[End of The Old Man and the Sea, by Ernest Hemingway]"
+        ) is True
+
+    def test_normal_body_text_not_excluded(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        assert _is_non_body_text(
+            "He was an old man who fished alone in a skiff in the Gulf Stream."
+        ) is False
+
+    def test_normal_dialogue_not_excluded(self):
+        from lib.scripts.match_sentences import _is_non_body_text
+        assert _is_non_body_text(
+            '"I fear both the Tigers of Detroit and the Indians of Cleveland."'
+        ) is False

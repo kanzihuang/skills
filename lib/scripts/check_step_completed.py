@@ -164,6 +164,46 @@ def _check_2e(words: list[dict]) -> list[str]:
     return _check_2f(words)  # same checks as 2F for field completeness
 
 
+# Curly / smart quote characters that agents may accidentally use in JSON.
+_CURLY_QUOTES = '“”‘’'  # " " ' '
+_FULLWIDTH_QUOTE = '＂'                # ＂
+
+
+def _check_2e_verify(words: list[dict]) -> list[str]:
+    """Check Step 2E output for curly/smart quotes in string fields.
+
+    Agents may use curly quotes (U+201C/U+201D) instead of ASCII straight
+    quotes when writing JSON, which breaks json.load().  This check scans
+    all string fields in the merged output for these characters.
+    """
+    warnings: list[str] = []
+    string_fields = (
+        'word', 'lemma', 'forms', 'pos', 'dep', 'spacy_lemma',
+        'sentence', 'ipa', 'definition_cn', 'translation_cn',
+    )
+    for w in words:
+        word = w.get('word', '?')
+        for field in string_fields:
+            val = w.get(field, '')
+            if isinstance(val, list):
+                val = ' '.join(str(v) for v in val)
+            val = str(val) if val else ''
+            for i, ch in enumerate(val):
+                if ch in _CURLY_QUOTES:
+                    warnings.append(
+                        f"[{word}] field '{field}' contains curly quote "
+                        f"U+{ord(ch):04X} at position {i}"
+                    )
+                    break  # one warning per field
+                if ch == _FULLWIDTH_QUOTE:
+                    warnings.append(
+                        f"[{word}] field '{field}' contains full-width quote "
+                        f"U+{ord(ch):04X} at position {i}"
+                    )
+                    break
+    return warnings
+
+
 def _main() -> None:
     parser = argparse.ArgumentParser(
         description="Check that mandatory Claude workflow steps were completed."
@@ -171,7 +211,7 @@ def _main() -> None:
     parser.add_argument("input_json", help="Path to vocab-anki input JSON")
     parser.add_argument(
         "--step",
-        choices=["2B", "2B-verify", "2E", "2F", "2F-dup", "all"],
+        choices=["2B", "2B-verify", "2E", "2E-verify", "2F", "2F-dup", "all"],
         default="all",
         help="Which step to check (default: all)",
     )
@@ -206,6 +246,15 @@ def _main() -> None:
                 f"Step 2E may have been SKIPPED ({len(w2e)} issue(s)):"
             )
             all_warnings.extend(f"  {w}" for w in w2e)
+
+    if args.step in ("2E-verify", "all"):
+        w2ev = _check_2e_verify(words)
+        if w2ev:
+            all_warnings.append(
+                f"Step 2E output contains curly/smart quotes "
+                f"({len(w2ev)} issue(s)):"
+            )
+            all_warnings.extend(f"  {w}" for w in w2ev)
 
     if args.step in ("2F", "all"):
         w2f = _check_2f(words)
