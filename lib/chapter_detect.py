@@ -19,13 +19,13 @@ import re
 _CHAPTER_RE = re.compile(
     r"(?:^|\n)"
     r"(?:"
-    r"CHAPTER\s+(?:[IVXLCDM]+|\d+|ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|"
+    r"CHAPTER\s+(?:(?-i:[IVXLCDM]+)|\d+|ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|"
     r"ELEVEN|TWELVE|THIRTEEN|FOURTEEN|FIFTEEN|SIXTEEN|SEVENTEEN|EIGHTEEN|"
     r"NINETEEN|TWENTY)\b|"
     r"CHAP\.\s+\d+\b|"
-    r"(?:^|\n)(?:[IVXLCDM]+)\.\s*\n|"
-    r"(?:^|\n)PART\s+[A-Z]+\b|"
-    r"(?:^|\n)Book\s+(?:[IVXLCDM]+|\d+)\b"
+    r"(?:^|\n)(?:(?-i:[IVXLCDM]+))\.\s*\n|"
+    r"(?:^|\n)PART\s+(?-i:[A-Z]+)\b|"
+    r"(?:^|\n)Book\s+(?:(?-i:[IVXLCDM]+)|\d+)\b"
     r")",
     re.IGNORECASE | re.MULTILINE,
 )

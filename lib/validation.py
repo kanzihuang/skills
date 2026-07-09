@@ -201,6 +201,20 @@ def validate_word_entries(words: list[dict]) -> list[str]:
                     file=sys.stderr,
                 )
 
+            # 7f. Missing terminal punctuation — soft warning.
+            # smart_truncate() may cut off the sentence-ending period when
+            # the full sentence barely exceeds MAX_SENTENCE_LENGTH.  The
+            # result is grammatically incomplete even though it passes
+            # length / function-word / lowercase-start checks.
+            # Strip trailing quotes (dialogue) before checking.
+            terminal = stripped.rstrip('"\'')
+            if terminal and terminal[-1] not in ('.', '!', '?'):
+                print(
+                    f"  [WARN] [{word}] sentence lacks terminal punctuation "
+                    f"('.', '!', '?') — may be a truncated fragment",
+                    file=sys.stderr,
+                )
+
         # 8. Translation quality checks (soft warnings)
         translation = w.get("translation_cn", "")
         if translation and sentence:

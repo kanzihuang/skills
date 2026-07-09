@@ -62,6 +62,24 @@ def test_no_heading_returns_zero():
     assert detect_story_start(text) == 0
 
 
+def test_part_way_not_a_chapter_heading():
+    """'part way' in body text must not match PART\s+[A-Z]+ (regression test).
+
+    re.IGNORECASE made [A-Z]+ match lowercase 'way', causing a false positive
+    at offset 95855 in The Old Man and the Sea.  (?-i:[A-Z]+) fixes this.
+    """
+    text = "the fish pulled\npart way over and then righted himself and swam away."
+    assert detect_story_start(text) == 0
+
+
+def test_part_one_still_detected():
+    """'PART ONE' (all caps) must still match after (?-i:) fix."""
+    text = "Preamble.\n\nPART ONE\n\nThe story begins here with narrative prose."
+    offset = detect_story_start(text)
+    assert offset > 0
+    assert "PART ONE" in text[offset:]
+
+
 # ── detect_story_start — fallback heuristic ─────────────────────────────
 
 def test_fallback_skips_title_and_author():

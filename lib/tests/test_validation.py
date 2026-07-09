@@ -269,6 +269,42 @@ def test_old_regex_still_catches_comma_period():
         f"Should still detect ',.' artifact\nErrors: {errors}"
 
 
+# ── Missing terminal punctuation ──
+
+
+def test_missing_terminal_punctuation_no_hard_error():
+    """Missing terminal punctuation is a soft warning (stderr), not a hard error.
+
+    This guards against smart_truncate() cutting off the sentence-ending period
+    when the full sentence barely exceeds MAX_SENTENCE_LENGTH.  The warning
+    fires on stderr but does not block sync.
+    """
+    w = make_word(
+        word="cove",
+        sentence="Those who had caught sharks had taken them to the shark "
+                 "factory on the other side of the cove where they were "
+                 "hoisted on a block and tackle, their livers removed, their "
+                 "fins cut off and their hides skinned out and their flesh "
+                 "cut into strips",
+    )
+    errors = validate_word_entries([w])
+    # No hard error — soft warning only on stderr
+    assert isinstance(errors, list)
+    assert not errors, \
+        f"Missing period should be soft warning only, not hard error\nErrors: {errors}"
+
+
+def test_has_terminal_punctuation_no_warning():
+    """A correctly punctuated sentence should produce no warnings."""
+    w = make_word(
+        word="shark",
+        sentence="The shark was not an accident.",
+        target_offset=4,
+    )
+    errors = validate_word_entries([w])
+    assert not errors, f"Properly punctuated sentence should pass\nErrors: {errors}"
+
+
 # ── Sentence length checks ──
 
 def test_sentence_under_250_passes():
