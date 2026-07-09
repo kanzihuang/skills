@@ -287,6 +287,20 @@ The revert runs AFTER the ADJ-promoting rules (NOUN+compound suffix, NOUN/VERB+a
 
 Symptom: genuine proper nouns (planet names, person names) tagged NOUN. Check: `grep '"pos": "PROPN"'` in match_sentences output — should be non-zero for texts containing proper nouns.
 
+### Mid-sentence capitalized NOUN→PROPN misclassifies quote-initial common nouns
+
+**Change (2026-07-09)**: The mid-sentence capitalised NOUN→PROPN rule (`not _was_propn and pos == "NOUN" and token.i != 0 and text[0].isupper()`) converts common nouns at quote starts to PROPN (e.g. "Boa" in `said: "Boa constrictors..."`).  spaCy correctly tags these as NOUN, but the rule assumes any mid-sentence capitalised word is a proper noun — it doesn't account for quotation marks.
+
+**Fix**: Added `and token_lower not in form_index` guard.  If the lowercase form of the token is in our target vocabulary, it's a common noun capitalised by position (quote-initial) — not a proper noun.  Genuine proper nouns that spaCy tagged as NOUN (e.g. "Jupiter" without lowercase occurrences) still convert to PROPN because they were already handled by the PROPN→NOUN→revert path.
+
+Symptom: `(boa, NOUN)` + `(boa, PROPN)` duplicate entries for the same word, requiring Step 2F manual dedup.  Check: `grep '"lemma": "boa".*"pos": "PROPN"'` in match_sentences output.
+
+### Curly quote normalisation
+
+**Change (2026-07-09)**: `_normalize_quotes()` normalises Unicode curly quotes (`""''`) to ASCII straight quotes before sentence processing.  Internet Archive OCR texts commonly include curly quotes which propagate through PySBD → spaCy → DeepL into JSON output, causing `json.load()` failures and `check_step_completed.py` rejections.
+
+Symptom: `check_step_completed.py --step all` reports curly quote issues.  Check: `grep -P '[\x{2018}\x{2019}\x{201C}\x{201D}]'` in JSON output.
+
 ### ADV→NOUN guard: dep=dobj contradicts ADV
 
 **Change (2026-07-08)**: Added `if pos == "ADV" and token.dep_ == "dobj": pos = "NOUN"` POS correction.  spaCy occasionally mis-tags direct objects as adverbs (e.g. "sprig" in "push a charming little sprig upward").  `dep=dobj` requires a nominal — an adverb cannot be a direct object in Universal Dependencies.  This is a reliable signal of a spaCy POS error.

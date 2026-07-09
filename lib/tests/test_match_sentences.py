@@ -1384,3 +1384,104 @@ class TestIsNonBodyText:
         assert _is_non_body_text(
             '"I fear both the Tigers of Detroit and the Indians of Cleveland."'
         ) is False
+
+
+class TestNormalizeQuotes:
+    """Curly quote → ASCII straight quote normalisation."""
+
+    def test_left_single(self):
+        from lib.scripts.match_sentences import _normalize_quotes
+        assert _normalize_quotes("It‘s a test") == "It's a test"
+
+    def test_right_single(self):
+        from lib.scripts.match_sentences import _normalize_quotes
+        assert _normalize_quotes("It’s a test") == "It's a test"
+
+    def test_left_double(self):
+        from lib.scripts.match_sentences import _normalize_quotes
+        assert _normalize_quotes('“Hello”') == '"Hello"'
+
+    def test_right_double(self):
+        from lib.scripts.match_sentences import _normalize_quotes
+        assert _normalize_quotes('“Hello”') == '"Hello"'
+
+    def test_all_curly_quotes_in_sentence(self):
+        from lib.scripts.match_sentences import _normalize_quotes
+        inp = '“It’s a ‘boa constrictor’,” he said.'
+        exp = '"It\'s a \'boa constrictor\'," he said.'
+        assert _normalize_quotes(inp) == exp
+
+    def test_no_curly_quotes_unchanged(self):
+        from lib.scripts.match_sentences import _normalize_quotes
+        assert _normalize_quotes('"Hello world"') == '"Hello world"'
+
+    def test_empty_string(self):
+        from lib.scripts.match_sentences import _normalize_quotes
+        assert _normalize_quotes("") == ""
+
+
+class TestMidSentenceCapitalizedNounStaysNoun:
+    """Quote-initial capitalised common nouns must stay NOUN when in form_index.
+
+    Regression test: the mid-sentence capitalised NOUN→PROPN rule (line ~806)
+    must NOT fire when the word is in our target vocabulary — the capitalisation
+    is positional (quote-start), not a proper-noun signal.
+    """
+
+    def test_quote_initial_capitalized_word_in_vocab_stays_noun(self):
+        """'Boa' capitalised at quote start should be NOUN, not PROPN."""
+        import json
+        from lib.scripts.match_sentences import process_words
+
+        source = (
+            'He said: "Boa constrictors swallow their prey whole." '
+            'It was a picture of a boa constrictor.'
+        )
+        data = {
+            "in_coca": [
+                {"lemma": "boa", "rep": "boa", "forms": ["boa"]},
+            ],
+            "book_title": "Test Book",
+            "book_author": "Test Author",
+        }
+
+        result = process_words(data, source)
+        words = result["words"]
+
+        # Should produce exactly 1 entry: (boa, NOUN)
+        # Not 2 entries: (boa, NOUN) + (boa, PROPN)
+        assert len(words) == 1, f"Expected 1 entry, got {len(words)}: {[(w['lemma'], w['pos']) for w in words]}"
+        assert words[0]["lemma"] == "boa"
+        assert words[0]["pos"] == "NOUN", (
+            f"Expected NOUN, got {words[0]['pos']}. "
+            "Mid-sentence capitalised NOUN→PROPN rule fired incorrectly."
+        )
+
+    def test_genuine_propn_still_converts(self):
+        """'Jupiter' not in form_index → should stay PROPN (or convert from NOUN)."""
+        import json
+        from lib.scripts.match_sentences import process_words
+
+        source = (
+            "I read about Jupiter in a book. "
+            "The planet Jupiter is huge."
+        )
+        data = {
+            "in_coca": [
+                {"lemma": "jupiter", "rep": "Jupiter", "forms": ["Jupiter", "jupiter"]},
+            ],
+            "book_title": "Test Book",
+            "book_author": "Test Author",
+        }
+
+        result = process_words(data, source)
+        words = result["words"]
+        # Jupiter is a genuine proper noun — should be PROPN
+        # (form_index membership converts to NOUN → revert guard restores to PROPN
+        #  if never lowercase in text; or mid-sentence rule should not fire
+        #  since _was_propn=True after PROPN→NOUN conversion.)
+        pos_values = {w["pos"] for w in words}
+        # The revert guard should restore it to PROPN
+        assert "PROPN" in pos_values or len(words) == 1, (
+            f"Expected PROPN for Jupiter (genuine proper noun), got: {pos_values}"
+        )

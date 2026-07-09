@@ -36,6 +36,29 @@ def _get_segmenter() -> pysbd.Segmenter:
 _DIALOGUE_ATTRIBUTION_RE = re.compile(r'([:,])[ \t]*\n{2,}[ \t]*["“”]')
 
 
+_CURLY_QUOTE_MAP = {
+    "‘": "'",  # ' LEFT SINGLE
+    "’": "'",  # ' RIGHT SINGLE
+    "“": '"',  # " LEFT DOUBLE
+    "”": '"',  # " RIGHT DOUBLE
+}
+
+
+def _normalize_quotes(text: str) -> str:
+    """Normalise Unicode curly quotes to ASCII straight quotes.
+
+    Internet Archive OCR texts commonly include curly/smart quotes
+    (""'').  These propagate through PySBD, spaCy, and DeepL into the
+    JSON output, where they cause ``json.load()`` failures or
+    ``check_step_completed.py`` rejections.  Normalise early so all
+    downstream processing sees clean ASCII quotes.
+    """
+    result = text
+    for curly, straight in _CURLY_QUOTE_MAP.items():
+        result = result.replace(curly, straight)
+    return result
+
+
 def _normalize_dialogue_attribution(text: str) -> str:
     """Join colon/comma-ending attribution lines with their dialogue.
 
@@ -624,6 +647,9 @@ def process_words(
         if nlp is None:
             raise RuntimeError("spaCy not available")
 
+    # ── quote normalisation ────────────────────────────────────────────
+    text = _normalize_quotes(text)
+
     # ── preamble detection ──────────────────────────────────────────────
     if start_offset == 0:
         story_start = detect_story_start(text)
@@ -803,8 +829,12 @@ def process_words(
                 # proper noun (e.g. "the Terrace", "Gulf Stream").  Only
                 # fires when spaCy originally tagged the token as NOUN
                 # (not PROPN→NOUN conversions — those were intentional).
+                # Guard: if the lowercase form is in form_index (our target
+                # vocabulary), it's a common noun capitalised by position
+                # (quote-initial, emphasis) — not a proper noun.
                 if (not _was_propn and pos == "NOUN" and token.i != 0
-                        and token.text and token.text[0].isupper()):
+                        and token.text and token.text[0].isupper()
+                        and token_lower not in form_index):
                     pos = "PROPN"
 
                 key = (lemma.lower(), pos)
