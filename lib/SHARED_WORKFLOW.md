@@ -40,7 +40,9 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 脚本流水线（全书扫一次，句子为外循环）：
 
-0. 源文本预处理：`_normalize_dialogue_attribution()` 合并 `[:,]\n\n"` → `\1 "`（对话引语与上文连成整句）
+0. 源文本预处理：
+   - `_normalize_quotes()` — Unicode 弯引号（`""''`）→ ASCII 直引号，避免传播到 JSON 输出
+   - `_normalize_dialogue_attribution()` 合并 `[:,]\n\n"` → `\1 "`（对话引语与上文连成整句）
 1. PySBD 一次切句 + 篇章检测跳过序言
 1a. 碎片合并：`_merge_adjacent_fragments()` 自动合并被源文本空行切分的相邻碎片句（如 `"which was at"` + `"the same time both simple and majestic."`），通过 `build_sentence_regex()` 验证合并结果是源文本的连续子串
 2. 建 `form_index`：`form_lower → [(idx, entry), ...]`
