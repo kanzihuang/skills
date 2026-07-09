@@ -36,6 +36,37 @@ def safe_filename(word: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Quote normalization
+# ---------------------------------------------------------------------------
+
+# Curly / smart quote characters that may appear in source text (OCR) or
+# translated Chinese text (DeepL output).  Normalising them to ASCII
+# straight quotes prevents ``json.load()`` failures and
+# ``check_step_completed.py`` rejections.
+_CURLY_QUOTE_MAP_NORM = {
+    "‘": "'",   # ' LEFT SINGLE
+    "’": "'",   # ' RIGHT SINGLE
+    "“": '"',   # " LEFT DOUBLE
+    "”": '"',   # " RIGHT DOUBLE
+    "＂": '"',   # " FULLWIDTH
+}
+
+
+def normalize_quotes(text: str) -> str:
+    """Normalise Unicode curly/smart quotes to ASCII straight quotes.
+
+    Covers typical OCR curly quotes (""'') and the fullwidth quotation
+    mark (U+FF02).  Call this on *any* text that will enter the JSON
+    output — source sentences, DeepL translations, and Claude-generated
+    definitions.
+    """
+    result = text
+    for curly, straight in _CURLY_QUOTE_MAP_NORM.items():
+        result = result.replace(curly, straight)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Fuzzy sentence matching
 # ---------------------------------------------------------------------------
 

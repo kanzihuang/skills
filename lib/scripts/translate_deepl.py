@@ -70,7 +70,7 @@ def _classify_error(e: Exception) -> str:
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lib.config import BATCH_SIZE, CONTEXT_SENTENCES
-from lib.utils import build_sentence_regex as _build_sentence_regex
+from lib.utils import build_sentence_regex as _build_sentence_regex, normalize_quotes
 
 
 def strip_tags(text: str) -> str:
@@ -260,6 +260,13 @@ def main():
         print(f"\r  {progress}/{total} sentences", end="", file=sys.stderr, flush=True)
 
     print(file=sys.stderr)
+
+    # Normalise curly/smart quotes in translations (DeepL may return
+    # Chinese curly quotes U+201C/U+201D in Chinese output, which would
+    # cause check_step_completed.py --step 2E-verify rejections).
+    for w in data.get("words", []):
+        if w.get("translation_cn"):
+            w["translation_cn"] = normalize_quotes(w["translation_cn"])
 
     # Write output
     output_path = args.output if args.output else json_path

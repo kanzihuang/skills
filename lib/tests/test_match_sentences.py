@@ -1387,38 +1387,41 @@ class TestIsNonBodyText:
 
 
 class TestNormalizeQuotes:
-    """Curly quote → ASCII straight quote normalisation."""
+    """Curly quote to ASCII straight quote normalisation (from lib.utils)."""
 
     def test_left_single(self):
-        from lib.scripts.match_sentences import _normalize_quotes
-        assert _normalize_quotes("It‘s a test") == "It's a test"
+        from lib.utils import normalize_quotes
+        assert normalize_quotes("It‘s a test") == "It's a test"
 
     def test_right_single(self):
-        from lib.scripts.match_sentences import _normalize_quotes
-        assert _normalize_quotes("It’s a test") == "It's a test"
+        from lib.utils import normalize_quotes
+        assert normalize_quotes("It’s a test") == "It's a test"
 
     def test_left_double(self):
-        from lib.scripts.match_sentences import _normalize_quotes
-        assert _normalize_quotes('“Hello”') == '"Hello"'
+        from lib.utils import normalize_quotes
+        assert normalize_quotes("“Hello”") == '"Hello"'
 
     def test_right_double(self):
-        from lib.scripts.match_sentences import _normalize_quotes
-        assert _normalize_quotes('“Hello”') == '"Hello"'
+        from lib.utils import normalize_quotes
+        assert normalize_quotes("“Hello”") == '"Hello"'
 
     def test_all_curly_quotes_in_sentence(self):
-        from lib.scripts.match_sentences import _normalize_quotes
-        inp = '“It’s a ‘boa constrictor’,” he said.'
-        exp = '"It\'s a \'boa constrictor\'," he said.'
-        assert _normalize_quotes(inp) == exp
+        from lib.utils import normalize_quotes
+        inp = "“It’s a ‘boa constrictor’,” he said."
+        exp = "\"It\'s a \'boa constrictor\',\" he said."
+        assert normalize_quotes(inp) == exp
 
     def test_no_curly_quotes_unchanged(self):
-        from lib.scripts.match_sentences import _normalize_quotes
-        assert _normalize_quotes('"Hello world"') == '"Hello world"'
+        from lib.utils import normalize_quotes
+        assert normalize_quotes('"Hello world"') == '"Hello world"'
 
     def test_empty_string(self):
-        from lib.scripts.match_sentences import _normalize_quotes
-        assert _normalize_quotes("") == ""
+        from lib.utils import normalize_quotes
+        assert normalize_quotes("") == ""
 
+    def test_fullwidth_quote(self):
+        from lib.utils import normalize_quotes
+        assert normalize_quotes("＂Hello＂") == '"Hello"'
 
 class TestMidSentenceCapitalizedNounStaysNoun:
     """Quote-initial capitalised common nouns must stay NOUN when in form_index.

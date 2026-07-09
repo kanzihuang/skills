@@ -25,7 +25,7 @@ import pysbd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lib.chapter_detect import detect_story_start
 from lib.config import HARD_CUTOFF, MIN_SENTENCE_LENGTH, MAX_SENTENCE_LENGTH, SENTENCE_END_FUNCTION_WORDS
-from lib.utils import build_sentence_regex
+from lib.utils import build_sentence_regex, normalize_quotes
 
 
 def _get_segmenter() -> pysbd.Segmenter:
@@ -35,28 +35,6 @@ def _get_segmenter() -> pysbd.Segmenter:
 
 _DIALOGUE_ATTRIBUTION_RE = re.compile(r'([:,])[ \t]*\n{2,}[ \t]*["“”]')
 
-
-_CURLY_QUOTE_MAP = {
-    "‘": "'",  # ' LEFT SINGLE
-    "’": "'",  # ' RIGHT SINGLE
-    "“": '"',  # " LEFT DOUBLE
-    "”": '"',  # " RIGHT DOUBLE
-}
-
-
-def _normalize_quotes(text: str) -> str:
-    """Normalise Unicode curly quotes to ASCII straight quotes.
-
-    Internet Archive OCR texts commonly include curly/smart quotes
-    (""'').  These propagate through PySBD, spaCy, and DeepL into the
-    JSON output, where they cause ``json.load()`` failures or
-    ``check_step_completed.py`` rejections.  Normalise early so all
-    downstream processing sees clean ASCII quotes.
-    """
-    result = text
-    for curly, straight in _CURLY_QUOTE_MAP.items():
-        result = result.replace(curly, straight)
-    return result
 
 
 def _normalize_dialogue_attribution(text: str) -> str:
@@ -666,7 +644,7 @@ def process_words(
             raise RuntimeError("spaCy not available")
 
     # ── quote normalisation ────────────────────────────────────────────
-    text = _normalize_quotes(text)
+    text = normalize_quotes(text)
 
     # ── preamble detection ──────────────────────────────────────────────
     if start_offset == 0:

@@ -174,12 +174,14 @@ def _check_2e_verify(words: list[dict]) -> list[str]:
 
     Agents may use curly quotes (U+201C/U+201D) instead of ASCII straight
     quotes when writing JSON, which breaks json.load().  This check scans
-    all string fields in the merged output for these characters.
+    English/format fields only — translation_cn and definition_cn are
+    excluded because curly quotes are legitimate Chinese punctuation
+    (DeepL output often contains U+201C/U+201D for quotation marks).
     """
     warnings: list[str] = []
     string_fields = (
         'word', 'lemma', 'forms', 'pos', 'dep', 'spacy_lemma',
-        'sentence', 'ipa', 'definition_cn', 'translation_cn',
+        'sentence', 'ipa',
     )
     for w in words:
         word = w.get('word', '?')

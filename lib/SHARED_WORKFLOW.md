@@ -205,8 +205,9 @@ safely truncated are returned unchanged with ``_needs_manual: true``.
 4. **计算偏移**: 完整句中目标词的新字符位置 → 更新 `target_offset`
 5. **验证**: 用 `build_sentence_regex()` 验证完整句在源文本中可匹配:
    ```python
+   import re, sys
+   sys.path.insert(0, '.')
    from lib.utils import build_sentence_regex
-   import re
    assert re.search(build_sentence_regex(complete), source_text), \
        "sentence must be a continuous substring of source"
    ```
