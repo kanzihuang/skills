@@ -564,6 +564,70 @@ quotes in all string fields.
 Symptom: `json.JSONDecodeError` when merging chunks.  Check: run
 `check_step_completed.py --step 2E-verify` on the merged JSON.
 
+### filter_pipeline.py Anki dedup never matches (lemma extraction bug)
+
+`query_anki_existing()` extracts `{lemma}_{pos}` from WordId via `rsplit("_", 1)[0]`
+(e.g. `"abode_NOUN"`).  `_lemma_handled()` compares bare lemma (`"abode"`) against
+this set — `"abode" not in {"abode_noun"}` is always True, so the Anki dedup
+silently fails, showing "0 in Anki" even with hundreds of existing cards.
+
+**Fix (2026-07-09)**: `query_anki_existing()` now also adds the bare lemma
+(extracted from `{lemma}_{pos}` via `.split("_", 1)[0]`) to the same set.
+This enables `_lemma_handled`'s lemma-level check to succeed.  Exact
+`{lemma}_{pos}` dedup is still performed by `sync_anki.py` at sync time.
+
+Symptom: filter pipeline shows "0 in Anki" when cards already exist.
+Check: query Anki directly `curl ... findNotes WordId:*_{bookId}` and
+compare count against filter output.
+
+Same fix applied to `ankiconnect.py:query_anki_all_lemmas()`.
+
+### sync_anki.py deck resolution: highlight cards landing in graded subdeck
+
+`find_deck_for_book_id()` returned the first card's full deck path (e.g.
+`"X - 分级词汇::X - 分级词汇 - COCA 4"`), and `sync_anki.py` blindly
+overrode the derived deck name with it.  This caused highlight-mode cards
+to land in vocab-book's graded subdecks.
+
+**Fix (2026-07-09)**: Deck resolution moved from `find_deck_for_book_id()`
+(which now returns raw deck names) into `sync_anki.py` caller with mode-aware logic:
+- Subdeck hierarchy (`::COCA 4`) → extract top-level parent
+- Highlight mode (`book_id` present, no `suffix`) → strip ` - 分级词汇` suffix
+- Vocab-book mode (`suffix` present) → keep graded suffix
+- Only override when resolved name differs from `_derive_deck_name()`
+
+Symptom: highlight-mode Anki cards appear in `... - 分级词汇::... - COCA 5-20`
+instead of the main deck `{title} ({author})`.
+
+### char_offset drift from normalization that removes characters
+
+`_sentence_char_offset()` computed `char_offset = match_start + target_offset`.
+But `target_offset` is measured in the fully-normalized sentence (after
+`_normalize_dialogue_attribution` joins `\\n\\n` → ` ` and
+`_merge_adjacent_fragments` concatenates fragments), while `match_start`
+is in text that only went through `_normalize_quotes`.  When normalization
+removed characters before the target word, the offset was wrong.
+
+**Fix (2026-07-09)**: `_sentence_char_offset()` now accepts an optional
+`forms` parameter and uses word-boundary regex search from the match
+position instead of `target_offset` arithmetic.  The caller passes
+`all_forms` to enable this.
+
+Symptom: `source[char_offset:char_offset+len(word)]` returns wrong text
+(e.g. `"ry tedi"` instead of `"tedious"`).  Step 2B truncation from source
+text fails.
+
+### Step 2E POS abbreviations: agents used Chinese inconsistently
+
+`SHARED_WORKFLOW.md` Step 2E field description said `格式 [词性] 释义`
+which agents interpreted differently — some used `[名]`/`[动]` (Chinese),
+others `[n.]`/`[v.]` (English).  `check_step_completed.py` only accepts
+English abbreviations.
+
+**Fix (2026-07-09)**: Field description now specifies English-only
+abbreviations with an explicit mapping: NOUN→`[n.]`, VERB→`[v.]`,
+ADJ→`[adj.]`, ADV→`[adv.]`, ADP→`[prep.]`, PROPN→`[n.]`.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
