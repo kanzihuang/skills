@@ -760,6 +760,36 @@ class TestPOSCorrections:
         jupiter = [w for w in j_entry if w["lemma"] == "Jupiter"]
         assert len(jupiter) == 1, f"expected Jupiter PROPN, got {[w['lemma'] for w in j_entry]}"
 
+    def test_mid_sentence_capitalized_noun_becomes_propn(self):
+        """Mid-sentence capitalised NOUN → PROPN.
+
+        spaCy sometimes tags proper nouns as NOUN depending on sentence
+        context (e.g. "on the Terrace" vs "into the Terrace").  Capitalisation
+        mid-sentence is a strong proper-noun signal in English.
+        """
+        result = _run_pipeline(
+            [{"lemma": "terrace", "rep": "terrace",
+              "forms": ["terrace"], "coca_level": 4}],
+            "They sat on the Terrace and many fishermen made fun of him.\n"
+            "He went into the Terrace and ordered coffee.",
+        )
+        words = result["words"]
+        assert len(words) == 1, \
+            f"Both Terrace usages should merge into one PROPN group, got {len(words)}"
+        assert words[0]["pos"] == "PROPN", \
+            f"expected PROPN, got {words[0]['pos']}"
+
+    def test_mid_sentence_lowercase_noun_stays_noun(self):
+        """Lowercase mid-sentence NOUN stays NOUN (not spuriously converted)."""
+        result = _run_pipeline(
+            [{"lemma": "gulf", "rep": "gulf",
+              "forms": ["gulf"], "coca_level": 4}],
+            "The dark water of the true gulf is the greatest healer.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "NOUN", \
+            f"lowercase 'gulf' should stay NOUN, got {w['pos']}"
+
 
 # ── char_offset word-boundary matching ──
 

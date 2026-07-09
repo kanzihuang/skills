@@ -769,6 +769,15 @@ def process_words(
                         and token_lower not in _all_lowercase_words):
                     pos = "PROPN"
 
+                # Mid-sentence capitalized NOUN → PROPN.  In English, a
+                # common noun capitalised mid-sentence is almost always a
+                # proper noun (e.g. "the Terrace", "Gulf Stream").  Only
+                # fires when spaCy originally tagged the token as NOUN
+                # (not PROPN→NOUN conversions — those were intentional).
+                if (not _was_propn and pos == "NOUN" and token.i != 0
+                        and token.text and token.text[0].isupper()):
+                    pos = "PROPN"
+
                 key = (lemma.lower(), pos)
 
                 cand = {
