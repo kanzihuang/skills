@@ -5,6 +5,9 @@ has 'target_offset', 'matched_form', and 'text' fields. No candidates
 array — only the best entry per (lemma, pos) is retained.
 """
 
+import io
+import sys
+
 import pytest
 from lib.scripts.match_sentences import (
     split_sentences,
@@ -18,11 +21,64 @@ from lib.scripts.match_sentences import (
     _first_word_boundary_offset,
     _is_fragment,
     _merge_adjacent_fragments,
+    process_words,
 )
 from lib.scripts.check_step_completed import _has_sentence_ending
 
 
-# ── PySBD sentence splitting ──
+# ── spaCy preload (session-scoped to avoid per-test cold starts) ──
+
+_nlp = None
+
+
+def _get_nlp():
+    """Load spaCy once — first call pays the ~5s cost, rest are free."""
+    global _nlp
+    if _nlp is None:
+        from lib.utils import _get_spacy
+        _nlp = _get_spacy(enable_parser=True)
+    return _nlp
+
+
+@pytest.fixture(scope="session")
+def nlp():
+    """Session-scoped spaCy fixture for tests that need explicit injection."""
+    model = _get_nlp()
+    if model is None:
+        pytest.skip("spaCy not available")
+    return model
+
+
+# ── In-process pipeline helper (replaces subprocess for speed) ──
+
+
+def _run_pipeline(in_coca: list[dict], text: str, extra_args: list[str] | None = None,
+                  *, nlp=None) -> dict:
+    """Run process_words() in-process — reuses pre-loaded spaCy model."""
+    if nlp is None:
+        nlp = _get_nlp()
+    start_offset = 0
+    end_offset = None
+    if extra_args:
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--start-offset", type=int, default=0)
+        parser.add_argument("--end-offset", type=int, default=None)
+        ns, _ = parser.parse_known_args(extra_args)
+        start_offset = ns.start_offset
+        end_offset = ns.end_offset
+
+    data = {
+        "suffix": "test00000000",
+        "in_coca": in_coca,
+    }
+    return process_words(
+        data, text,
+        start_offset=start_offset,
+        end_offset=end_offset,
+        source_text_path="<test>",
+        nlp=nlp,
+    )
 
 
 def test_standard_sentence_split():
@@ -385,41 +441,6 @@ class TestIsFragment:
 
 # ── POS correction ──
 
-
-def _run_pipeline(in_coca: list[dict], text: str, extra_args: list[str] | None = None) -> dict:
-    """Run match_sentences.py pipeline on minimal inputs, return words dict."""
-    import json, subprocess, tempfile, os
-    from pathlib import Path
-
-    filter_json = {
-        "suffix": "test00000000",
-        "in_coca": in_coca,
-    }
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as fj:
-        json.dump(filter_json, fj)
-        fj_path = fj.name
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as ft:
-        ft.write(text)
-        txt_path = ft.name
-
-    try:
-        # Use vocab-book skill root (not shared lib) — symlink-aware
-        _repo = Path(__file__).resolve().parent.parent.parent  # skills/
-        _skill_root = _repo / "vocab-book"
-        python = _skill_root / ".venv" / "bin" / "python3"
-        ms_script = _skill_root / "lib" / "scripts" / "match_sentences.py"
-        cmd = [str(python), str(ms_script), fj_path, txt_path]
-        if extra_args:
-            cmd.extend(extra_args)
-        result = subprocess.run(
-            cmd,
-            capture_output=True, text=True, timeout=90,
-        )
-        idx = result.stdout.index('{\n  "book_title"')
-        return json.loads(result.stdout[idx:])
-    finally:
-        os.unlink(fj_path)
-        os.unlink(txt_path)
 
 
 class TestPOSCorrections:
@@ -875,51 +896,55 @@ class TestCheckStepCompleted:
 def _run_pipeline_json_out(in_coca: list[dict], text: str,
                            extra_args: list[str] | None = None,
                            filter_extra: dict | None = None) -> dict:
-    """Run match_sentences.py with --json-out, return parsed output dict.
+    """Run process_words() in-process; capture stderr for test verification.
 
-    Unlike _run_pipeline() which parses stdout, this reads the --json-out file
-    and verifies stdout is clean (no JSON leaked to stdout).
+    Unlike the old subprocess-based version that read a --json-out file,
+    this calls process_words() directly and captures stderr via redirect.
     """
-    import json, subprocess, tempfile, os
-    from pathlib import Path
+    import io
 
-    filter_json = {
+    start_offset = 0
+    end_offset = None
+    book_title = None
+    book_author = None
+    if extra_args:
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--start-offset", type=int, default=0)
+        parser.add_argument("--end-offset", type=int, default=None)
+        parser.add_argument("--book-title", type=str, default=None)
+        parser.add_argument("--book-author", type=str, default=None)
+        ns, _ = parser.parse_known_args(extra_args)
+        start_offset = ns.start_offset
+        end_offset = ns.end_offset
+        book_title = ns.book_title
+        book_author = ns.book_author
+
+    data = {
         "suffix": "test00000000",
         "in_coca": in_coca,
     }
     if filter_extra:
-        filter_json.update(filter_extra)
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as fj:
-        json.dump(filter_json, fj)
-        fj_path = fj.name
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as ft:
-        ft.write(text)
-        txt_path = ft.name
+        data.update(filter_extra)
 
-    out_path = fj_path + ".out.json"
-
+    nlp = _get_nlp()
+    old_stderr = sys.stderr
+    sys.stderr = io.StringIO()
     try:
-        _repo = Path(__file__).resolve().parent.parent.parent  # skills/
-        _skill_root = _repo / "vocab-book"
-        python = _skill_root / ".venv" / "bin" / "python3"
-        ms_script = _skill_root / "lib" / "scripts" / "match_sentences.py"
-        cmd = [str(python), str(ms_script), fj_path, txt_path,
-               "--json-out", out_path]
-        if extra_args:
-            cmd.extend(extra_args)
-        result = subprocess.run(
-            cmd,
-            capture_output=True, text=True, timeout=90,
+        output = process_words(
+            data, text,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            book_title=book_title,
+            book_author=book_author,
+            source_text_path="<test>",
+            nlp=nlp,
         )
-        with open(out_path) as f:
-            output = json.load(f)
-        # Return stdout too for verification
-        output['_test_stdout'] = result.stdout
-        return output
+        output['_test_stdout'] = sys.stderr.getvalue()
     finally:
-        for p in [fj_path, txt_path, out_path]:
-            if os.path.exists(p):
-                os.unlink(p)
+        sys.stderr = old_stderr
+
+    return output
 
 
 class TestJsonOut:

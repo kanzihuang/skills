@@ -555,32 +555,61 @@ def main():
     from lib.utils import validate_plain_text
     validate_plain_text(text, text_path)
 
+    output = process_words(
+        data, text,
+        start_offset=args.start_offset,
+        end_offset=args.end_offset,
+        book_title=args.book_title,
+        book_author=args.book_author,
+        source_text_path=text_path,
+    )
+
+    if args.json_out:
+        with open(args.json_out, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
+    else:
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+
+
+def process_words(
+    data: dict,
+    text: str,
+    start_offset: int = 0,
+    end_offset: int | None = None,
+    book_title: str | None = None,
+    book_author: str | None = None,
+    source_text_path: str = "",
+    nlp=None,
+) -> dict:
+    """Run the full sentence-matching pipeline on *data* against *text*.
+
+    This is the core of Step 2A — usable both from the CLI (via ``main()``)
+    and programmatically from tests or scripts.  *nlp* is an optional
+    pre-loaded spaCy model; if omitted, one is loaded automatically.
+    """
+    # ── load spaCy (if not provided) ────────────────────────────────────
+    if nlp is None:
+        import spacy
+        from lib.utils import _get_spacy
+        nlp = _get_spacy(enable_parser=True)
+        if nlp is None:
+            raise RuntimeError("spaCy not available")
+
     # ── preamble detection ──────────────────────────────────────────────
-    start_offset = args.start_offset
     if start_offset == 0:
         story_start = detect_story_start(text)
         if story_start > 0:
             print(f"  [info] Preamble skipped: {story_start} chars", file=sys.stderr)
             start_offset = story_start
     elif start_offset < 0:
-        # Negative values: disable preamble detection, use full text
         start_offset = 0
-
-    # ── load spaCy ───────────────────────────────────────────────────────
-    import spacy
-    from lib.utils import _get_spacy
-
-    nlp = _get_spacy(enable_parser=True)
-    if nlp is None:
-        print("ERROR: spaCy not available", file=sys.stderr)
-        sys.exit(1)
 
     words = data['in_coca']
     total = len(words)
 
     # ── Step 1: split sentences once ─────────────────────────────────────
-    if args.end_offset is not None:
-        source_slice = text[start_offset:args.end_offset]
+    if end_offset is not None:
+        source_slice = text[start_offset:end_offset]
         sentences = split_sentences(source_slice, source_slice)
     else:
         source_slice = text[start_offset:]
@@ -839,22 +868,16 @@ def main():
     print(f"  Words matched: {len(matched_indices)}/{total} → {len(results)} (lemma,pos) groups",
           file=sys.stderr)
 
-    output = {
-        'book_title': args.book_title if args.book_title else data.get('book_title', ''),
-        'book_author': args.book_author if args.book_author else data.get('book_author', ''),
+    return {
+        'book_title': book_title if book_title else data.get('book_title', ''),
+        'book_author': book_author if book_author else data.get('book_author', ''),
         'deck_name': data.get('deck_name', ''),
-        'source_text_path': text_path,
+        'source_text_path': source_text_path,
         'book_id': data.get('book_id', ''),
         'suffix': data.get('suffix', ''),
         'words': results,
         'excluded': data.get('excluded', []),
     }
-
-    if args.json_out:
-        with open(args.json_out, "w", encoding="utf-8") as f:
-            json.dump(output, f, ensure_ascii=False, indent=2)
-    else:
-        print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':
