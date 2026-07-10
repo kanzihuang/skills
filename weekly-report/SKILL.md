@@ -14,12 +14,13 @@ Generate a weekly work report from daily report text. The daily reports typicall
 Read through all daily reports and:
 1. Extract all "今日工作总结" items across all days
 2. Group similar items into the following categories:
-   - **CICD**: CI/CD platform items (project creation, build/deploy/environment troubleshooting, technical support)
+   - **CICD**: CI/CD platform items (project creation, build/deploy/environment troubleshooting, technical support). Note: 镜像打包/镜像构建排查 goes to 其他工作, not CICD.
    - **云运维**: cloud operations items (Huawei Cloud certification, domain resolution, cloud infrastructure)
    - **数据备份**: data backup items (backup reports)
    - **运维自动化**: operations automation items (automated monitoring, auto-remediation)
-   - **其他工作**: miscellaneous items that don't fit above (LDAP, audits, handover, meetings)
+   - **其他工作**: miscellaneous items including LDAP, 运维审计, 运维巡检, 镜像打包排查, audits, handover, meetings — anything that doesn't clearly fit the above four categories
 3. Identify the week range from the dates (e.g., "6.22 — 6.26")
+4. Order categories by item count descending (most items first), except **其他工作** which is always placed last regardless of count
 
 **Important:** If a category has no specific work items for the week, omit it from the report. Only include categories with actual content.
 
@@ -89,9 +90,9 @@ Critical rules:
 
 ### Step 4: Save Files
 
-Save both files to the current working directory:
-- `[week-file-name].md` — Markdown version
-- `[week-file-name].html` — HTML version
+Save both files to `/tmp/weekly-report/` (create the directory first if needed):
+- `/tmp/weekly-report/[week-file-name].md` — Markdown version
+- `/tmp/weekly-report/[week-file-name].html` — HTML version
 
 Naming convention: `YYYY-Www.md` / `YYYY-Www.html` (e.g., `2026-W26.md`)
 
@@ -137,4 +138,4 @@ Both approaches copy HTML to the Windows clipboard in proper HTML clipboard form
 ...
 ```
 
-**Output:** A merged weekly report grouping items under categories (CICD, 云运维, 数据备份, 运维自动化, 其他工作), without day range annotations, plus a consolidated next-week plan, saved as .md and .html, HTML copied to clipboard and opened in browser. Empty categories are omitted.
+**Output:** A merged weekly report grouping items under categories (CICD, 云运维, 数据备份, 运维自动化, 其他工作), ordered by work count descending with 其他工作 last, without day range annotations, plus a consolidated next-week plan, saved as .md and .html under `/tmp/weekly-report/`, HTML copied to clipboard and opened in browser. Empty categories are omitted.
