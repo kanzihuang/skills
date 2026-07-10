@@ -474,6 +474,30 @@ This is an inherent limitation of mechanical POS analysis — distinguishing "di
 
 Symptom: `lemma` is a verb base not appearing in the text (e.g. "dishearten" for "disheartened"). Check: entries where `lemma != word` and `word` ends in `-ed` following a be-form.
 
+### VBD/VBN + advcl + no verbal dependents → ADJ (depictive predicate adjectives)
+
+**Change (2026-07-10)**: Added mechanical detection of depictive predicate adjectives.
+A lone past participle (`tag_` in `VBD`, `VBN`) in `dep=advcl` position with
+no children other than punctuation is a depictive predicate adjective, not a
+true adverbial clause.  E.g. "went away, **puzzled**." — "very puzzled" test
+confirms ADJ.
+
+The rule is gated by three conditions to prevent false positives:
+1. `tag_ in ("VBD", "VBN")` — only past participles; present participles
+   (`VBG`, e.g. "smiling") are excluded because they are more often genuinely
+   verbal
+2. No verbal dependents — genuine adverbial clauses have structure (subjects,
+   objects); a lone participle is adjectival
+3. `dep_ == "advcl"` — other dependency relations (`acl`, `ROOT`) are not
+   affected
+
+The *lemma* is also set to the surface form (`token_lower`) to prevent
+lemmatizer reduction (e.g. "puzzled" stays "puzzled" not "puzzle").
+
+Symptom: "puzzled" / "exhausted" tagged VERB+advcl instead of ADJ.
+Check: `grep '"dep": "advcl"'` in match_sentences output for VBD/VBN entries
+that pass the "very + word" test.
+
 ### smart_truncate() — automated sentence truncation (Step 2B pre-pass)
 
 **Change (2026-07-09)**: `smart_truncate()` added to `match_sentences.py` as a mechanical pre-pass before Step 2B Claude review.  Truncates sentences >250 chars from the END only (preserving `target_offset`).  Scans backwards for sentence-ending punctuation (`.!?`), handles unclosed double quotes by walking back to the opening quote, and avoids ending on function words.
