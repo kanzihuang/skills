@@ -167,8 +167,9 @@ def main():
     # clean_mark strips sentence-boundary punctuation (e.g. "vexed." → "vexed")
     #
     # Also extract chapter info: each highlight has a chapterUid; chapters[]
-    # maps chapterUid → title. We preserve this so Step 3.0 can narrow
-    # sentence-matching to the chapter the word was highlighted in.
+    # maps chapterUid → title. This is preserved in JSON output's "chapters"
+    # field per word (see --json-out), used downstream for chapter-context
+    # reference in sentence matching.
     chapters_raw = data.get("chapters", [])
     chapter_map: dict[int, str] = {}
     for ch in chapters_raw:
