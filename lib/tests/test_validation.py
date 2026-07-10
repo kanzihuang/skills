@@ -59,11 +59,13 @@ def test_target_offset_mismatch():
 
 def test_sentence_too_long():
     """Sentence >MAX_SENTENCE_LENGTH is a hard error."""
-    base = ("He adjusted the sack and carefully worked the line so that it came "
-            "across a new part of his shoulders and, holding it anchored with his "
-            "shoulders, he leaned forward and braced himself against the weight "
-            "of the fish as it pulled with tremendous force against the line that "
-            "he had so carefully prepared")
+    base = (
+        "He adjusted the sack and carefully worked the line so that it came "
+        "across a new part of his shoulders and, holding it anchored with his "
+        "shoulders, he leaned forward and braced himself against the weight "
+        "of the fish as it pulled with tremendous force against the line that "
+        "he had so carefully prepared. " * 2
+    )
     assert len(base) > MAX_SENTENCE_LENGTH, \
         f"Test sentence should be >{MAX_SENTENCE_LENGTH} chars: got {len(base)}"
     w = make_word(word="anchored", sentence=base, target_offset=base.index("anchored"))

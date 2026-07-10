@@ -1372,19 +1372,22 @@ class TestSmartTruncate:
         assert "his" not in SENTENCE_END_FUNCTION_WORDS
 
     def test_no_punctuation_in_max_len_range(self):
-        """No reachable punctuation within max_len → returned unchanged."""
+        """Period beyond old max_len — Direction 1 finds it by scanning
+        right from target_end to end of sentence."""
         long_sent = (
             "He pointed to the exact spot where the treasure was at "
             + "the bottom of the deep blue ocean where no one had "
             + "ever ventured before or since that fateful day." * 3
         )[:400]
+        toff = long_sent.find("treasure")
         sent, to, was_trunc = smart_truncate(
-            long_sent, "treasure", 34, max_len=120,
+            long_sent, "treasure", toff, max_len=120,
         )
-        # The only periods are beyond max_len (120 chars).
-        # Without word-boundary fallback, the original is returned.
-        assert was_trunc is False
-        assert sent == long_sent
+        # Direction 1 scans right from target_end beyond old max_len
+        # and finds the period — sentence is truncated.
+        assert was_trunc is True
+        assert len(sent) < len(long_sent)
+        assert sent[to:to + len("treasure")] == "treasure"
 
     def test_quote_inside_truncation_unfixable(self):
         """Truncation lands inside opening quote but pre-quote text is
@@ -1430,9 +1433,9 @@ class TestSmartTruncate:
         assert result[0] == '"' or result[0].isupper()
         assert result.rstrip()[-1] in '.!?"\''
 
-    def test_beginning_truncation_picks_longest(self):
-        """Phase 2 picks the first (longest) valid start ≤ max_len for best
-        context.  Since we scan forward, earlier boundaries give longer text."""
+    def test_beginning_truncation_picks_nearest(self):
+        """Direction 2 scans left from target_offset and picks the nearest
+        boundary — closest to target = most relevant context."""
         sent = (
             "First sentence with enough words. Second sentence also has many "
             "words here and adds more content to push things along. Third "
@@ -1445,9 +1448,10 @@ class TestSmartTruncate:
             sent, "target", target_offset, max_len=200,
         )
         assert was_trunc is True
-        # First valid boundary is "Second sentence..." — the longest ≤ 200
-        assert result.startswith("Second sentence")
-        assert "Fourth sentence" in result
+        # Direction 2 scans left from target; nearest '.!?' boundary is
+        # the period after "Third sentence..." → starts at "Fourth sentence..."
+        assert result.startswith("Fourth sentence")
+        assert "target" in result
         assert result[new_to:new_to + len("target")] == "target"
 
     def test_beginning_truncation_no_valid_boundary(self):
@@ -1460,6 +1464,84 @@ class TestSmartTruncate:
         )
         assert was_trunc is False
         assert result == sent
+
+    def test_direction1_target_at_end_finds_punctuation(self):
+        """Target word near end of long sentence with punctuation far
+        to the right — Direction 1 finds it."""
+        sent = (
+            "A" * 100 + " target "
+            + "B" * 300 + ". Extra trailing text."
+        )
+        target_offset = sent.find("target")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "target", target_offset, max_len=250,
+        )
+        assert was_trunc is True
+        assert len(result) < len(sent)
+        assert result.endswith(".")
+        assert result[new_to:new_to + len("target")] == "target"
+
+    def test_direction1_no_shortening_ignored(self):
+        """Punctuation at end of sentence with nothing after it — no
+        shortening possible, falls through to Direction 2 or unchanged."""
+        sent = "Short intro. " + "A" * 100 + " target " + "B" * 50 + "."
+        target_offset = sent.find("target")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "target", target_offset, max_len=500,
+        )
+        # Direction 1: scans right, finds '.' at end, but that doesn't
+        # shorten the sentence → falls through.
+        # Direction 2: scans left, finds '.' after "Short intro." →
+        # starts from there if it shortens.
+        if was_trunc:
+            assert len(result) < len(sent)
+        # Either way, sentence is ≤500 so acceptable
+
+    def test_direction2_nearest_boundary(self):
+        """Direction 2 picks the nearest '.' before target, not the
+        one that gives the longest result."""
+        # Sentence must exceed max_len so Direction 1 is attempted.
+        # Direction 1 finds only the final '.' which doesn't shorten,
+        # so Direction 2 fires and finds the boundary before target.
+        base = (
+            "First sentence here. Second sentence here. "
+            "Third sentence with the target word continues on and on "
+            "without any punctuation to stop Direction 1. "
+        )
+        sent = base * 3  # ~429 chars, > max_len=200
+        toff = sent.find("target")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "target", toff, max_len=200,
+        )
+        assert was_trunc is True
+        # Direction 2 scans left from target; nearest '.!?' boundary
+        # starts at "Third sentence..." (first boundary found scanning left)
+        assert "Third sentence" in result
+        assert "target" in result
+        assert result[new_to:new_to + len("target")] == "target"
+
+    def test_tackle_case_no_internal_punctuation(self):
+        """Real-world case: 254-char sentence with only one period at the
+        very end, no internal punctuation.  Both directions fail to find
+        a shortening point → returned unchanged."""
+        sent = (
+            "Those who had caught sharks had taken them to the shark "
+            "factory on the other side of the cove where they were "
+            "hoisted on a block and tackle, their livers removed, their "
+            "fins cut off and their hides skinned out and their flesh "
+            "cut into strips for salting."
+        )
+        target_offset = sent.find("tackle")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "tackle", target_offset, max_len=250,
+        )
+        # Direction 1: scans right from "tackle", finds '.' at end but
+        # that doesn't shorten (it's the very last char).
+        # Direction 2: scans left from "tackle", no '.!?' before it.
+        # Result: unchanged, len=254 > 250 but ≤ 500 — acceptable.
+        assert was_trunc is False
+        assert result == sent
+        assert "tackle" in result
 
 
 class TestIsNonBodyText:

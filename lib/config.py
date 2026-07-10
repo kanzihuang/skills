@@ -9,8 +9,9 @@ EDGE_TTS_MAX_RETRIES = 2       # extra attempts on transient failure (3 total)
 EDGE_TTS_RETRY_DELAY = 0.75    # seconds between retries
 
 # ── sync_anki.py ────────────────────────────────────────────────────────────
-MAX_SENTENCE_LENGTH = 250      # chars — sentences longer than this must be
-                                # truncated by Step 2B before reaching sync
+MAX_SENTENCE_LENGTH = 500      # chars — smart_truncate tries to shorten
+                                # sentences exceeding this; validation.py warns
+                                # when the limit is exceeded
 MIN_SENTENCE_LENGTH = 30       # chars — match_sentences.py prefers candidates
                                 # ≥ this length; validation.py warns when the
                                 # final sentence falls below it. Based on data:

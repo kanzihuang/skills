@@ -90,16 +90,23 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 ---
 
-## Step 2B: 句子审核 + 完整性校验 + 长句截断（Claude，1 agent）
+## Step 2B: 句子审核 + 完整性校验（Claude，1 agent）
 
 > ⚠️ **不可绕过（MUST）**。
 
 ### 2B-0. 自动截断预处理
 
-Before manual editing, run mechanical truncation on all sentences exceeding
-`MAX_SENTENCE_LENGTH` (250 chars).  This provides a best-effort first pass
-that preserves the target word and avoids function-word endings.  Claude
-then reviews and refines only the entries still marked ``_needs_manual``.
+Run mechanical truncation on sentences exceeding ``MAX_SENTENCE_LENGTH``
+(500 chars).  ``smart_truncate()`` scans for sentence-ending punctuation
+(``.!?``) in two directions from the target word:
+
+1. **Right scan** — from *target_end* to end of sentence: truncates at the
+   first ``.!?`` that actually shortens the sentence.
+2. **Left scan** — from *target_offset* towards the beginning: finds the
+   nearest ``.!?`` + space + capital letter boundary, truncates from there.
+
+Sentences that cannot be shortened are kept as-is.  There is no manual
+truncation step.
 
 ```bash
 cd <skill_dir> && .venv/bin/python3 -c "
@@ -110,96 +117,40 @@ from scripts.match_sentences import smart_truncate
 with open('/tmp/vocab-anki-input-<tmp_id>.json') as f:
     data = json.load(f)
 
-needs_manual = 0
 auto_truncated = 0
 for w in data['words']:
     sent = w.get('sentence', '')
     word = w.get('word', '')
     to = w.get('target_offset', -1)
-    if to >= 0 and len(sent) > 250:
+    if to >= 0:
         new_sent, new_to, was_trunc = smart_truncate(sent, word, to)
         w['sentence'] = new_sent
         w['target_offset'] = new_to
         if was_trunc:
             w['_auto_truncated'] = True
             auto_truncated += 1
-        elif len(new_sent) > 250:
-            w['_needs_manual'] = True
-            needs_manual += 1
-            print(f'  NEEDS MANUAL: {w[\"lemma\"]} ({len(new_sent)} chars)')
 
 with open('/tmp/vocab-anki-input-<tmp_id>.json', 'w') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 
-print(f'Auto-truncated: {auto_truncated}, Needs manual: {needs_manual}')
+print(f'Auto-truncated: {auto_truncated}')
 "
 ```
-
-`smart_truncate()` only shortens from the END — *target_offset* is always
-preserved.  It scans backwards from the 250-char limit for sentence-ending
-punctuation (``.!?``).  If the scan lands inside an unclosed double-quoted
-passage, it walks back to before the opening quote and verifies the
-pre-quote text is a complete sentence.  A final check avoids ending on a
-function word (``at``, ``for``, ``with``, …).  Sentences that cannot be
-safely truncated are returned unchanged with ``_needs_manual: true``.
-
-**Dialogue sentence boundaries** (2026-07-10): When punctuation is inside an
-unclosed quote but followed by space + capital letter — a clear sentence
-boundary within dialogue — it is accepted as a valid truncation point.
-After truncation, ``_cleanup_unclosed_quote()`` removes any unbalanced
-opening quote and the text before it, leaving a clean sentence fragment.
-
-**Missing space after punctuation** (2026-07-10): Smart truncation now
-accepts sentence-ending punctuation (``. ! ?``) followed directly by a
-capital letter without an intervening space — a common OCR artifact in
-Internet Archive plain-text editions.  Four patterns are recognised:
-``. X`` (standard), ``.X`` (no space), ``." X`` (quote + space),
-``."X`` (quote + no space).  The same logic applies to Phase 2
-beginning-truncation fallback.
-
-**build_sentence_regex punctuation splitting** (2026-07-10):
-``build_sentence_regex()`` now splits tokens at internal punctuation
-boundaries (e.g. ``"world.I"`` → two tokens ``"world"`` + ``"I"``)
-so the generated regex matches source text regardless of whether
-punctuation has a trailing space.  This makes Step 2B truncation
-verification and fragment merging more robust against OCR spacing
-artifacts.
 
 ### 2B. 手动审核（Claude）
 
 审核重点：
-- ``_needs_manual`` 标记的条目 — 需手工截断或修复
 - ``_auto_truncated`` 标记的条目 — 确认截断位置语义合理
 - 序言/非正文句子（`char_offset` 靠前、内容为作者简介/编辑导语）
 - 语法不完整的句子片段
 - **OCR 标点错误**：句尾 `:` 或 `,` 在语法完整的句子中实为 OCR 对句号的误识别
 
-**目标词由 `target_offset` 定位**（不含 `<b>` 标签）。其余逻辑不变：完整性检查 → **OCR 标点修正** → 长句截断 → 源文本手动提取。
-
 **OCR 标点修正规则**：
 - 检查句子末尾标点：若句尾为 `:` 或 `,` 且句子语法完整（有主语+谓语），且冒号/逗号后面的内容不是对话引语 → 可能是 OCR 对句号的误识别
 - **修正方法**：将句尾 `:` 或 `,` 替换为 `.`。仅修改句子最后一个字符——不要修改句中任何标点
-- 安全原因：此修改发生在 Step 2B（Claude 审查），先于 Step 2C（DeepL 翻译）和 Step 2F（验证）——翻译不会受影响，且替换后的句子仍是源文本的连续子串
-- 非 OCR 错误不要改：句子引导下文的合法冒号（如列表/解释说明）保持不变，`_normalize_dialogue_attribution()` 已处理的对话归属也保持不变
+- 安全原因：此修改发生在 Step 2B（Claude 审查），先于 Step 2C（DeepL 翻译）和 Step 2F（验证）
 
-**OCR 连字符空格修复**：Internet Archive 文本中常见连字符后有多余空格（如 `"fair-to- middling"`）。修正方法：移除连字符两侧多余空格 → `"fair-to-middling"`。此修正先于截断和 DeepL 翻译。
-
-截断规则不变：
-- 目标 ≤250 字符，语法完整，含生词上下文
-- 禁止切掉目标词、禁止以连词/功能词开头或结尾
-- **截断必须从原始源文本做显式字符切片**（`text[start:end]`），不要基于 JSON 中的 sentence 字符串修改——JSON 中的句子经 `_normalize_dialogue_attribution()` 规范化后换行/空格与原始源文本不同
-- **截断后验证**：用 `re.search(build_sentence_regex(truncated), raw_source_text)` 验证（函数位于 `lib/utils.py`，通过 `from lib.utils import build_sentence_regex` 导入）。**不要用 `assert truncated in source_text`** ——精确字符串包含会因规范化差异而误判。此验证的真正价值是防止 Claude 在截断时意外编辑文本（如 "And then look:" → "Look:"），而非验证截断结果在源文本中的存在性
-
-> **已知限制 — OCR 复合词修正后 build_sentence_regex 可能误报**：如果截断时修复了 OCR 连字符空格 artifact（如 `"fair-to- middling"` → `"fair-to-middling"`），`build_sentence_regex` 会将修复后的连字符词视为一个 token（`fair\-to\-middling`），而源文本中仍为空格分隔，导致正则匹配失败。这是预期的误报。处理方式：
-> - 改用显式子串检查：`fixed_sentence.replace('- ', '-').replace(' -', '-') in source_text` 验证连续性
-> - 或确认差异仅为连字符空格后跳过正则验证
-> - 此限制不会影响非 OCR 修复的截断验证
-
-**截断后必须做弯引号规范化**：从源文本手动截断的句子可能包含 Unicode 弯引号（`""''`），`match_sentences.py` 的 `_normalize_quotes()` 不会自动执行。截断完成后立即规范化：
-```python
-sentence = sentence.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
-```
-`check_step_completed.py --step all` 会检测弯引号问题；规范化后需重新验证。
+**OCR 连字符空格修复**：Internet Archive 文本中常见连字符后有多余空格（如 `"fair-to- middling"`）。修正方法：移除连字符两侧多余空格 → `"fair-to-middling"`。此修正先于 DeepL 翻译。
 
 ### 修复因源文本空行产生的碎片句子
 
@@ -241,15 +192,10 @@ sentence = sentence.replace('"', '"').replace('"', '"').replace(''', "'").replac
    ```
 6. **更新 JSON**: 替换 `sentence`、`target_offset`。若修复仅改变目标词之后的文本（扩展被截断的句尾），`target_offset` 不变；若在目标词之前插入文本，需重新计算。`char_offset` = 完整句在源文本中的起始位置（`text.find(complete_sentence)`）+ 新 `target_offset`
 
-> **Note on char_offset**: `smart_truncate()` (Step 2B-0) now handles beginning-truncation
-> automatically via Phase 2, recalculating `target_offset` and preserving correctness.
-> Manual `char_offset` updates are only needed when Claude manually truncates from the
-> beginning in Step 2B (rare after the Phase 2 enhancement).  Use:
-> ```python
-> # Find the new sentence in the source text and recompute char_offset
-> import re; m = re.search(build_sentence_regex(new_sentence), source_text)
-> if m: new_char_offset = m.start() + new_target_offset
-> ```
+> **Note on char_offset**: `smart_truncate()` (Step 2B-0) handles both
+> end-truncation (Direction 1) and beginning-truncation (Direction 2),
+> recalculating `target_offset` automatically.  No manual `char_offset`
+> updates are needed.
 > Note that `sync_anki.py` does not consume `char_offset` — it is a metadata field
 > for external tooling.
 
