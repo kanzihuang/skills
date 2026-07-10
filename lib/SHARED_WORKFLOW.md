@@ -328,7 +328,7 @@ cd <skill_dir> && .venv/bin/python3 \
 ### 例句规则
 
 - 必须是书中真实句子，来自 Step 2A 机械匹配
-- 简洁：1-2 句，通常 ≤250 字符
+- 简洁：1-2 句，通常 ≤500 字符
 - `<b>` 标签由 sync_anki.py 在同步时根据 `target_offset` 拼接
 
 ---

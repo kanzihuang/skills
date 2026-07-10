@@ -97,13 +97,13 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principles:
 
 - **Separation of concerns**: Claude does knowledge work (sentence review, definitions, IPA for heteronyms/cmudict misses), DeepL does mechanical translation, Python does mechanical work (POS analysis, lemmatization, TTS, Anki sync, cmudict IPA).
-- **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 2A). No fabricated or dictionary sentences. Source text unavailable → skip the batch. Sentence selection is also mechanical: `match_sentences.py` scans sentences once (not per-word), does per-sentence spaCy POS analysis, and incrementally updates the best candidate per (lemma,pos) via `_better()` (three-tier XOR comparison: sweet-spot 30-250 > long > very-short). No candidates accumulation.
+- **Source-truth-only sentences**: Book sentences come from mechanically matched source text (Step 2A). No fabricated or dictionary sentences. Source text unavailable → skip the batch. Sentence selection is also mechanical: `match_sentences.py` scans sentences once (not per-word), does per-sentence spaCy POS analysis, and incrementally updates the best candidate per (lemma,pos) via `_better()` (three-tier XOR comparison: sweet-spot 30-500 > long > very-short). No candidates accumulation.
 - **Source-truth-only translations**: Translations must be of the mechanically matched sentence. Never substitute a translation from memory even if you recognize the passage — this causes sentence/translation mismatch.
 - **Incremental safety**: sync mode only adds, never modifies existing cards.
 - **Graceful degradation**: audio failures don't block card generation.
 - **Filter-first**: all mechanical filtering happens BEFORE Claude generates content.
 - **Per-sentence POS-gated lemmatization**: `match_sentences.py` runs spaCy on each selected sentence to determine POS and lemma. Multi-signal adjective detection (POS=ADJ, adjectival dep, VBG+amod, be-to pattern, spacy_lemma==word, PROPN guard, -ly adverb guard). Falls through to lemminflect with the correct POS channel. No global voting — POS is determined from the specific sentence context. Claude does NOT set lemma (it is mechanically authoritative).
-- **Truncate before translate**: sentence truncation (≤250 chars) must complete before DeepL/Claude translation. Never translate then truncate — causes sentence/translation mismatch.
+- **Truncate before translate**: sentence truncation (≤500 chars) must complete before DeepL/Claude translation. Never translate then truncate — causes sentence/translation mismatch.
 - **bookId bridging (vocab-anki)**: `WordId = {lemma}_{pos}_{bookId}` enables precise Anki ↔ WeRead matching and prevents cross-POS collisions.
 - **WordId isolation (vocab-book)**: `WordId = {lemma}_{pos}_{suffix}` — UUID suffix isolates cards from other batches; POS prevents same-lemma different-POS collisions.
 - **IPA from cmudict**: IPA is generated mechanically by `match_sentences.py` from the CMU Pronouncing Dictionary. Claude only provides IPA for cmudict misses and heteronym disambiguation.
@@ -120,9 +120,10 @@ Step 2B（句子选择+截断）和 Step 2F（内容验证）是质量门禁，�
 - 定义质量（如一词多译时的不一致）
 - 翻译-释义对齐
 
-**Step 2B pre-pass**: Run `smart_truncate()` mechanically before manual review to
-handle the 80% case (tail-truncate at sentence boundaries).  Claude then only
-reviews entries still marked `_needs_manual`.  See `lib/SHARED_WORKFLOW.md` Step 2B-0.
+**Step 2B pre-pass**: Run `smart_truncate()` mechanically to shorten sentences
+exceeding `MAX_SENTENCE_LENGTH` by scanning for `.`, `!`, `?` boundaries in two
+directions from the target word.  Sentences that cannot be shortened are kept
+as-is — no manual truncation needed.  See `lib/SHARED_WORKFLOW.md` Step 2B-0.
 
 自动检查（`validation.py`，可由 `sync_anki.py` 内部调用或独立运行 `python -m lib.validation <json>`）只做格式校验，不做语义校验。每步执行后运行 check_step_completed.py 验证（支持 `--step 2B`, `--step 2B-verify`, `--step 2E`, `--step 2F`, `--step 2F-dup`, `--step all`）。
 
@@ -539,16 +540,15 @@ with postposed particles or SCONJ advmod children.
 
 ### smart_truncate() — automated sentence truncation (Step 2B pre-pass)
 
-**Change (2026-07-09)**: `smart_truncate()` added to `match_sentences.py` as a mechanical pre-pass before Step 2B Claude review.  Truncates sentences >250 chars from the END only (preserving `target_offset`).  Scans backwards for sentence-ending punctuation (`.!?`), handles unclosed double quotes by walking back to the opening quote, and avoids ending on function words.
+**Change (2026-07-09)**: `smart_truncate()` added to `match_sentences.py` as a mechanical pre-pass before Step 2B Claude review.  Scans for sentence-ending punctuation (`.!?`) in two directions from the target word.  Sentences that cannot be shortened are kept as-is.
 
-**Change (2026-07-10)**: Phase 1 now accepts `. ! ?` followed by space + capital letter as a sentence boundary even when inside an unclosed quote — this handles multi-quote dialogue where the scan range doesn't reach the closing quote.  A new `_cleanup_unclosed_quote()` helper removes unbalanced opening quotes and preceding text from truncated results, preserving the target word.
+**Change (2026-07-10)**: Rewritten from max_len-window scan to two-direction scan: right (end-truncation at first `.`, `!`, `?` after target) and left (beginning-truncation at nearest `.`, `!`, `?` + capital before target).  `MAX_SENTENCE_LENGTH` raised from 250 to 500.  Manual truncation (`_needs_manual`) removed — sentences smart_truncate cannot shorten are accepted as-is.
 
 Run after `match_sentences.py` (Step 2A), before Step 2B Claude review:
 
 ```python
 from lib.scripts.match_sentences import smart_truncate
 new_sent, new_to, was_trunc = smart_truncate(sentence, word, target_offset)
-# was_trunc=False + len(sentence) > 250 → needs manual review
 ```
 
 `SENTENCE_END_FUNCTION_WORDS` in `lib/config.py` is the shared set of function words
@@ -615,21 +615,16 @@ commands for splitting JSON into ≤25-word chunks, launching parallel agents,
 and merging results.  See `lib/SHARED_WORKFLOW.md` Step 2E for the documented
 pattern.
 
-### smart_truncate no longer forces word-boundary truncation
+### smart_truncate two-direction rewrite (2026-07-10)
 
-**Change (2026-07-09)**: `smart_truncate()` step 3d (word-boundary fallback) has been
-removed.  When no sentence-ending punctuation (`.!?`) is found within `max_len` chars,
-the function now returns the original sentence unchanged with `was_truncated=False`.
-Entries with `len(sentence) > 250` are then flagged `_needs_manual` for Step 2B
-Claude review.
-
-Previously, smart_truncate would truncate at the last word boundary before `max_len`,
-producing fragments like `"…and started"` without terminal punctuation.  A missing
-period is a cosmetic issue, but truncating mid-clause at an arbitrary word boundary
-produces unreadable sentences — worse than leaving the entry for manual review.
-
-Symptom: `was_truncated=False` for sentences >250 chars with no internal `.`, `!`, or `?`.
-Check: `grep '"sentence":' | awk 'length($0) > 250'` after Step 2B-0.
+**Change (2026-07-10)**: `smart_truncate()` rewritten from max_len-window scan to
+two-direction scan from the target word.  Direction 1 scans right from
+*target_end* for the first `.`, `!`, `?` that shortens the sentence.
+Direction 2 scans left from *target_offset* for the nearest `.`, `!`, `?` +
+capital boundary.  Both reuse existing quote-handling logic (dialogue
+boundaries, opening-quote walk-back).  `MAX_SENTENCE_LENGTH` raised from
+250 to 500.  Sentences that cannot be shortened by either direction are
+kept as-is — no `_needs_manual` flag, no manual truncation.
 
 ### Non-body-text auto-exclusion (`_is_non_body_text`)
 
@@ -762,20 +757,17 @@ Symptom: "Already in deck: 0" even when re-running with existing cards;
 Check: run with ``--dry-run`` on a deck with existing cards → "Already in deck"
 should be non-zero.
 
-### smart_truncate Phase 2 loses opening quote of quoted speech
+### smart_truncate Direction 2 preserves opening quote of quoted speech
 
 **Change (2026-07-10)**: When a quoted speech passage spans multiple
 sentences inside one set of ``""``, PySBD correctly preserves it as a single
-sentence.  ``smart_truncate`` Phase 2 (beginning-truncation) truncates from
-the left to fit within 250 chars, but slices off the opening ``"`` along
-with the preceding sentences.  ``_cleanup_unclosed_quote`` detects the odd
-quote count but its last-quote-is-unclosed heuristic finds nothing after the
-final ``"`` → returns unchanged.  The opening quote is silently lost,
-producing sentences like ``It is very tedious work," the little prince
-added, "but very easy."`` instead of ``"It is very tedious work," the
-little prince added, "but very easy."``.
+sentence.  ``smart_truncate`` Direction 2 (beginning-truncation) truncates
+from the left, but slices off the opening ``"`` along with the preceding
+sentences.  ``_cleanup_unclosed_quote`` detects the odd quote count but its
+last-quote-is-unclosed heuristic finds nothing after the final ``"`` →
+returns unchanged.  The opening quote is silently lost.
 
-**Fix:** After Phase 2 truncation + ``_cleanup_unclosed_quote``, if the
+**Fix:** After Direction 2 truncation + ``_cleanup_unclosed_quote``, if the
 original sentence starts with ``"`` and the truncated result does not,
 prefix ``"`` and increment ``target_offset`` by 1.
 

@@ -159,7 +159,7 @@ cat /tmp/<safe_title>-*-full.txt | \
 
 关键路径（`<skill_dir>` 内 `lib/` 前缀）：
 - `<skill_dir>/lib/scripts/match_sentences.py` — 句子匹配 + per-sentence spaCy POS 分析 + (lemma,pos) 分组 + cmudict IPA + 碎片自动合并 + `smart_truncate()` 自动截断（Step 2A，一站式机械分析）
-- **Step 2B**: `smart_truncate()` 机械预截断 → Claude 手动审核 `_needs_manual` 标记条目（1 agent，**不可绕过**，目标词由 `target_offset` 定位）
+- **Step 2B**: `smart_truncate()` 机械截断 → Claude 审核截断结果 + 碎片修复 + OCR 标点修正（1 agent，**不可绕过**，目标词由 `target_offset` 定位）
 - `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C）
 - **Step 2E**: 生成释义 + 补 cmudict 未覆盖 IPA + 异读词投票（Claude，N agents 并行，≤25 词/agent，**不碰 lemma**）
 - **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent，**不可绕过**）
