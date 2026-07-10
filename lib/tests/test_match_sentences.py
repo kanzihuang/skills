@@ -795,6 +795,48 @@ class TestPOSCorrections:
             f"lowercase 'gulf' should stay NOUN, got {w['pos']}"
 
 
+    def test_vbd_advcl_no_children_becomes_adj(self):
+        """VBD + advcl + no verbal children → ADJ (depictive predicate)."""
+        result = _run_pipeline(
+            [{"lemma": "puzzle", "rep": "puzzled",
+              "forms": ["puzzled"], "coca_level": 5}],
+            "And the little prince went away, puzzled.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"Expected ADJ, got {w['pos']}"
+
+    def test_vbn_advcl_no_children_becomes_adj(self):
+        """VBN + advcl + no children → ADJ."""
+        result = _run_pipeline(
+            [{"lemma": "exhaust", "rep": "exhausted",
+              "forms": ["exhausted"], "coca_level": 6}],
+            "She stood there, exhausted.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"Expected ADJ, got {w['pos']}"
+
+    def test_vbg_advcl_stays_verb(self):
+        """VBG + advcl stays VERB (present participle more verbal)."""
+        result = _run_pipeline(
+            [{"lemma": "smile", "rep": "smiling",
+              "forms": ["smiling"], "coca_level": 4}],
+            "He left the room, smiling.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "VERB", f"Expected VERB, got {w['pos']}"
+
+    def test_advcl_with_children_stays_verb(self):
+        """VBN + advcl + has children (by-agent) → stays VERB (true passive)."""
+        result = _run_pipeline(
+            [{"lemma": "defeat", "rep": "defeated",
+              "forms": ["defeated"], "coca_level": 6}],
+            "He left the room, defeated by the argument.",
+        )
+        w = result["words"][0]
+        # "defeated by" has a child — true passive verb, not adjective
+        assert w["pos"] == "VERB", f"Expected VERB, got {w['pos']}"
+
+
 # ── char_offset word-boundary matching ──
 
 class TestCharOffsetWordBoundary:

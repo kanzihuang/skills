@@ -936,6 +936,21 @@ def process_words(
                             pos = "ADJ"
                             lemma = token_lower
                             break
+                # VBD/VBN + advcl + no verbal dependents → ADJ.
+                # A lone past participle in advcl position with no
+                # children (other than punct) is a depictive predicate
+                # adjective, not a true adverbial clause.
+                # E.g. "went away, puzzled."  Exclude VBG (present
+                # participles like "smiling") — more often verbal.
+                if (pos == "VERB" and token.dep_ == "advcl"
+                        and token.tag_ in ("VBD", "VBN")):
+                    verbal_children = [
+                        c for c in token.children
+                        if c.dep_ not in ("punct",)
+                    ]
+                    if not verbal_children:
+                        pos = "ADJ"
+                        lemma = token_lower
                 # NOUN+compound→ADJ: spaCy mis-tags some adjectives as noun
                 # compounds (e.g. "primeval forests").  Adjective suffixes
                 # help distinguish from genuine noun compounds ("stone wall").
