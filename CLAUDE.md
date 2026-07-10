@@ -623,8 +623,9 @@ two-direction scan from the target word.  Direction 1 scans right from
 Direction 2 scans left from *target_offset* for the nearest `.`, `!`, `?` +
 capital boundary.  Both reuse existing quote-handling logic (dialogue
 boundaries, opening-quote walk-back).  `MAX_SENTENCE_LENGTH` raised from
-250 to 500.  Sentences that cannot be shortened by either direction are
-kept as-is — no `_needs_manual` flag, no manual truncation.
+250 to 500.  `MIN_TRUNCATION_LENGTH` (100 chars) added — sentences ≤100
+chars are never truncated.  Sentences that cannot be shortened by either
+direction are kept as-is — no `_needs_manual` flag, no manual truncation.
 
 ### Non-body-text auto-exclusion (`_is_non_body_text`)
 
