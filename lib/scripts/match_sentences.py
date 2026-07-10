@@ -270,6 +270,10 @@ def smart_truncate(
     if len(sentence) <= max_len:
         return sentence, target_offset, False
 
+    # Sentences ≤100 chars are short enough — don't risk truncation damage.
+    if len(sentence) <= 100:
+        return sentence, target_offset, False
+
     target_end = target_offset + len(target_word)
 
     # ── Direction 1: scan right from target_end for .!? ───────────────
