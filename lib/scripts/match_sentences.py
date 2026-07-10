@@ -393,6 +393,12 @@ def smart_truncate(
         new_target_offset = target_offset - best_start
         new_sentence, new_target_offset = _cleanup_unclosed_quote(
             new_sentence, target_word, new_target_offset)
+        # Preserve opening quote when truncating quoted speech from the beginning
+        if (sentence and sentence[0] == '"'
+                and new_sentence and new_sentence[0] != '"'
+                and new_target_offset >= 0):
+            new_sentence = '"' + new_sentence
+            new_target_offset += 1
         return new_sentence, new_target_offset, True
 
     # Neither end- nor beginning-truncation could get under max_len.

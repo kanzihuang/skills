@@ -705,11 +705,50 @@ English abbreviations.
 abbreviations with an explicit mapping: NOUN→`[n.]`, VERB→`[v.]`,
 ADJ→`[adj.]`, ADV→`[adv.]`, ADP→`[prep.]`, PROPN→`[n.]`.
 
+### sync_anki.py flat deck `existing` dict key = "" → dedup always skipped
+
+**Change (2026-07-10)**: In flat deck mode (no COCA bands), the `existing`
+dict was keyed by `""` (empty string) at L426 but looked up by `deck_name`
+at L451-452, so ``existing.get(target_deck, {})`` always returned ``{}``.
+The pre-add dedup was completely ineffective — all words passed through,
+and AnkiConnect's own duplicate detection at ``addNotes`` time was the only
+safeguard.  This also caused "Already in deck" to always print 0.
+
+**Fix:** Changed L426 from ``existing = {"": ac.get_word_id_map(deck_name)}``
+to ``existing = {deck_name: ac.get_word_id_map(deck_name)}``, consistent
+with ``_get_existing_per_deck()`` behaviour in the bands code path.
+
+Symptom: "Already in deck: 0" even when re-running with existing cards;
+``addNotes`` batch call fails with duplicate error → slower individual retries.
+Check: run with ``--dry-run`` on a deck with existing cards → "Already in deck"
+should be non-zero.
+
+### smart_truncate Phase 2 loses opening quote of quoted speech
+
+**Change (2026-07-10)**: When a quoted speech passage spans multiple
+sentences inside one set of ``""``, PySBD correctly preserves it as a single
+sentence.  ``smart_truncate`` Phase 2 (beginning-truncation) truncates from
+the left to fit within 250 chars, but slices off the opening ``"`` along
+with the preceding sentences.  ``_cleanup_unclosed_quote`` detects the odd
+quote count but its last-quote-is-unclosed heuristic finds nothing after the
+final ``"`` → returns unchanged.  The opening quote is silently lost,
+producing sentences like ``It is very tedious work," the little prince
+added, "but very easy."`` instead of ``"It is very tedious work," the
+little prince added, "but very easy."``.
+
+**Fix:** After Phase 2 truncation + ``_cleanup_unclosed_quote``, if the
+original sentence starts with ``"`` and the truncated result does not,
+prefix ``"`` and increment ``target_offset`` by 1.
+
+Symptom: sentence has closing quotes and dialogue attribution (``," xxx
+said``) but does not start with ``"``.  Check: ``grep '," '`` in JSON
+output for sentences not starting with ``"``.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 307+ tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
-- **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 14 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
+- **Shared tests** live in `lib/tests/` (pytest, 546+ tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
+- **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.
 - Run all tests before committing:

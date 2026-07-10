@@ -423,8 +423,8 @@ def sync(
 
             # Get existing WordId map from target deck
             print(f"\nQuerying existing cards in deck...")
-            existing = {"": ac.get_word_id_map(deck_name)}
-            print(f"  Found {len(existing[''])} existing cards")
+            existing = {deck_name: ac.get_word_id_map(deck_name)}
+            print(f"  Found {len(existing[deck_name])} existing cards")
     else:
         existing = {}  # prefetch: no Anki connection, skip dedup
 

@@ -1391,7 +1391,9 @@ class TestSmartTruncate:
         assert was_trunc is True
         assert len(result) <= 250
         assert result[new_to:new_to + len("tedious")] == "tedious"
-        assert result[0].isupper()
+        # After Phase 2 beginning-truncation of quoted speech, the opening
+        # quote is preserved — result may start with '"' or uppercase.
+        assert result[0] == '"' or result[0].isupper()
         assert result.rstrip()[-1] in '.!?"\''
 
     def test_beginning_truncation_picks_longest(self):
