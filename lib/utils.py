@@ -90,7 +90,11 @@ def build_sentence_regex(sentence: str) -> str:
     for w in sentence.split():
         w = w.strip(_PUNCT)
         if w:
-            words.append(re.escape(w))
+            # Split on non-alpha to handle punctuation glued to the
+            # next word (common OCR artifact).  E.g. "world.I" → two
+            # tokens "world" + "I" joined by [^\w]*.
+            parts = re.findall(r'[A-Za-z]+', w)
+            words.extend(re.escape(p) for p in parts if p)
     # Join with [^\\w]* to swallow any non-word chars between words
     # (punctuation, whitespace, newlines, quotes).  \\s+ alone misses
     # "I, too" (comma after I) or "tenderness \\nand" (newline).

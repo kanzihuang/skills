@@ -343,6 +343,56 @@ Guard: `head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos` — only
 
 Symptom: "arithmetic" tagged ADJ in a noun list. Check: `grep '"pos": "ADJ"'` in match_sentences output for words in noun coordination.
 
+### spaCy xcomp VERB mis-tag for nouns after "contrary to" (NOT mechanically fixable)
+
+spaCy systematically mis-parses nouns in "contrary/adjective + to + NOUN + to VERB"
+constructions (e.g. "It is contrary to etiquette to yawn").  It treats "to" as an
+infinitive marker (PART+aux) and the following noun as a VERB with `dep=xcomp`.
+This produces entries like `etiquette` tagged VERB.
+
+This cannot be reliably fixed with mechanical POS correction rules:
+- `dep_=pobj` guard does **not** fire (the dep is `xcomp`, not `pobj`)
+- `dep_=pobj` would also produce **false positives** on genuine infinitives that
+  spaCy mis-parses as prepositional objects (e.g. "to yawn" → VERB+pobj)
+- The same surface structure is grammatically ambiguous ("My job is to teach" =
+  legitimate VERB+xcomp)
+
+**Step 2B Claude review MUST catch and fix these.**  Check for NOUN entries
+tagged as VERB whose head is a copula ("be") and where the preceding "to" is
+not a true infinitive marker.  Correction: `pos → "NOUN"`, `definition_cn`
+changed to noun format.
+
+Symptom: common nouns like "etiquette" tagged VERB with `dep=xcomp, head=is`.
+Check: `grep '"pos": "VERB"'` in match_sentences output for words that look
+like nouns following "contrary to" / "subject to" / similar adjective+to patterns.
+
+### spaCy dobj bare-infinitive mis-tag after semi-modals (NOT mechanically fixable)
+
+spaCy mis-parses bare infinitives after semi-modal verbs (dare, need, help)
+as direct objects.  In "What the little prince did not dare confess", "confess"
+is tagged as NOUN with `dep=dobj` in complex cleft sentences, and as ADJ with
+`dep=dobj` in simpler constructions.  The same word produces different POS tags
+in different sentence structures, making a single mechanical rule impossible.
+
+This cannot be reliably fixed with mechanical POS correction rules:
+- `pos_=NOUN + tag_=VB` is impossible in the current spaCy 3.8.0 model
+  (no morphologizer; `pos_` is deterministically derived from `tag_`)
+- `lemminflect.getLemma()` returns the surface form for ALL words (including
+  non-verbs like "apple") — it cannot serve as a verbness filter
+- A head-based check (`token.head.lemma_ in ("dare", "help", "need")`)
+  would work but requires a hard-coded word list, violating the "no hard-coded
+  semantic word lists" design principle
+
+**Step 2F Claude review MUST catch and fix these.**  Check for entries where
+`dep=dobj` and the word follows a semi-modal taking bare infinitives
+(dare, need, help).  In the sentence, verify whether the word functions
+as a bare infinitive rather than a true direct object.
+Correction: `pos → "VERB"`, `definition_cn` changed to verb format.
+
+Symptom: verbs like "confess" tagged NOUN or ADJ with `dep=dobj` after dare.
+Check: `grep '"dep": "dobj"'` in match_sentences output for NOUN/ADJ entries
+whose head word is a semi-modal.
+
 ### Sentence-initial inverted ADJ detection ("Absurd as it might seem")
 
 **Change (2026-07-08)**: `match_sentences.py` main loop now detects sentence-initial inverted adjective constructions. In "Absurd as it might seem" (= "As absurd as..."), spaCy tags "Absurd" as PROPN (capitalized at sentence start), then PROPN→NOUN converts to NOUN. The fix checks: `pos == "NOUN" AND token.i == 0 AND dep in ("advcl", "root", "ROOT") AND next_token == "as" AND lemminflect ADJ channel returns the surface form`.
@@ -356,6 +406,8 @@ Symptom: "absurd" tagged NOUN in "Absurd as it might seem". Check: `grep '"pos":
 ### cmudict -ly adverb IPA fallback (suffix stripping)
 
 **Change (2026-07-08)**: `match_sentences.py`'s `_cmu_ipa()` now strips common derivational suffixes and retries the base form when the exact word is not in cmudict. Covers `-ly` (indulgently→indulgent+/li/), `-ness` (happiness→happy+/nəs/), `-ment`, `-tion`, `-sion`. Falls through gracefully when the base is also not in cmudict — Claude still provides IPA for those.
+
+**Change (2026-07-10)**: Added `-ion` suffix (dejection→deject+/ʃən/) — ordered after `-tion`/`-sion` so more-specific matches take priority.  Added y→i spelling recovery for `-ly`: when stripping `-ly` leaves a stem ending in `i` that is not in cmudict, retries with `i`→`y` (thriftily→thrifti→thrifty+/li/).  Both only fire when the exact word is not in cmudict; all common words already have cmudict entries, so false-positive risk is near zero.
 
 This reduces the number of words needing manual IPA from Claude. The fallback only works when the base form is in cmudict (e.g., "indulgent" is in cmudict → "indulgently" gets IPA automatically). Words with stem changes (e.g., "simply" → "simple" — stripping "ly" gives "simp" which is not in cmudict) still need Claude-provided IPA.
 
@@ -426,12 +478,13 @@ Symptom: `lemma` is a verb base not appearing in the text (e.g. "dishearten" for
 
 **Change (2026-07-09)**: `smart_truncate()` added to `match_sentences.py` as a mechanical pre-pass before Step 2B Claude review.  Truncates sentences >250 chars from the END only (preserving `target_offset`).  Scans backwards for sentence-ending punctuation (`.!?`), handles unclosed double quotes by walking back to the opening quote, and avoids ending on function words.
 
+**Change (2026-07-10)**: Phase 1 now accepts `. ! ?` followed by space + capital letter as a sentence boundary even when inside an unclosed quote — this handles multi-quote dialogue where the scan range doesn't reach the closing quote.  A new `_cleanup_unclosed_quote()` helper removes unbalanced opening quotes and preceding text from truncated results, preserving the target word.
+
 Run after `match_sentences.py` (Step 2A), before Step 2B Claude review:
 
 ```python
 from lib.scripts.match_sentences import smart_truncate
 new_sent, new_to, was_trunc = smart_truncate(sentence, word, target_offset)
-# target_offset never changes (sentence start is never modified)
 # was_trunc=False + len(sentence) > 250 → needs manual review
 ```
 

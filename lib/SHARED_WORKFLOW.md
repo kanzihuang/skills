@@ -143,6 +143,28 @@ pre-quote text is a complete sentence.  A final check avoids ending on a
 function word (``at``, ``for``, ``with``, …).  Sentences that cannot be
 safely truncated are returned unchanged with ``_needs_manual: true``.
 
+**Dialogue sentence boundaries** (2026-07-10): When punctuation is inside an
+unclosed quote but followed by space + capital letter — a clear sentence
+boundary within dialogue — it is accepted as a valid truncation point.
+After truncation, ``_cleanup_unclosed_quote()`` removes any unbalanced
+opening quote and the text before it, leaving a clean sentence fragment.
+
+**Missing space after punctuation** (2026-07-10): Smart truncation now
+accepts sentence-ending punctuation (``. ! ?``) followed directly by a
+capital letter without an intervening space — a common OCR artifact in
+Internet Archive plain-text editions.  Four patterns are recognised:
+``. X`` (standard), ``.X`` (no space), ``." X`` (quote + space),
+``."X`` (quote + no space).  The same logic applies to Phase 2
+beginning-truncation fallback.
+
+**build_sentence_regex punctuation splitting** (2026-07-10):
+``build_sentence_regex()`` now splits tokens at internal punctuation
+boundaries (e.g. ``"world.I"`` → two tokens ``"world"`` + ``"I"``)
+so the generated regex matches source text regardless of whether
+punctuation has a trailing space.  This makes Step 2B truncation
+verification and fragment merging more robust against OCR spacing
+artifacts.
+
 ### 2B. 手动审核（Claude）
 
 审核重点：

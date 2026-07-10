@@ -115,6 +115,24 @@ def _is_fragment(sentence: str) -> bool:
     return False
 
 
+def _fragment_starts_lowercase(sentence: str) -> bool:
+    """Return True if *sentence* starts with lowercase, or quote+lowercase.
+
+    Quote characters are not lowercase themselves, so the bare
+    ``islower()`` check fails for fragments like
+    ``"that man would be scorned..."`` which start with a quote.
+    Check the first non-quote character instead.
+    """
+    s = sentence.strip()
+    if not s:
+        return False
+    if s[0].islower():
+        return True
+    if s[0] in _QUOTES and len(s) > 1 and s[1].islower():
+        return True
+    return False
+
+
 def _merge_adjacent_fragments(
     sentences: list[str], source_text: str,
 ) -> list[str]:
@@ -148,7 +166,7 @@ def _merge_adjacent_fragments(
                 _is_fragment(s)
                 and i + 1 < len(result)
                 and result[i + 1].strip()
-                and result[i + 1].strip()[0].islower()
+                and _fragment_starts_lowercase(result[i + 1])
             ):
                 candidate = s + " " + result[i + 1]
                 # Verify the merged candidate is a continuous substring
@@ -189,6 +207,42 @@ def _is_inside_opening_quote(text: str, pos: int) -> bool:
         return False
     quotes_before = text[:last_quote].count('"')
     return quotes_before % 2 == 0  # even → opening
+
+
+def _cleanup_unclosed_quote(
+    result: str, target_word: str, target_offset: int,
+) -> tuple[str, int]:
+    """Remove unclosed opening quote and preceding text after truncation.
+
+    When truncation cuts a sentence inside a quoted passage, the result may
+    have an odd number of ``"`` characters — the last one is an opening quote
+    whose matching close was truncated away.  Remove that quote and the text
+    before it (typically a prior, balanced quoted passage), keeping only the
+    clean text after it — as long as *target_word* is preserved.
+
+    Returns ``(cleaned_text, new_target_offset)``.
+    """
+    if result.count('"') % 2 == 0:
+        return result, target_offset  # balanced — nothing to do
+
+    last_quote = result.rfind('"')
+    # The raw text after the last quote (may have leading spaces).
+    after_raw = result[last_quote + 1:]
+    after_quote = after_raw.lstrip()
+    if not after_quote:
+        return result, target_offset
+
+    # Compute how many characters were removed from the front.
+    stripped_spaces = len(after_raw) - len(after_quote)
+    chars_removed = last_quote + 1 + stripped_spaces
+    new_tgt = target_offset - chars_removed
+
+    if (new_tgt >= 0
+            and new_tgt + len(target_word) <= len(after_quote)
+            and after_quote[new_tgt:new_tgt + len(target_word)].lower()
+            == target_word.lower()):
+        return after_quote, new_tgt
+    return result, target_offset  # target word would be lost — keep original
 
 
 def smart_truncate(
@@ -245,7 +299,23 @@ def smart_truncate(
                 if not _is_inside_opening_quote(sentence, i):
                     best_pos = i + 1  # include the punctuation
                     break
-                # else: punctuation inside an unclosed quote — skip it
+                # Punctuation inside an unclosed quote — normally skip,
+                # but accept when followed by space + capital letter
+                # (or capital directly — common OCR pattern):
+                # it's a sentence boundary within dialogue.
+                elif i + 1 < len(sentence):
+                    nxt = sentence[i + 1]
+                    if nxt == ' ' and i + 2 < len(sentence) and sentence[i + 2].isupper():
+                        best_pos = i + 1; break  # ". X"
+                    if nxt.isupper():
+                        best_pos = i + 1; break  # ".X" (OCR: no space)
+                    if nxt == '"' and i + 2 < len(sentence):
+                        nxt2 = sentence[i + 2]
+                        if (nxt2 == ' ' and i + 3 < len(sentence)
+                                and sentence[i + 3].isupper()):
+                            best_pos = i + 1; break  # "." X"
+                        if nxt2.isupper():
+                            best_pos = i + 1; break  # "."X" (OCR: no space)
             elif ch == '"':
                 if _is_inside_opening_quote(sentence, i):
                     # 3b. Inside an opening quote → walk back to before it.
@@ -265,7 +335,7 @@ def smart_truncate(
     if best_pos is not None:
         # ── 4. Back up past trailing function word ──────────────────────
         result = sentence[:best_pos].rstrip()
-        last_word = result.split()[-1].strip().lower().rstrip(':;')
+        last_word = result.split()[-1].strip().lower().rstrip(':;,')
         while last_word in SENTENCE_END_FUNCTION_WORDS:
             # back up one more word
             result = result.rsplit(' ', 1)[0].rstrip()
@@ -273,8 +343,10 @@ def smart_truncate(
                 # backed up too far — fall through to Phase 2
                 best_pos = None
                 break
-            last_word = result.split()[-1].strip().lower().rstrip(':;')
+            last_word = result.split()[-1].strip().lower().rstrip(':;,')
         if best_pos is not None:
+            result, target_offset = _cleanup_unclosed_quote(
+                result, target_word, target_offset)
             return result, target_offset, True
 
     # ── Phase 2: beginning-truncation fallback ─────────────────────────
@@ -291,11 +363,23 @@ def smart_truncate(
     scan_start = max(0, target_offset - max_len + len(target_word))
     best_start: int | None = None
     for i in range(scan_start, target_offset):
-        if (sentence[i] in '.!?'
-                and i + 2 < len(sentence)
-                and sentence[i + 1] == ' '
-                and sentence[i + 2].isupper()):
-            new_start = i + 2  # skip ". " to start at the capital letter
+        if sentence[i] in '.!?' and i + 1 < len(sentence):
+            nxt = sentence[i + 1]
+            if nxt == ' ' and i + 2 < len(sentence) and sentence[i + 2].isupper():
+                new_start = i + 2  # skip ". " to start at the capital letter
+            elif nxt.isupper():
+                new_start = i + 1  # ".X" (OCR: no space)
+            elif nxt == '"' and i + 2 < len(sentence):
+                nxt2 = sentence[i + 2]
+                if (nxt2 == ' ' and i + 3 < len(sentence)
+                        and sentence[i + 3].isupper()):
+                    new_start = i + 3  # "." X"
+                elif nxt2.isupper():
+                    new_start = i + 2  # "."X" (OCR: no space)
+                else:
+                    continue
+            else:
+                continue
             new_len = len(sentence) - new_start
             if new_len <= max_len:
                 if best_start is None:
@@ -307,6 +391,8 @@ def smart_truncate(
     if best_start is not None:
         new_sentence = sentence[best_start:]
         new_target_offset = target_offset - best_start
+        new_sentence, new_target_offset = _cleanup_unclosed_quote(
+            new_sentence, target_word, new_target_offset)
         return new_sentence, new_target_offset, True
 
     # Neither end- nor beginning-truncation could get under max_len.
@@ -503,12 +589,17 @@ def _cmu_ipa(word: str) -> str:
         ("ment", "ment", "/mənt/"),  # enjoyment   → enjoy     + /mənt/
         ("tion", "tion", "/ʃən/"),   # education   → educate   + /ʃən/
         ("sion", "sion", "/ʒən/"),   # decision    → decide    + /ʒən/
+        ("ion",  "ion",  "/ʃən/"),   # dejection   → deject    + /ʃən/
     ]
     for sfx, _strip, append_ipa in suffixes:
         if w.endswith(sfx) and len(w) > len(sfx) + 1:
-            base_ipa = _cmu_ipa_base(w[:-len(sfx)])
+            base_form = w[:-len(sfx)]
+            base_ipa = _cmu_ipa_base(base_form)
+            # y→i spelling change: thriftily → thrifti → thrifty
+            if not base_ipa and sfx == "ly" and base_form.endswith("i"):
+                base_ipa = _cmu_ipa_base(base_form[:-1] + "y")
             if base_ipa:
-                return base_ipa.rstrip("/") + append_ipa
+                return base_ipa.rstrip("/") + append_ipa.lstrip("/")
 
     return ""
 

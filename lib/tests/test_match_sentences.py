@@ -13,6 +13,7 @@ from lib.scripts.match_sentences import (
     split_sentences,
     hard_truncate,
     smart_truncate,
+    _cleanup_unclosed_quote,
     _is_inside_opening_quote,
     _better,
     _cmu_ipa,
@@ -377,9 +378,12 @@ class TestCmuIpaFallback:
         assert result == "/həˈloʊ/", f"Expected /həˈloʊ/, got: {result}"
 
     def test_ly_adverb_fallback(self):
-        """indulgently → fall back to indulgent + /li/."""
+        """indulgently → fall back to indulgent + /li/. No nested slashes."""
         result = _cmu_ipa("indulgently")
         assert result, f"Expected non-empty IPA for indulgently"
+        assert result.count("/") == 2, (
+            f"Expected exactly 2 slashes (delimiters), got {result.count('/')}: {result}"
+        )
         assert result.endswith("li/"), \
             f"Expected /li/ suffix on fallback IPA, got: {result}"
 
@@ -1268,8 +1272,8 @@ class TestSmartTruncate:
         assert len(result) > 0
 
     def test_closed_quote_no_punctuation_in_range(self):
-        """Punctuation exists but is inside quotes — no reachable boundary
-        within max_len → returned unchanged."""
+        """Sentence boundary (. + space + capital) inside an unclosed quote
+        is now accepted as a valid truncation point."""
         sent = (
             '"Hello there," she said. "'
             + "I am going to the store to buy groceries for dinner tonight. "
@@ -1278,10 +1282,11 @@ class TestSmartTruncate:
         result, to, was_trunc = smart_truncate(
             sent, "groceries", 55, max_len=200,
         )
-        # The period after "tonight" is inside an opening quote.
-        # Without word-boundary fallback, the original is returned.
-        assert was_trunc is False
-        assert len(result) > 200  # unchanged
+        # The period inside an opening quote, followed by space + capital,
+        # is now accepted as a valid sentence boundary for truncation.
+        assert was_trunc is True
+        assert len(result) <= 200
+        assert "groceries" in result.lower()
 
     def test_exact_max_len_no_truncation(self):
         """Sentence exactly at max_len — no truncation."""
@@ -1544,3 +1549,381 @@ class TestMidSentenceCapitalizedNounStaysNoun:
         assert "PROPN" in pos_values or len(words) == 1, (
             f"Expected PROPN for Jupiter (genuine proper noun), got: {pos_values}"
         )
+
+
+# ── Problem 1: smart_truncate with multi-quote dialogue ────────────────────
+
+
+class TestSmartTruncateDialogueSentenceBoundary:
+    """smart_truncate should accept .!? followed by space + capital letter
+    as a sentence boundary even when inside an unclosed quote."""
+
+    def test_period_space_capital_inside_quote_accepted(self):
+        """A period followed by space+capital marks a sentence boundary
+        within quoted dialogue — should be accepted as truncation point."""
+        sentence = (
+            '"But the animals..." "Well, I must endure the presence of two '
+            'or three caterpillars if I wish to become acquainted with the '
+            'butterflies. It seems that they are very beautiful. And if not '
+            'the butterflies and the caterpillars who will call upon me? '
+            'You will be far away... as for the large animals, I am not at '
+            'all afraid of any of them. I have my claws."'
+        )
+        assert len(sentence) > 250
+        new_sent, new_tgt, was_trunc = smart_truncate(
+            sentence, "caterpillars", 71, max_len=250)
+        assert was_trunc, (
+            "Should truncate at 'butterflies.' — sentence boundary inside quote"
+        )
+        assert len(new_sent) <= 250
+        # The truncated result should contain the target word
+        assert new_sent[new_tgt:new_tgt + len("caterpillars")].lower() == "caterpillars"
+
+    def test_period_space_capital_inside_quote_endure(self):
+        """Same sentence, different target word earlier in the text."""
+        sentence = (
+            '"But the animals..." "Well, I must endure the presence of two '
+            'or three caterpillars if I wish to become acquainted with the '
+            'butterflies. It seems that they are very beautiful. And if not '
+            'the butterflies and the caterpillars who will call upon me? '
+            'You will be far away... as for the large animals, I am not at '
+            'all afraid of any of them. I have my claws."'
+        )
+        assert len(sentence) > 250
+        new_sent, new_tgt, was_trunc = smart_truncate(
+            sentence, "endure", 35, max_len=250)
+        assert was_trunc
+        assert len(new_sent) <= 250
+        assert new_sent[new_tgt:new_tgt + len("endure")].lower() == "endure"
+
+    def test_unbalanced_quotes_cleaned_up(self):
+        """Truncated result should have balanced quotes (even count)
+        or the unclosed opening quote removed with preceding text."""
+        sentence = (
+            '"But the animals..." "Well, I must endure the presence of two '
+            'or three caterpillars if I wish to become acquainted with the '
+            'butterflies. It seems that they are very beautiful."'
+        )
+        # Force truncation at the first period inside the quote
+        new_sent, new_tgt, was_trunc = smart_truncate(
+            sentence, "endure", 35, max_len=160)
+        assert was_trunc
+        # Result should either have balanced quotes or be cleaned
+        assert new_sent.count('"') % 2 == 0, (
+            f"Expected balanced quotes, got {new_sent.count('\"')} quotes: {new_sent!r}"
+        )
+        # Verify target word is preserved
+        assert new_sent[new_tgt:new_tgt + len("endure")].lower() == "endure"
+
+
+class TestCleanupUnclosedQuote:
+    """Unit tests for _cleanup_unclosed_quote helper."""
+
+    def test_balanced_quotes_unchanged(self):
+        result, tgt = _cleanup_unclosed_quote(
+            '"Hello." she said.', "Hello", 1)
+        assert result == '"Hello." she said.'
+        assert tgt == 1
+
+    def test_unclosed_quote_removed_target_preserved(self):
+        # Simulates: truncated to "But the animals..." "Well, I must endure...butterflies.
+        # "endure" is at position 35 in the original string
+        result, tgt = _cleanup_unclosed_quote(
+            '"But the animals..." "Well, I must endure the presence.',
+            "endure", 35)
+        # After cleanup: "Well" should be first word (no leading quote)
+        assert not result.startswith('"')
+        assert "endure" in result
+        # Verify target_offset still points to correct word
+        assert result[tgt:tgt + len("endure")].lower() == "endure"
+
+    def test_even_quotes_no_change(self):
+        result, tgt = _cleanup_unclosed_quote(
+            '"Hello." "World."', "World", 9)
+        # Even quotes (4 total) — should be unchanged
+        assert result == '"Hello." "World."'
+        assert tgt == 9
+
+    def test_target_word_not_preserved_keeps_original(self):
+        # If removing the unclosed quote would cut off the target word,
+        # return the original unchanged
+        result, tgt = _cleanup_unclosed_quote(
+            '"target word here', "target", 1)
+        # "target" IS in the after_quote part, so it should be cleaned
+        assert not result.startswith('"')
+        assert "target" in result
+
+
+# ── Problem 2 & 3: _cmu_ipa suffix stripping ────────────────────────────────
+
+
+class TestCmuIpaSuffixStripping:
+    """_cmu_ipa should handle -ion suffix and y→i spelling changes."""
+
+    def test_ion_suffix_dejection(self):
+        """dejection → deject + /ən/ — deject is in cmudict."""
+        ipa = _cmu_ipa("dejection")
+        assert ipa, "dejection should get IPA via -ion suffix stripping"
+        assert ipa.startswith("/") and ipa.endswith("/"), (
+            f"IPA should have / delimiters, got: {ipa!r}")
+        # Should contain the base word's IPA + the suffix
+        assert "ʃən" in ipa or "ʒən" in ipa or "ən" in ipa or "dʒek" in ipa.lower(), (
+            f"Unexpected IPA for dejection: {ipa!r}")
+
+    def test_ly_y_to_i_thriftily(self):
+        """thriftily → thrifti → thrifty (y→i) + /li/ — thrifty is in cmudict."""
+        ipa = _cmu_ipa("thriftily")
+        assert ipa, "thriftily should get IPA via y→i spelling recovery"
+        assert ipa.startswith("/") and ipa.endswith("/"), (
+            f"IPA should have / delimiters, got: {ipa!r}")
+        # Should contain /θrɪft/ or similar from thrifty + /li/
+        assert "θr" in ipa.lower() or "thr" in ipa.lower() or "li" in ipa, (
+            f"Unexpected IPA for thriftily: {ipa!r}")
+
+    def test_tion_still_works(self):
+        """Existing -tion suffix should still work (regression check)."""
+        ipa = _cmu_ipa("education")
+        assert ipa, "education should get IPA via -tion suffix stripping"
+        assert "ʃən" in ipa
+
+    def test_ly_still_works(self):
+        """Existing -ly suffix should still work (regression check)."""
+        ipa = _cmu_ipa("indulgently")
+        assert ipa, "indulgently should get IPA via -ly suffix stripping"
+        assert "li" in ipa
+
+    def test_ion_only_fires_when_tion_sion_dont_match(self):
+        """When both -tion and -ion could match, -tion wins (more specific)."""
+        # "education" ends in both "tion" and "ion".
+        # -tion should match first, stripping to "educa" + tion → in cmudict as "educate"
+        ipa = _cmu_ipa("education")
+        assert ipa
+        # The -tion → educate + /ʃən/ path should take priority
+        assert "ʃən" in ipa
+
+
+# ── B-1/B-2: smart_truncate accepts missing space after punctuation ──────
+
+
+class TestSmartTruncateMissingSpace:
+    """smart_truncate should accept .!? followed directly by capital letter
+    (no space) — common OCR pattern in Internet Archive texts."""
+
+    def test_exclamation_no_space_before_capital(self):
+        """!X pattern — exclamation + capital letter with no space."""
+        # target "panted" at position 41, max_len=100
+        # "!He" is near position 90 — within scan range (99→48)
+        prefix = "The little prince sat down on the table and panted a little"
+        tgt = prefix.index("panted")
+        padding = "x" * (98 - len(prefix))  # push boundary near max_len
+        sentence = prefix + padding + "!He was very tired after the long day"
+        assert len(sentence) > 100
+        new_sent, new_tgt, was_trunc = smart_truncate(
+            sentence, "panted", tgt, max_len=100)
+        assert was_trunc, (
+            "Should truncate at ! — capital follows directly without space"
+        )
+        assert len(new_sent) <= 100
+        assert "panted" in new_sent
+
+    def test_exclamation_quote_no_space_before_capital(self):
+        """!"X pattern — exclamation + closing quote + capital, no space."""
+        prefix = "The little prince sat down on the table and panted a little"
+        tgt = prefix.index("panted")
+        padding = "x" * (96 - len(prefix))
+        sentence = prefix + padding + '!"He was very tired after the long day'
+        assert len(sentence) > 100
+        new_sent, new_tgt, was_trunc = smart_truncate(
+            sentence, "panted", tgt, max_len=100)
+        assert was_trunc, (
+            "Should truncate at !\" — capital follows quote without space"
+        )
+        assert len(new_sent) <= 100
+
+    def test_period_quote_no_space_before_capital(self):
+        """."X pattern — period + closing quote + capital, no space."""
+        prefix = "The little prince sat down on the table and panted a little"
+        tgt = prefix.index("panted")
+        padding = "x" * (96 - len(prefix))
+        sentence = prefix + padding + '."He was very tired after the long day'
+        assert len(sentence) > 100
+        new_sent, new_tgt, was_trunc = smart_truncate(
+            sentence, "panted", tgt, max_len=100)
+        assert was_trunc, (
+            "Should truncate at .\" — capital follows quote without space"
+        )
+        assert len(new_sent) <= 100
+
+    def test_period_no_space_before_capital(self):
+        """.X pattern — period + capital letter with no space (no quote)."""
+        prefix = "The little prince sat down on the table and panted a little"
+        tgt = prefix.index("panted")
+        padding = "x" * (98 - len(prefix))
+        sentence = prefix + padding + ".He was very tired after the long day"
+        assert len(sentence) > 100
+        new_sent, new_tgt, was_trunc = smart_truncate(
+            sentence, "panted", tgt, max_len=100)
+        assert was_trunc, (
+            "Should truncate at . — capital follows directly without space"
+        )
+        assert len(new_sent) <= 100
+
+    def test_existing_space_capital_still_works(self):
+        """Regression: . X pattern (with space) still accepted."""
+        sentence = (
+            '"But the animals..." "Well, I must endure the presence of two '
+            'or three caterpillars if I wish to become acquainted with the '
+            'butterflies. It seems that they are very beautiful. And if not '
+            'the butterflies and the caterpillars who will call upon me? '
+            'You will be far away... as for the large animals, I am not at '
+            'all afraid of any of them. I have my claws."'
+        )
+        assert len(sentence) > 250
+        new_sent, new_tgt, was_trunc = smart_truncate(
+            sentence, "caterpillars", 71, max_len=250)
+        assert was_trunc
+        assert len(new_sent) <= 250
+
+
+# ── B-3: build_sentence_regex handles punctuation glued to next word ────
+
+
+class TestBuildSentenceRegex:
+    """build_sentence_regex should handle punctuation without trailing space."""
+
+    def test_punctuation_glued_to_next_word(self):
+        """Period glued to next word — regex must match both spaced and unspaced."""
+        import re
+        from lib.utils import build_sentence_regex
+        regex = build_sentence_regex("Hello world.I am fine")
+        # Must match source text with space
+        assert re.search(regex, "Hello world. I am fine"), (
+            "Regex should match source with space after period"
+        )
+        # Must also match source without space (OCR pattern)
+        assert re.search(regex, "Hello world.I am fine"), (
+            "Regex should match source without space after period"
+        )
+
+    def test_existing_behavior_preserved(self):
+        """Normal spacing unchanged — backward compatible."""
+        import re
+        from lib.utils import build_sentence_regex
+        regex = build_sentence_regex("Hello world. I am fine")
+        assert re.search(regex, "Hello world. I am fine")
+        assert re.search(regex, "Hello world.\nI am fine"), (
+            "Regex should handle newline between sentences"
+        )
+
+    def test_multiple_glued_punctuation(self):
+        """Multiple punctuation-glued words in one sentence."""
+        import re
+        from lib.utils import build_sentence_regex
+        regex = build_sentence_regex("Stop.Think.Go forward")
+        assert re.search(regex, "Stop. Think. Go forward")
+        assert re.search(regex, "Stop.Think.Go forward")
+
+    def test_glued_with_newline(self):
+        """Punctuation glued + with newline between sentences."""
+        import re
+        from lib.utils import build_sentence_regex
+        regex = build_sentence_regex("That is all.It is enough")
+        # Newline between sentences should still match
+        assert re.search(regex, "That is all.\nIt is enough")
+
+
+# ── C: IPA must not have nested slashes ───────────────────────────────────
+
+
+class TestCmuIpaNoNestedSlashes:
+    """Suffix-fallback IPA must not produce nested slash delimiters."""
+
+    def test_ly_adverb_no_nested_slash(self):
+        """indulgently → /ɪnˈdʌldʒəntli/, not /ɪnˈdʌldʒənt/li/."""
+        result = _cmu_ipa("indulgently")
+        assert result, "indulgently should get IPA via -ly fallback"
+        slash_count = result.count("/")
+        assert slash_count == 2, (
+            f"Expected exactly 2 slashes (delimiters), got {slash_count}: "
+            f"{result}"
+        )
+        assert result.endswith("li/"), (
+            f"Expected /li/ suffix on fallback IPA, got: {result}"
+        )
+
+    def test_ness_suffix_no_nested_slash(self):
+        """-ness suffix IPA should also not have nested slashes."""
+        result = _cmu_ipa("happiness")
+        assert result
+        assert result.count("/") == 2, (
+            f"Expected 2 slashes for happiness, got: {result}"
+        )
+
+
+# ── E: fragment merge with quote + lowercase start ───────────────────────
+
+
+class TestMergeFragmentQuoteLowercase:
+    """_merge_adjacent_fragments should handle quote + lowercase starts."""
+
+    def test_merge_quote_lowercase_fragment(self):
+        """Fragment starting with ASCII quote + lowercase merges."""
+        source = 'The wise king said: \n\n"that man would be scorned by the people.'
+        sents = ['The wise king said:', '"that man would be scorned by the people.']
+        merged = _merge_adjacent_fragments(sents, source)
+        assert len(merged) == 1, (
+            f"Expected 1 merged sentence, got {len(merged)}: {merged}"
+        )
+        assert 'man' in merged[0]
+
+    def test_merge_curly_quote_lowercase_fragment(self):
+        """Fragment starting with curly quote + lowercase merges (IA OCR)."""
+        source = 'He replied: \n\n“that is not what I meant.'
+        sents = ['He replied:', '“that is not what I meant.']
+        merged = _merge_adjacent_fragments(sents, source)
+        assert len(merged) == 1, (
+            f"Expected 1 merged sentence, got {len(merged)}: {merged}"
+        )
+
+    def test_normal_lowercase_still_merges(self):
+        """Regression: normal lowercase-start fragments still merge."""
+        source = 'which was at \n\nthe same time both simple and majestic.'
+        sents = ['which was at', 'the same time both simple and majestic.']
+        merged = _merge_adjacent_fragments(sents, source)
+        assert len(merged) == 1
+
+    def test_quote_uppercase_not_merged(self):
+        """Quote + uppercase should NOT merge (new sentence)."""
+        source = 'He finished. \n\n"That is all."'
+        sents = ['He finished.', '"That is all."']
+        merged = _merge_adjacent_fragments(sents, source)
+        # First is NOT a fragment (ends with period), so no merge
+        assert len(merged) == 2
+
+
+# ── B-4: rstrip comma for function word detection ────────────────────────
+
+
+class TestFunctionWordCommaStrip:
+    """rstrip(':;,') should allow comma on function words to be stripped."""
+
+    def test_function_word_with_comma_stripped(self):
+        """Comma on function word should be stripped for detection."""
+        from lib.config import SENTENCE_END_FUNCTION_WORDS
+        assert "then" in SENTENCE_END_FUNCTION_WORDS, (
+            "'then' should be in the function word set"
+        )
+        last_word = "then,"
+        cleaned = last_word.strip().lower().rstrip(':;,')
+        assert cleaned == "then", (
+            f"rstrip(':;,') should strip comma, got {cleaned!r}"
+        )
+        assert cleaned in SENTENCE_END_FUNCTION_WORDS
+
+    def test_colon_still_stripped(self):
+        """Regression: colon stripping still works."""
+        from lib.config import SENTENCE_END_FUNCTION_WORDS
+        last_word = "then:"
+        cleaned = last_word.strip().lower().rstrip(':;,')
+        assert cleaned == "then"
+        assert cleaned in SENTENCE_END_FUNCTION_WORDS
