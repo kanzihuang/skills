@@ -19,6 +19,8 @@ MIN_SENTENCE_LENGTH = 30       # chars — match_sentences.py prefers candidates
                                 # said courteously." already provide sufficient
                                 # context. Only <30 (e.g. "She hesitated.") is
                                 # truly insufficient.
+MIN_TRUNCATION_LENGTH = 100    # chars — sentences ≤ this length are left
+                                # as-is; truncation risk outweighs benefit
 
 # ── AnkiConnect ─────────────────────────────────────────────────────────────
 ANKICONNECT_URL = "http://localhost:8765"

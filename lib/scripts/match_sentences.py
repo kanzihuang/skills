@@ -24,7 +24,7 @@ import pysbd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lib.chapter_detect import detect_story_start
-from lib.config import HARD_CUTOFF, MIN_SENTENCE_LENGTH, MAX_SENTENCE_LENGTH, SENTENCE_END_FUNCTION_WORDS
+from lib.config import HARD_CUTOFF, MIN_SENTENCE_LENGTH, MIN_TRUNCATION_LENGTH, MAX_SENTENCE_LENGTH, SENTENCE_END_FUNCTION_WORDS
 from lib.utils import build_sentence_regex, normalize_quotes
 
 
@@ -270,8 +270,9 @@ def smart_truncate(
     if len(sentence) <= max_len:
         return sentence, target_offset, False
 
-    # Sentences ≤100 chars are short enough — don't risk truncation damage.
-    if len(sentence) <= 100:
+    # Sentences ≤ MIN_TRUNCATION_LENGTH are short enough — don't risk
+    # truncation damage.
+    if len(sentence) <= MIN_TRUNCATION_LENGTH:
         return sentence, target_offset, False
 
     target_end = target_offset + len(target_word)
