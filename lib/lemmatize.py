@@ -255,6 +255,7 @@ def lemmatize(
         return jl or w
 
     reduced = suffix_candidate or w
+    reduced_upos = ""  # track which POS channel produced the reduction
 
     # Agentive-noun guard: spaCy POS check for ADJ/ADV channels.
     # Nouns like walker, robber, baker are falsely reduced by lemminflect
@@ -294,6 +295,7 @@ def lemmatize(
                 if cand in coca_set:
                     if upos in ("VERB", "NOUN") or len(cand) < len(w):
                         reduced = cand
+                        reduced_upos = upos
                         break
             else:
                 # Both in COCA — accept reduction for VERB channel regardless
@@ -301,6 +303,7 @@ def lemmatize(
                 if cand in coca_set:
                     if upos == "VERB" or len(cand) < len(w):
                         reduced = cand
+                        reduced_upos = upos
                         break
         if reduced != w:
             break
@@ -311,6 +314,13 @@ def lemmatize(
     #    (e.g. twined→twin, but Nation says twined belongs to twine).
     #    Does NOT catch intra-family reductions like blundering→blunder
     #    — Claude override + spaCy POS gate handle those.
+    #
+    #    Exception: when the VERB channel produces a reduction and both
+    #    the word and the reduced lemma are in COCA, and spaCy confirms
+    #    the word is not a noun, trust lemminflect over Nation.
+    #    Nation homograph splits (e.g. loaf bread vs loaf idle) are data
+    #    artifacts that should not override a high-confidence inflectional
+    #    reduction.
     if reduced != w:
         try:
             from .coca import get_word_headword
@@ -318,7 +328,12 @@ def lemmatize(
             if nation_head:
                 lemma_head = get_word_headword(reduced)
                 if lemma_head and nation_head != lemma_head:
-                    return w  # cross-family — keep original
+                    if (reduced_upos == "VERB" and not _is_noun
+                            and coca_set and w in coca_set
+                            and reduced in coca_set):
+                        pass  # trust lemminflect VERB channel
+                    else:
+                        return w  # cross-family — keep original
         except ImportError:
             pass
 

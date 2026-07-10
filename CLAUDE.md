@@ -744,11 +744,94 @@ Symptom: sentence has closing quotes and dialogue attribution (``," xxx
 said``) but does not start with ``"``.  Check: ``grep '," '`` in JSON
 output for sentences not starting with ``"``.
 
+### lemmatize() Nation homograph split blocks correct VERB reductions
+
+**Change (2026-07-10)**: The Nation word-family cross-validation in
+``lemmatize()`` (``lib/lemmatize.py`` Step 6) can incorrectly reject a
+valid VERB-channel reduction when Nation stores the verb and the noun
+forms of the same word under different headwords.  e.g.:
+
+| Word | → Lemma | Nation headword (word) | Nation headword (lemma) | Result |
+|------|---------|----------------------|------------------------|--------|
+| ``loafing`` | ``loaf`` (verb: "to idle") | ``loafed`` (verb family) | ``loaf`` (noun: "bread") | **BLOCKED** ← wrong |
+| ``deliberating`` | ``deliberate`` | ``deliberated`` | ``deliberate`` | **BLOCKED** ← wrong |
+
+Standard verbs (``running→run``, ``walking→walk``) are NOT affected —
+they share the same Nation headword.  Only homograph verbs whose base
+form collides with an unrelated noun (loaf, saw, etc.) trigger this.
+
+**Fix (2026-07-10)**: Three changes to Step 6:
+1. Track which ``upos`` produced the reduction (new ``reduced_upos`` variable)
+2. When reduced_upos==VERB, spaCy confirms the word is NOT a noun
+   (``_is_noun=False``, reusing the existing Step 5 guard), AND both
+   words are in COCA → trust lemminflect, skip Nation check.
+3. All other channels (NOUN/ADJ/ADV) and words tagged as nouns by spaCy
+   keep full Nation protection.
+
+373 VERB reductions unblocked (all correct), 203 noun/adj reductions
+still blocked (e.g. ``aeronautics→aeronautic``, ``formers→former``).
+
+**Why this is safe**: lemminflect VERB channel only handles inflectional
+morphology (-ing/-ed/-s), not derivational.  The triple guard
+(VERB channel + spaCy non-noun + COCA both-ways) prevents false
+positives.  ``sync_anki.py`` provides a final WordId-exact dedup
+defense-in-depth.
+
+Symptom: filter_pipeline output shows a word in ``IN_COCA`` that should
+be in ``ANKI_SKIPPED`` (already in Anki).  Check: ``grep <lemma>`` in
+Anki via ``findNotes WordId:*_<bookId>`` — if the card exists but
+wasn't deduped, this bug may be the cause.
+
+See also: [[filter_pipeline.py Anki dedup never matches (lemma extraction bug)]]
+
+### find_notes_by_field query syntax — outer quotes break Anki field search
+
+**Change (2026-07-10)**: ``AnkiConnect.find_notes_by_field()``
+(``lib/ankiconnect.py``) wrapped the Anki search query in outer double
+quotes: ``"WordId:*_22720170"``.  Anki's search parser interprets
+double-quoted strings as full-text phrase searches, NOT field-specific
+searches.  The correct syntax is unquoted: ``WordId:*_22720170``.
+
+The same function's deck-scoped path had the same issue:
+``deck:"Name" "WordId:*_id"`` → ``deck:"Name" WordId:*_id``.
+
+Contrast with ``find_deck_for_book_id`` (same file, line 372) which
+already used the correct unquoted syntax.
+
+**Fix (2026-07-10)**: Removed outer double quotes from both paths.
+``find_notes_by_field`` is only called from ``filter_pipeline.py``'s
+``query_anki_existing()``, so the impact is limited to the Anki dedup
+step of the filter pipeline.
+
+Symptom: ``findNotes`` returns inconsistent results between runs
+(e.g. 143 vs 145 notes found for the same query).  Check: inspect the
+query string in ``find_notes_by_field`` — if it has outer ``"`` quotes,
+this bug is present.
+
+### query_anki_existing — triple silent error swallowing
+
+**Change (2026-07-10)**: ``filter_pipeline.py``'s ``query_anki_existing()``
+had three layers of ``except: return set()`` that silently converted any
+AnkiConnect failure into an empty dedup set — all words passed through
+as "new".  No stack trace, no way to diagnose the failure.
+
+**Fix (2026-07-10)**:
+1. ``except AnkiConnectError`` → prints WARNING (same behavior, still
+   returns empty set as graceful degradation)
+2. ``except Exception`` → prints ERROR + full ``traceback.print_exc()``
+   (still returns empty set, but now leaves diagnostic evidence)
+3. Added ``len(info) != len(note_ids)`` validation after ``notes_info``
+   call — prints WARNING when counts mismatch (partial dedup)
+
+Symptom: filter_pipeline reports "0 in Anki" when cards clearly exist,
+or ``n_anki_cards`` count differs between identical runs.  Check stderr
+for WARNING/ERROR lines from AnkiConnect.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 546+ tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter.
-- **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 32 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
+- **Shared tests** live in `lib/tests/` (pytest, 552 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter, ankiconnect.
+- **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 33 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.
 - Run all tests before committing:

@@ -83,3 +83,26 @@ sys.exit(0)
     )
     assert result.returncode == 1, "Missing 'updated' should cause exit code 1"
     assert "missing" in result.stderr.lower() or "error" in result.stderr.lower()
+
+
+def test_query_anki_existing_count_mismatch_warning(capsys):
+    """Warning when notes_info returns fewer results than requested."""
+    from unittest.mock import patch, MagicMock
+    from filter_pipeline import query_anki_existing
+
+    ac = MagicMock()
+    ac.find_notes_by_field.return_value = [1, 2, 3]  # 3 requested
+    # Only return 2 results — count mismatch
+    ac.notes_info.return_value = [
+        {"fields": {"WordId": {"value": "loaf_VERB_22720170"}}},
+        {"fields": {"WordId": {"value": "caravan_NOUN_22720170"}}},
+    ]
+
+    import sys
+    result = query_anki_existing(ac, "22720170")
+
+    captured = capsys.readouterr()
+    assert "returned 2 results" in captured.err, (
+        "should warn about count mismatch"
+    )
+    assert len(result) > 0, "should still return valid lemmas from partial results"

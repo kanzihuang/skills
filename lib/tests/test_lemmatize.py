@@ -357,3 +357,51 @@ def test_mars_uppercase_propn_preserved(coca_set):
     )
     result = lemmatize("mars", coca_set, spacy_map)
     assert result == "mars", f"expected 'mars', got {result!r}"
+
+
+# ── VERB-channel Nation relaxation (Fix: loaf verb/noun homograph) ──
+
+
+def test_loafing_verb_not_blocked_by_nation(coca_set):
+    """loafing (verb) → loaf, even though Nation has them in separate families.
+
+    Nation data: loafing→headword 'loafed', loaf→headword 'loaf'.
+    The homograph split (loaf bread vs loaf idle) should not block
+    a high-confidence VERB-channel reduction where both words are
+    valid COCA entries.
+    """
+    result = lemmatize("loafing", coca_set)
+    assert result == "loaf", f"expected 'loaf', got {result!r}"
+
+
+def test_loafed_verb_not_blocked_by_nation(coca_set):
+    result = lemmatize("loafed", coca_set)
+    assert result == "loaf", f"expected 'loaf', got {result!r}"
+
+
+def test_deliberating_verb_not_blocked_by_nation(coca_set):
+    """Another Nation homograph case: deliberating→deliberate."""
+    result = lemmatize("deliberating", coca_set)
+    assert result == "deliberate", f"expected 'deliberate', got {result!r}"
+
+
+def test_nation_still_guards_nouns(coca_set):
+    """Nouns that end like verbs (-ing/-ed/-s) should still be Nation-protected.
+
+    'aeronautics' is a noun (spaCy: NOUN → _is_noun=True).
+    lemminflect VERB→'aeronautic' is wrong — Nation must still block.
+    """
+    result = lemmatize("aeronautics", coca_set)
+    assert result == "aeronautics", (
+        f"expected 'aeronautics' (noun, Nation protected), got {result!r}"
+    )
+
+
+def test_nation_adj_still_guarded(coca_set):
+    """ADJ/ADV channel reductions should still respect Nation blocking."""
+    # 'reflective' ADJ: lemminflect ADV→'reflect' but ADV channel is gated
+    # for non-ly words.  Nation should still protect.
+    result = lemmatize("reflective", coca_set)
+    assert result == "reflective", (
+        f"expected 'reflective' (ADJ), got {result!r}"
+    )

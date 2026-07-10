@@ -20,6 +20,7 @@ import json
 import re
 import sys
 import os
+import traceback
 from typing import Optional
 
 # Characters stripped from word boundaries — sentence-boundary punctuation
@@ -87,6 +88,10 @@ def query_anki_existing(ac: AnkiConnect, book_id: str) -> set[str]:
         # Dedup key is {lemma}_{pos} — same lemma with different POS
         # should NOT be deduped (e.g. "walk_NOUN" ≠ "walk_VERB").
         info = ac.notes_info(note_ids)
+        if len(info) != len(note_ids):
+            print(f"WARNING: notes_info returned {len(info)} results for "
+                  f"{len(note_ids)} requested IDs — dedup may be incomplete",
+                  file=sys.stderr)
         lemmas = set()
         for note in info:
             word_id = note.get("fields", {}).get("WordId", {}).get("value", "")
@@ -102,10 +107,13 @@ def query_anki_existing(ac: AnkiConnect, book_id: str) -> set[str]:
         return lemmas
 
     except AnkiConnectError as e:
-        print(f"WARNING: AnkiConnect query failed for existing words: {e}", file=sys.stderr)
+        print(f"WARNING: AnkiConnect query failed for existing words: {e}",
+              file=sys.stderr)
         return set()
     except Exception as e:
-        print(f"WARNING: Unexpected error querying Anki existing words: {e}", file=sys.stderr)
+        print(f"ERROR: Unexpected error querying Anki existing words: {e}",
+              file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return set()
 
 

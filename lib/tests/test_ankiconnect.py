@@ -79,6 +79,25 @@ class TestFindNotes:
         ac = AnkiConnect()
         result = ac.find_notes_by_field("My Deck", "WordId", "*_22720170")
         assert result == [300]
+        # Verify correct Anki search syntax: field:value without outer quotes
+        from lib.ankiconnect import requests as ankiconnect_req
+        payload = ankiconnect_req.post.call_args[1]["json"]["params"]["query"]
+        assert "WordId:*_22720170" in payload
+        assert '"WordId:*_22720170"' not in payload, (
+            "outer quotes break Anki field search syntax"
+        )
+
+    def test_find_notes_by_field_no_deck(self, mock_requests):
+        """Query without deck name must also use unquoted field:value syntax."""
+        _set_result(mock_requests, [400])
+        ac = AnkiConnect()
+        result = ac.find_notes_by_field("", "WordId", "*_22720170")
+        assert result == [400]
+        from lib.ankiconnect import requests as ankiconnect_req
+        payload = ankiconnect_req.post.call_args[1]["json"]["params"]["query"]
+        assert payload == "WordId:*_22720170", (
+            f"expected 'WordId:*_22720170' (no outer quotes), got {payload!r}"
+        )
 
     def test_empty_deck(self, mock_requests):
         _set_result(mock_requests, [])
