@@ -67,7 +67,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from lib.utils import lemmatize_word
-from lib.coca import load_coca, in_coca
+from lib.coca import load_coca, in_coca, get_word_level
 from lib.ankiconnect import AnkiConnect, AnkiConnectError
 
 
@@ -297,6 +297,7 @@ def main():
             "in_coca": [
                 {
                     "lemma": lemma, "rep": rep, "forms": forms,
+                    "coca_level": get_word_level(lemma),
                     "chapters": sorted([
                         {"chapterUid": uid, "chapterTitle": chapter_map.get(uid, "")}
                         for uid in lemma_chapters.get(lemma, set()) if uid is not None

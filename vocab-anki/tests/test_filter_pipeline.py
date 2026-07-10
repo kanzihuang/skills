@@ -106,3 +106,48 @@ def test_query_anki_existing_count_mismatch_warning(capsys):
         "should warn about count mismatch"
     )
     assert len(result) > 0, "should still return valid lemmas from partial results"
+
+
+def test_json_out_includes_coca_level(tmp_path):
+    """JSON output 'in_coca' entries must include 'coca_level' field.
+
+    Historical: filter_pipeline.py documented coca_level in SKILL.md
+    but never included it in the JSON output (2026-07-10 fix).
+    """
+    import subprocess
+    import sys
+    import json
+    import os
+
+    api_response = json.dumps({
+        "updated": [
+            {"markText": "puzzled", "chapterUid": 105},
+            {"markText": "thunderstruck", "chapterUid": 94},
+        ],
+        "chapters": [
+            {"chapterUid": 105, "title": "Chapter 12"},
+            {"chapterUid": 94, "title": "Chapter 1"},
+        ],
+    })
+
+    json_out = tmp_path / "filtered.json"
+    skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    result = subprocess.run(
+        [sys.executable, os.path.join(skill_dir, "filter_pipeline.py"),
+         "--book-id", "TEST", "--book-title", "Test",
+         "--book-author", "Author",
+         "--json-out", str(json_out)],
+        input=api_response,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, f"filter_pipeline failed: {result.stderr}"
+    with open(json_out) as f:
+        data = json.load(f)
+
+    assert len(data["in_coca"]) == 1, "puzzle should pass COCA"
+    entry = data["in_coca"][0]
+    assert entry["lemma"] == "puzzle"
+    assert "coca_level" in entry, "coca_level field must be present"
+    assert entry["coca_level"] == 3, f"puzzle should be COCA level 3, got {entry['coca_level']}"
