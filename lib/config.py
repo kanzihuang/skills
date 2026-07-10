@@ -46,6 +46,11 @@ SENTENCE_END_FUNCTION_WORDS: frozenset[str] = frozenset({
     "always", "never", "often", "here", "there", "again",
     "once", "soon", "ever", "indeed", "hardly", "merely",
     "nearly", "else",
+    # Determiners — never valid as standalone sentence endings:
+    "the", "a", "an",
+    # Possessive determiners (NOT pronoun-capable; "his" is excluded
+    # because it can be a nominal possessive pronoun: "It is his."):
+    "its", "her", "their", "our", "your", "my",
 })
 
 # ── translate_deepl.py ──────────────────────────────────────────────────────

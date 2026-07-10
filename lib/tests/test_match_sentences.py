@@ -836,6 +836,27 @@ class TestPOSCorrections:
         # "defeated by" has a child — true passive verb, not adjective
         assert w["pos"] == "VERB", f"Expected VERB, got {w['pos']}"
 
+    def test_vbn_preceding_advmod_becomes_adj(self):
+        """Preposed advmod (completely) on VBN → ADJ (adjectival signal)."""
+        result = _run_pipeline(
+            [{"lemma": "abash", "rep": "abashed",
+              "forms": ["abashed"], "coca_level": 10}],
+            "He was completely abashed by the question.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"Expected ADJ, got {w['pos']}"
+
+    def test_vbn_following_advmod_stays_verb(self):
+        """Postposed advmod (along) on VBN → stays VERB (phrasal-verb particle)."""
+        result = _run_pipeline(
+            [{"lemma": "trudge", "rep": "trudged",
+              "forms": ["trudged"], "coca_level": 10}],
+            "When we had trudged along for several hours, we rested.",
+        )
+        w = result["words"][0]
+        # "along" is a phrasal-verb particle, not a true manner adverb
+        assert w["pos"] == "VERB", f"Expected VERB, got {w['pos']}"
+
 
 # ── char_offset word-boundary matching ──
 
@@ -1336,6 +1357,19 @@ class TestSmartTruncate:
         result, to, was_trunc = smart_truncate(sent, "A", 100, max_len=250)
         assert was_trunc is False
         assert result == sent
+
+    def test_function_word_set_includes_determiners(self):
+        """'the', 'a', 'an' are in SENTENCE_END_FUNCTION_WORDS so truncation
+        backs up past them.  This test verifies the set is correctly
+        configured — the actual backup logic is tested end-to-end in the
+        existing TestSmartTruncate cases."""
+        from lib.config import SENTENCE_END_FUNCTION_WORDS
+        for word in ("the", "a", "an", "its", "her", "their", "our", "your", "my"):
+            assert word in SENTENCE_END_FUNCTION_WORDS, (
+                f"'{word}' must be in SENTENCE_END_FUNCTION_WORDS"
+            )
+        # "his" is intentionally excluded — it can be a nominal possessive pronoun
+        assert "his" not in SENTENCE_END_FUNCTION_WORDS
 
     def test_no_punctuation_in_max_len_range(self):
         """No reachable punctuation within max_len → returned unchanged."""

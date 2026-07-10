@@ -195,6 +195,12 @@ artifacts.
 > - 或确认差异仅为连字符空格后跳过正则验证
 > - 此限制不会影响非 OCR 修复的截断验证
 
+**截断后必须做弯引号规范化**：从源文本手动截断的句子可能包含 Unicode 弯引号（`""''`），`match_sentences.py` 的 `_normalize_quotes()` 不会自动执行。截断完成后立即规范化：
+```python
+sentence = sentence.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
+```
+`check_step_completed.py --step all` 会检测弯引号问题；规范化后需重新验证。
+
 ### 修复因源文本空行产生的碎片句子
 
 当 `match_sentences.py` 的输出包含不完整句子时（特征：`is_fragment=True`、不以 `. ! ?` 结尾、源文本中同一句的后半部分以空行隔开），按以下流程修复：
@@ -394,6 +400,7 @@ POS 对齐 + 释义准确 + 翻译一致性。`lemma` 不在此步检查（match
 | 释义准确 | 代入验证法 + 义项枚举 + 跨句一致性 |
 | 翻译一致性 | `definition_cn` 与 `translation_cn` 语义对齐 |
 | be+VBN+by 情感形容词 | 对 `pos=VERB` + `word` 以 `-ed` 结尾 + 句中存在 "be...-ed...by" 结构的条目，执行 "very + word" 测试（"very disheartened" ✓ → 形容词）。若判定为情感/状态形容词 → `pos`→`ADJ`、`lemma`→`word`（表面词形）、`definition_cn` 改为形容词释义 |
+| `dep=dobj` 裸不定式 | `pos` 为 NOUN 或 ADJ 且 `dep=dobj` → 检查 head 是否为半情态动词（dare, need, help）或感知动词（see, hear, watch, feel, notice, observe）。若单词在句中作裸不定式 → `pos`→`VERB`，`definition_cn` 改为动词释义。详见 CLAUDE.md |
 
 机械检查（word 匹配、IPA 格式、功能词结尾等）由 match_sentences.py 和 sync_anki.py 自动执行。
 

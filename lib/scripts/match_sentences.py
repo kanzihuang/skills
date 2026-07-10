@@ -930,15 +930,18 @@ def process_words(
                 # and adjectives ("tall") in predicate position.
                 if pos in ("NOUN", "VERB") and token.dep_ in ("amod", "acomp", "oprd"):
                     pos = "ADJ"
-                # VBN + advmod child → ADJ: an adverb directly modifying
-                # a past participle is a strong signal of adjectival usage
-                # (e.g. "completely abashed", "very surprised").  In UD,
-                # manner adverbs modifying genuine passive verbs attach to
-                # the auxiliary, not the participle — so advmod→VBN is
-                # reliably adjectival without needing hard-coded word lists.
+                # VBN + preceding ADV advmod child → ADJ: a preposed true adverb
+                # directly modifying a past participle is a strong signal of
+                # adjectival usage (e.g. "completely abashed", "very surprised").
+                # Non-ADV advmods (subordinators like "When", particles like
+                # "along") and postposed adverbs do NOT trigger this rule.
+                # In UD, manner adverbs modifying genuine passive verbs
+                # attach to the auxiliary, not the participle.
                 if pos == "VERB" and token.tag_ == "VBN":
                     for child in token.children:
-                        if child.dep_ == "advmod":
+                        if (child.dep_ == "advmod"
+                                and child.pos_ == "ADV"
+                                and child.i < token.i):
                             pos = "ADJ"
                             lemma = token_lower
                             break

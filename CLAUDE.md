@@ -393,6 +393,28 @@ Symptom: verbs like "confess" tagged NOUN or ADJ with `dep=dobj` after dare.
 Check: `grep '"dep": "dobj"'` in match_sentences output for NOUN/ADJ entries
 whose head word is a semi-modal.
 
+### spaCy dobj bare-infinitive mis-tag after perception verbs (NOT mechanically fixable)
+
+The same `dep=dobj` bare-infinitive mis-tag also occurs after perception verbs
+(see, hear, watch, feel, notice, observe).  In "I could see the sunlight shimmer",
+"shimmer" is tagged as NOUN with `dep=dobj` — it is actually a bare infinitive
+complement of "see".
+
+This shares the same root cause as the semi-modal case above (dare, need, help):
+spaCy mis-parses the bare infinitive as a direct object.  A mechanical fix would
+require a hard-coded perception-verb list, violating the "no hard-coded semantic
+word lists" design principle.
+
+**Step 2F Claude review MUST catch and fix these.**  Check for entries where
+`dep=dobj` and `pos` is NOUN or ADJ, and the head word is a perception verb
+(see, hear, watch, feel, notice, observe).  Verify the word functions as a
+bare infinitive in the sentence.
+Correction: `pos → "VERB"`, `definition_cn` changed to verb format.
+
+Symptom: verbs like "shimmer" tagged NOUN with `dep=dobj` after see/hear/watch.
+Check: `grep '"dep": "dobj"'` in match_sentences output for NOUN/ADJ entries
+whose head word is a perception verb.
+
 ### Sentence-initial inverted ADJ detection ("Absurd as it might seem")
 
 **Change (2026-07-08)**: `match_sentences.py` main loop now detects sentence-initial inverted adjective constructions. In "Absurd as it might seem" (= "As absurd as..."), spaCy tags "Absurd" as PROPN (capitalized at sentence start), then PROPN→NOUN converts to NOUN. The fix checks: `pos == "NOUN" AND token.i == 0 AND dep in ("advcl", "root", "ROOT") AND next_token == "as" AND lemminflect ADJ channel returns the surface form`.
@@ -497,6 +519,23 @@ lemmatizer reduction (e.g. "puzzled" stays "puzzled" not "puzzle").
 Symptom: "puzzled" / "exhausted" tagged VERB+advcl instead of ADJ.
 Check: `grep '"dep": "advcl"'` in match_sentences output for VBD/VBN entries
 that pass the "very + word" test.
+
+### VBN + preceding ADV advmod → ADJ (adjectival participle detection)
+
+**Change (2026-07-10)**: The VBN+advmod→ADJ rule now requires three conditions:
+1. `child.dep_ == "advmod"` — the child must have advmod dependency
+2. `child.pos_ == "ADV"` — the child must be a true adverb (excludes SCONJ
+   subordinators like "When" and ADP particles like "along")
+3. `child.i < token.i` — the adverb must precede the participle (excludes
+   postposed phrasal-verb particles like "trudged **along**", "went **away**")
+
+Before this change, the rule had no POS or position gates, causing false
+positives when phrasal-verb particles (tagged as advmod) or subordinating
+conjunctions (also advmod) were children of a VBN token.
+
+Symptom: "trudged" in "had trudged along" tagged ADJ instead of VERB.
+Check: `grep '"pos": "ADJ"'` in match_sentences output for VBN words
+with postposed particles or SCONJ advmod children.
 
 ### smart_truncate() — automated sentence truncation (Step 2B pre-pass)
 
