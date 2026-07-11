@@ -1304,6 +1304,52 @@ class TestMergeAdjacentFragments:
             "at the same time both simple and majestic" in s for s in sents
         ), f"Expected merged sentence, got: {sents}"
 
+    # ── backward merge ─────────────────────────────────────────────────
+
+    def test_backward_merge_lowercase_fragment(self):
+        """Lowercase-start fragment merges backward with preceding fragment."""
+        source = (
+            '"That man," said the little prince, "'
+            "that man \n\nwould be scorned by all the others."
+        )
+        sents = [
+            '"That man," said the little prince, "',
+            "that man would be scorned by all the others.",
+        ]
+        merged = _merge_adjacent_fragments(sents, source)
+        assert len(merged) == 1
+        assert merged[0].startswith('"That man," said')
+
+    def test_backward_merge_requires_prev_fragment(self):
+        """Lowercase fragment does NOT merge backward into a complete sentence."""
+        source = "Hello world. \n\n fragments remain."
+        sents = [
+            "Hello world.",
+            "fragments remain.",
+        ]
+        merged = _merge_adjacent_fragments(sents, source)
+        assert len(merged) == 2
+
+    def test_backward_merge_cascade(self):
+        """Backward merges can chain: three fragments merge into one."""
+        source = (
+            "She said, \n\n\n\n"
+            "most softly, "
+            "\n\n"
+            "the words."
+        )
+        sents = [
+            "She said,",
+            "most softly,",
+            "the words.",
+        ]
+        merged = _merge_adjacent_fragments(sents, source)
+        # "most softly," backward-merges into "She said,", then
+        # "the words." backward-merges into the combined fragment.
+        assert len(merged) == 1
+        assert "most softly" in merged[0]
+        assert "the words" in merged[0]
+
 
 # ── _is_inside_opening_quote ────────────────────────────────────────────
 

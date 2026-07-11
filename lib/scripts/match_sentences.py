@@ -140,14 +140,17 @@ def _merge_adjacent_fragments(
 
     PySBD treats ``\\n\\n`` as a sentence boundary.  When the original text
     has blank lines *within* a sentence (OCR / formatting artifact), the
-    result is two fragments: one ending without terminal punctuation and
-    another starting with lowercase.  ``_normalize_dialogue_attribution()``
-    already handles ``[:,]\\n\\n\"`` dialogue patterns — this function
-    catches the remaining cases.
+    result is fragments.  ``_normalize_dialogue_attribution()`` already
+    handles ``[:,]\\n\\n\"`` dialogue patterns — this function catches the
+    remaining cases.
 
-    The merge is verified against *source_text* using
-    ``build_sentence_regex()`` to ensure the merged result is a continuous
-    substring of the original.  Merges are applied repeatedly until stable.
+    For every fragment (as determined by ``_is_fragment()``), both forward
+    and backward merges are attempted.  Fragment signals (odd quotes,
+    lowercase start, missing terminal punctuation) indicate that a sentence
+    is incomplete but do not reliably indicate *which direction* is broken.
+    Therefore no direction inference is performed — both are tried, and
+    ``build_sentence_regex()`` verification against *source_text* is the
+    sole safety check.  Merges are applied repeatedly until stable.
 
     Returns a new list with merges applied.
     """
@@ -162,6 +165,8 @@ def _merge_adjacent_fragments(
         i = 0
         while i < len(result):
             s = result[i]
+
+            # Forward merge: fragment + next sentence that starts lowercase.
             if (
                 _is_fragment(s)
                 and i + 1 < len(result)
@@ -169,13 +174,26 @@ def _merge_adjacent_fragments(
                 and _fragment_starts_lowercase(result[i + 1])
             ):
                 candidate = s + " " + result[i + 1]
-                # Verify the merged candidate is a continuous substring
-                # of the source text.
                 if re.search(build_sentence_regex(candidate), source_text):
                     merged.append(candidate)
                     i += 2
                     changed = True
                     continue
+
+            # Backward merge: fragment + previous sentence already in
+            # *merged*.  Both must be fragments.
+            if (
+                _is_fragment(s)
+                and merged
+                and _is_fragment(merged[-1])
+            ):
+                candidate = merged[-1] + " " + s
+                if re.search(build_sentence_regex(candidate), source_text):
+                    merged[-1] = candidate
+                    i += 1
+                    changed = True
+                    continue
+
             merged.append(s)
             i += 1
         result = merged
