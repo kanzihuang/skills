@@ -37,7 +37,6 @@ from .lemmatize import lemmatize
 from .utils import (
     EDGE_TTS_MAX_RETRIES,
     edge_tts_bytes,
-    lemmatize_word,
     print_progress,
     safe_filename,
 )
@@ -562,7 +561,7 @@ def sync(
             for future in concurrent.futures.as_completed(future_map):
                 idx, w = future_map[future]
                 word = w["word"]
-                lemma = lemmatize_word(word)
+                lemma = w.get("lemma", "").strip() or word
                 completed += 1
 
                 try:

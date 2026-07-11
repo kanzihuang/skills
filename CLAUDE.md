@@ -906,6 +906,30 @@ Symptom: "mast" produces two cards (ADJ from "mast-head" + NOUN from "put
 the mast down") instead of one.  Check: ``grep '"lemma": "mast"'`` in
 match_sentences output for duplicate entries.
 
+### sync_anki.py progress display used lemmatize_word instead of JSON lemma
+
+**Change (2026-07-11)**: The prefetch progress display in ``sync_anki.py``
+(``_prefetch_audio``) recomputed the lemma from the surface word using
+``lemmatize_word(word)`` for the display label, independently of the
+authoritative JSON ``lemma`` field.  When Step 2F corrected a lemma
+(e.g. ``disheartened`` VERB→ADJ, lemma ``dishearten``→``disheartened``),
+the progress line showed the old mechanical lemma in parentheses:
+``disheartened (dishearten)`` — confusing and inconsistent with the
+actual audio filename (``disheartened_ADJ_22720170_word.mp3``).
+
+**Fix**: Changed ``lemma = lemmatize_word(word)`` to
+``lemma = w.get("lemma", "").strip() or word``.  The progress display
+now uses the authoritative JSON lemma (which may have been corrected
+in Step 2F).  Removed unused ``lemmatize_word`` import.
+
+This is a display-only bug — audio filenames, WordId, and card content
+were always correct (they used the JSON ``lemma`` via
+``_process_one_word``).  Only the progress label was wrong.
+
+Symptom: prefetch progress shows ``word (old_lemma)`` where ``old_lemma``
+contradicts the actual audio filename.  Check: compare progress label
+against ``ls /tmp/vocab_audio_*/`` filenames.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
