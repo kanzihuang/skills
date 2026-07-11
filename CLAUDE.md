@@ -700,6 +700,31 @@ were matched to non-body-text sentences and had to be manually excluded in Step 
 Symptom: bibliography titles or copyright lines appearing as sentence text.
 Check: entries with `sentence` starting with ALL CAPS or boilerplate phrases.
 
+### Preamble detection: bio continuation + literary-analysis intro lines
+
+**Change (2026-07-11)**: ``detect_story_start()`` in ``lib/chapter_detect.py``
+now skips two additional preamble patterns that were previously missed:
+
+1. **Bio paragraph continuations**: When a ``_BIO_INDICATORS`` match occurs
+   (e.g. "…who was a French author…"), subsequent lines in the same paragraph
+   (not separated by a blank line) are treated as bio continuation.
+   Previously the next line would hit ``_NARRATIVE_OK`` (starts with capital,
+   ≥40 chars) and prematurely end preamble detection.
+2. **Literary-analysis intro lines**: ``_META_INDICATORS`` catches lines that
+   discuss the book as a literary work — ``appears to be``, ``is actually``,
+   ``some would say``, ``profound and deeply moving``, ``written in riddles``,
+   ``laced with (philosophy|poetic)``.  These patterns are highly specific to
+   critical introductions and extremely unlikely in narrative prose.
+
+Both are guarded by the existing ``len(line) < 200`` gate and only fire in the
+fallback heuristic (no chapter headings).  ``_META_INDICATORS`` only scans the
+first ~10 lines.
+
+Symptom: words matched to critical-introduction sentences (e.g. "The Little
+Prince appears to be a simple children's tale…") with ``char_offset`` in the
+first ~400 chars of text.  Check: entries where the sentence reads like a
+book review rather than narrative.
+
 ### Step 2B fragment repair: never use `\n` as sentence boundary
 
 **Change (2026-07-09)**: `lib/SHARED_WORKFLOW.md` Step 2B fragment repair workflow now
@@ -828,6 +853,30 @@ prefix ``"`` and increment ``target_offset`` by 1.
 Symptom: sentence has closing quotes and dialogue attribution (``," xxx
 said``) but does not start with ``"``.  Check: ``grep '," '`` in JSON
 output for sentences not starting with ``"``.
+
+### smart_truncate Direction 1 strips closing quote of truncated dialogue
+
+**Change (2026-07-11)**: When ``smart_truncate`` Direction 1 (end-truncation)
+truncates within a quoted dialogue exchange, the closing ``"`` of the last
+utterance can be sliced off, leaving an unclosed opening ``"``:
+
+```
+..."Little glittering objects." "Bees?" "Oh, no.   ← closing " lost
+```
+
+``_cleanup_unclosed_quote`` previously only handled the case where the
+*target word* is AFTER the last unclosed quote (stripping the quote + text
+before it).  When the target word is BEFORE the last unclosed quote, the
+function gave up (``new_tgt < 0`` → returns unchanged).
+
+**Fix**: ``_cleanup_unclosed_quote`` now has a second branch: when the
+target word is BEFORE the last unclosed ``"``, strip from that ``"`` to
+the end of the sentence (the trailing incomplete dialogue fragment),
+keeping only the clean text before it.
+
+Symptom: sentence ends with ``"Word.`` (opening quote, text, period —
+no closing quote) after auto-truncation.  Check: ``grep '"Oh, no.$'``
+or odd quote count in sentences with ``_auto_truncated: true``.
 
 ### lemmatize() Nation homograph split blocks correct VERB reductions
 
