@@ -64,15 +64,31 @@ def detect_story_start(text: str) -> int:
         r"\bwho was (?:a|an|the)\b|"           # "…who was a French author…"
         r"\bwrote\b.*\b(?:in|around)\s+\d{4}\b"  # "…wrote The Little Prince in 1943"
     )
+    _META_INDICATORS = re.compile(
+        r"\b(?:appears to be|is actually|some would say|"
+        r"profound and deeply moving|"
+        r"written in riddles|"
+        r"laced with (?:philosophy|poetic))\b"
+    )
     _NARRATIVE_OK = re.compile(r'^[A-Z"“].{40,}')  # capitalised or opening quote, ≥40 chars
 
     # Scan for the first line that looks like narrative prose.
     # Accumulate skipped chars for lines that are clearly front-matter.
     skipped = 0
+    in_bio_paragraph = False   # True while inside a bio paragraph (skip continuations)
     for i, line in enumerate(lines):
         if _PRE_INDICATORS.match(line):
             skipped += len(line) + 1  # +1 for \n
+            in_bio_paragraph = False  # blank line or section break ends bio paragraph
         elif _BIO_INDICATORS.search(line) and len(line) < 200:
+            skipped += len(line) + 1
+            in_bio_paragraph = True   # subsequent lines in same paragraph are bio
+        elif in_bio_paragraph and len(line.strip()) > 0:
+            # Continuation of a bio paragraph — skip regardless of content
+            skipped += len(line) + 1
+        elif _META_INDICATORS.search(line) and len(line) < 200:
+            # Literary analysis / critical introduction (e.g. "X appears to
+            # be a simple children's tale…").  Treat as preamble.
             skipped += len(line) + 1
         elif len(line.strip()) < 40 and not _NARRATIVE_OK.match(line):
             # Short non-narrative line (author name, subtitle, etc.) —

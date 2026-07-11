@@ -242,6 +242,19 @@ def _cleanup_unclosed_quote(
             and after_quote[new_tgt:new_tgt + len(target_word)].lower()
             == target_word.lower()):
         return after_quote, new_tgt
+
+    # Target word is BEFORE the last unclosed quote — the unclosed quote
+    # and trailing text are an incomplete dialogue fragment that was cut
+    # by truncation.  Strip from the last " onward.
+    before_last_quote = result[:last_quote].rstrip()
+    if before_last_quote:
+        new_tgt = target_offset
+        if (new_tgt >= 0
+                and new_tgt + len(target_word) <= len(before_last_quote)
+                and before_last_quote[new_tgt:new_tgt + len(target_word)].lower()
+                == target_word.lower()):
+            return before_last_quote, new_tgt
+
     return result, target_offset  # target word would be lost — keep original
 
 

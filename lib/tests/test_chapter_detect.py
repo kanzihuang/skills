@@ -109,6 +109,41 @@ def test_fallback_skips_author_bio():
     assert "Chapter one begins" in text[offset:]
 
 
+def test_fallback_skips_bio_continuation_and_meta_intro():
+    """Bio continuation + literary-analysis intro → both skipped as preamble.
+
+    Regression test: bio continuation (line after BIO match, same paragraph)
+    and meta intro lines ("appears to be", "is actually") must be skipped.
+    """
+    # Narrative must be long enough so preamble < 40% of total
+    narrative = (
+        "Once when I was six years old I saw a magnificent picture in a book, "
+        "called True Stories from Nature, about the primeval forest. "
+        "It was a picture of a boa constrictor in the act of swallowing an animal. "
+        "Here is a copy of the drawing. In the book it said: "
+        '"Boa constrictors swallow their prey whole, without chewing it. '
+        'After that they are not able to move, and they sleep through the six months '
+        'that they need for digestion." I pondered deeply, then, over the adventures '
+        "of the jungle. And after some work with a colored pencil I succeeded in "
+        "making my first drawing. My Drawing Number One. It looked something like "
+        "this: a boa constrictor digesting an elephant. I showed my masterpiece to "
+        "the grown-ups and asked them whether the drawing frightened them."
+    )
+    text = (
+        "THE LITTLE PRINCE\n\n\n\n"
+        "Antoine De Saint-Exupery\n\n\n\n\n"
+        "Antoine de Saint-Exupery, who was a French author, journalist and pilot wrote\n"
+        "The Little Prince in 1943, one year before his death.\n\n"
+        "The Little Prince appears to be a simple children's tale,\n"
+        "some would say that it is actually a profound and deeply moving tale,\n"
+        "written in riddles and laced with philosophy and poetic metaphor.\n\n\n\n\n"
+        + narrative
+    )
+    offset = detect_story_start(text)
+    assert offset > 0
+    assert "Once when I was six" in text[offset:]
+
+
 def test_fallback_no_preamble():
     """Plain narrative text — no preamble detected."""
     text = (
