@@ -501,25 +501,38 @@ Symptom: `lemma` is a verb base not appearing in the text (e.g. "dishearten" for
 
 **Change (2026-07-10)**: Added mechanical detection of depictive predicate adjectives.
 A lone past participle (`tag_` in `VBD`, `VBN`) in `dep=advcl` position with
-no children other than punctuation is a depictive predicate adjective, not a
-true adverbial clause.  E.g. "went away, **puzzled**." — "very puzzled" test
-confirms ADJ.
+no *verbal* children (subjects, objects, agents) is a depictive predicate
+adjective, not a true adverbial clause.  E.g. "went away, **puzzled**." or
+"**Clad** in royal purple, he was seated..." — "very puzzled" / "very clad"
+test confirms ADJ.
 
 The rule is gated by three conditions to prevent false positives:
 1. `tag_ in ("VBD", "VBN")` — only past participles; present participles
    (`VBG`, e.g. "smiling") are excluded because they are more often genuinely
    verbal
-2. No verbal dependents — genuine adverbial clauses have structure (subjects,
-   objects); a lone participle is adjectival
+2. No verbal dependents — children in `_VERBAL_DEPS` (nsubj, dobj, iobj,
+   xcomp, ccomp, aux, auxpass, agent, nsubjpass, expl, pobj) indicate a
+   genuine clause.  Prepositional-phrase modifiers (prep), conjunctions (cc),
+   and adverbial modifiers (advmod) are NOT verbal arguments — a VBN with
+   only these is adjectival.
 3. `dep_ == "advcl"` — other dependency relations (`acl`, `ROOT`) are not
    affected
 
 The *lemma* is also set to the surface form (`token_lower`) to prevent
 lemmatizer reduction (e.g. "puzzled" stays "puzzled" not "puzzle").
 
-Symptom: "puzzled" / "exhausted" tagged VERB+advcl instead of ADJ.
+**Change (2026-07-11)**: Fixed the `verbal_children` check to use `_VERBAL_DEPS`
+(shared with the advmod rule) instead of `c.dep_ not in ("punct",)`.  The old
+check treated ANY non-punctuation child — including prepositional-phrase
+modifiers — as evidence of a verbal clause.  This caused false negatives for
+participles with prepositional modifiers (e.g. "Clad in royal purple" — "in"
+is prep, not a verbal argument).  Now only children in `_VERBAL_DEPS` block
+the ADJ promotion.
+
+Symptom: "clad" / "dressed" / "covered" + prepositional phrase tagged
+VERB+advcl instead of ADJ.
 Check: `grep '"dep": "advcl"'` in match_sentences output for VBD/VBN entries
-that pass the "very + word" test.
+with prepositional modifiers that pass the "very + word" test.
 
 ### VBN + preceding ADV advmod → ADJ (adjectival participle detection)
 

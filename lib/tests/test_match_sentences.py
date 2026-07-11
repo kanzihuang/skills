@@ -865,16 +865,34 @@ class TestPOSCorrections:
         w = result["words"][0]
         assert w["pos"] == "VERB", f"Expected VERB, got {w['pos']}"
 
-    def test_advcl_with_children_stays_verb(self):
-        """VBN + advcl + has children (by-agent) → stays VERB (true passive)."""
+    def test_advcl_with_agent_stays_verb(self):
+        """VBN + advcl + has agent child (by-agent) → stays VERB (true passive).
+
+        The agent dep is in _VERBAL_DEPS — a genuine verbal argument.
+        """
         result = _run_pipeline(
             [{"lemma": "defeat", "rep": "defeated",
               "forms": ["defeated"], "coca_level": 6}],
             "He left the room, defeated by the argument.",
         )
         w = result["words"][0]
-        # "defeated by" has a child — true passive verb, not adjective
+        # "defeated by" has agent child — true passive verb, not adjective
         assert w["pos"] == "VERB", f"Expected VERB, got {w['pos']}"
+
+    def test_advcl_with_prep_children_becomes_adj(self):
+        """VBN + advcl + non-verbal children (prepositional phrases) → ADJ.
+
+        Prepositional-phrase modifiers (in+N, on+N) are typical of adjectives,
+        not verbal clauses.  E.g. "Clad in royal purple, he was seated..."
+        """
+        result = _run_pipeline(
+            [{"lemma": "clad", "rep": "Clad",
+              "forms": ["clad", "Clad"], "coca_level": 7}],
+            "Clad in royal purple and ermine, he was seated upon a throne.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"Expected ADJ, got {w['pos']}"
+        assert w["lemma"] == "clad", f"Expected lemma='clad', got {w['lemma']}"
 
     def test_vbn_preceding_advmod_becomes_adj(self):
         """Preposed advmod (completely) on VBN → ADJ (adjectival signal)."""

@@ -971,24 +971,39 @@ def process_words(
                             pos = "ADJ"
                             lemma = token_lower
                             break
+                # Shared set: verbal dependents that indicate a genuine
+                # clause structure (subjects, objects, agents).
+                # Adverbial modifiers (advmod), determiners (det),
+                # prepositions (prep), and conjunctions (cc) are not
+                # verbal arguments — a VBN with only non-verbal
+                # children is adjectival.
+                _VERBAL_DEPS = frozenset({
+                    "nsubj", "csubj", "dobj", "iobj", "pobj",
+                    "xcomp", "ccomp", "aux", "auxpass", "agent",
+                    "expl", "nsubjpass",
+                })
                 # VBD/VBN + advcl + no verbal dependents → ADJ.
                 # A lone past participle in advcl position with no
-                # children (other than punct) is a depictive predicate
-                # adjective, not a true adverbial clause.
-                # E.g. "went away, puzzled."  Exclude VBG (present
-                # participles like "smiling") — more often verbal.
+                # verbal children (subjects, objects, agents) is a
+                # depictive predicate adjective, not a true adverbial
+                # clause.  E.g. "went away, puzzled." or
+                # "Clad in royal purple, he was seated..."
+                # Prepositional-phrase modifiers (in+N, on+N) are
+                # typical of adjectives, not verbal clauses.
+                # Exclude VBG (present participles like "smiling") —
+                # more often verbal.
                 if (pos == "VERB" and token.dep_ == "advcl"
                         and token.tag_ in ("VBD", "VBN")):
                     verbal_children = [
                         c for c in token.children
-                        if c.dep_ not in ("punct",)
+                        if c.dep_ in _VERBAL_DEPS
                     ]
                     if not verbal_children:
                         pos = "ADJ"
                         lemma = token_lower
                 # VBD/VBN + advmod + no verbal dependents → ADJ.
                 # A lone past participle as an adverbial modifier (no comma)
-                # with no children other than punct is a depictive predicate
+                # with only non-verbal children is a depictive predicate
                 # adjective.  E.g. "stood there all bewildered."
                 # Exclude VBG — present participles are more often genuinely
                 # verbal.  Exclude tokens with verbal children — true
@@ -996,16 +1011,6 @@ def process_words(
                 # adjectival.
                 if (pos == "VERB" and token.dep_ == "advmod"
                         and token.tag_ in ("VBD", "VBN")):
-                    # Only count children that indicate genuine verbal
-                    # structure (subjects, objects, agents).  Adverbial
-                    # modifiers (advmod) and determiners (det) are not
-                    # verbal arguments — a VBN with only advmod children
-                    # is adjectival.
-                    _VERBAL_DEPS = frozenset({
-                        "nsubj", "csubj", "dobj", "iobj", "pobj",
-                        "xcomp", "ccomp", "aux", "auxpass", "agent",
-                        "expl", "nsubjpass",
-                    })
                     verbal_children = [
                         c for c in token.children
                         if c.dep_ in _VERBAL_DEPS
