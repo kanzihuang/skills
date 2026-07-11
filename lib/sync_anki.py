@@ -29,6 +29,8 @@ import sys
 import tempfile
 import time
 
+from .config import MIN_SENTENCE_LENGTH
+
 from .ankiconnect import AnkiConnect, AnkiConnectError
 from .audio import _find_anki_media_dir, _upload_media_direct, _repair_audio
 from .bands import compute_bands, _count_coca_levels, _pre_assign_bands
@@ -800,25 +802,60 @@ def main() -> None:
         print("Error: 'words' array is empty", file=sys.stderr)
         sys.exit(1)
 
+    def _better_sentence(old: dict, new: dict) -> bool:
+        """Return True if *new* entry has a better sentence than *old*.
+
+        Same logic as match_sentences._better():
+          Tier 0: non-fragment beats fragment (is_fragment=False > True)
+          Otherwise: shorter wins above MIN_SENTENCE_LENGTH (30);
+                     longer wins below it.
+          Tie (same length): keep old.
+        """
+        # Tier 0 — completeness: non-fragment beats fragment
+        old_frag = old.get('is_fragment', False)
+        new_frag = new.get('is_fragment', False)
+        if old_frag != new_frag:
+            return not new_frag  # pick new only if it's complete
+
+        la = len(old.get('sentence', ''))
+        lb = len(new.get('sentence', ''))
+        if la == lb:
+            return False  # tie → keep old
+        if (la < MIN_SENTENCE_LENGTH or lb < MIN_SENTENCE_LENGTH) ^ (la < lb):
+            return False  # keep old
+        return True  # pick new
+
     # Deduplicate by (lemma, pos) — not by surface word form.
     # WordId = {lemma}_{pos}_{suffix}, POS is included precisely so that
     # the same lemma with different POS (e.g. astray ADJ vs ADV,
     # virgin ADJ vs NOUN) produces separate cards.
-    # Different surface forms of the same lemma (e.g. boa/boas) share
-    # the same (lemma, pos) key and are correctly deduplicated.
-    seen = set()
+    # When collisions occur, _better_sentence() keeps the entry with
+    # the better sentence (shorter in sweet-spot, non-fragment beats
+    # fragment), matching match_sentences.py's sentence selection.
+    seen: dict[tuple[str, str], dict] = {}
     deduped = []
     dedup_details: list[str] = []
     for w in data["words"]:
         key = (w["lemma"].strip().lower(), w["pos"].strip().upper())
         if key not in seen:
-            seen.add(key)
-            deduped.append(w)
+            seen[key] = w
         else:
-            dedup_details.append(
-                f"    {w.get('word', '?')} (lemma={w.get('lemma', '?')}, "
-                f"pos={w.get('pos', '?')}) — dropped, kept first occurrence"
-            )
+            existing = seen[key]
+            if _better_sentence(existing, w):
+                dedup_details.append(
+                    f"    {existing.get('word', '?')} "
+                    f"→ replaced by {w.get('word', '?')} "
+                    f"(better sentence: "
+                    f"{len(existing.get('sentence',''))} → {len(w.get('sentence',''))} chars)"
+                )
+                seen[key] = w
+            else:
+                dedup_details.append(
+                    f"    {w.get('word', '?')} "
+                    f"(lemma={w.get('lemma', '?')}, "
+                    f"pos={w.get('pos', '?')}) — dropped, kept {existing.get('word', '?')}"
+                )
+    deduped = list(seen.values())
     if len(deduped) < len(data["words"]):
         dropped = len(data["words"]) - len(deduped)
         print(f"\n[DEDUP] {dropped} duplicate (lemma, pos) entries "

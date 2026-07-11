@@ -9,7 +9,7 @@ EDGE_TTS_MAX_RETRIES = 2       # extra attempts on transient failure (3 total)
 EDGE_TTS_RETRY_DELAY = 0.75    # seconds between retries
 
 # ── sync_anki.py ────────────────────────────────────────────────────────────
-MAX_SENTENCE_LENGTH = 500      # chars — smart_truncate tries to shorten
+MAX_SENTENCE_LENGTH = 400      # chars — smart_truncate tries to shorten
                                 # sentences exceeding this; validation.py warns
                                 # when the limit is exceeded
 MIN_SENTENCE_LENGTH = 30       # chars — match_sentences.py prefers candidates
@@ -19,8 +19,6 @@ MIN_SENTENCE_LENGTH = 30       # chars — match_sentences.py prefers candidates
                                 # said courteously." already provide sufficient
                                 # context. Only <30 (e.g. "She hesitated.") is
                                 # truly insufficient.
-MIN_TRUNCATION_LENGTH = 100    # chars — sentences ≤ this length are left
-                                # as-is; truncation risk outweighs benefit
 
 # ── AnkiConnect ─────────────────────────────────────────────────────────────
 ANKICONNECT_URL = "http://localhost:8765"

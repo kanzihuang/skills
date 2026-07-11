@@ -24,7 +24,7 @@ import pysbd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lib.chapter_detect import detect_story_start
-from lib.config import HARD_CUTOFF, MIN_SENTENCE_LENGTH, MIN_TRUNCATION_LENGTH, MAX_SENTENCE_LENGTH, SENTENCE_END_FUNCTION_WORDS
+from lib.config import HARD_CUTOFF, MIN_SENTENCE_LENGTH, MAX_SENTENCE_LENGTH, SENTENCE_END_FUNCTION_WORDS
 from lib.utils import build_sentence_regex, normalize_quotes
 
 
@@ -280,11 +280,6 @@ def smart_truncate(
         if (stripped and len(stripped) > 1
                 and stripped[-1] in '"\'' and stripped[-2] in '.!?'):
             return sentence, target_offset, False
-
-    # Sentences ≤ MIN_TRUNCATION_LENGTH are short enough — don't risk
-    # truncation damage.
-    if len(sentence) <= MIN_TRUNCATION_LENGTH:
-        return sentence, target_offset, False
 
     target_end = target_offset + len(target_word)
 
@@ -987,6 +982,33 @@ def process_words(
                     verbal_children = [
                         c for c in token.children
                         if c.dep_ not in ("punct",)
+                    ]
+                    if not verbal_children:
+                        pos = "ADJ"
+                        lemma = token_lower
+                # VBD/VBN + advmod + no verbal dependents → ADJ.
+                # A lone past participle as an adverbial modifier (no comma)
+                # with no children other than punct is a depictive predicate
+                # adjective.  E.g. "stood there all bewildered."
+                # Exclude VBG — present participles are more often genuinely
+                # verbal.  Exclude tokens with verbal children — true
+                # adverbial clauses have structure; a bare participle is
+                # adjectival.
+                if (pos == "VERB" and token.dep_ == "advmod"
+                        and token.tag_ in ("VBD", "VBN")):
+                    # Only count children that indicate genuine verbal
+                    # structure (subjects, objects, agents).  Adverbial
+                    # modifiers (advmod) and determiners (det) are not
+                    # verbal arguments — a VBN with only advmod children
+                    # is adjectival.
+                    _VERBAL_DEPS = frozenset({
+                        "nsubj", "csubj", "dobj", "iobj", "pobj",
+                        "xcomp", "ccomp", "aux", "auxpass", "agent",
+                        "expl", "nsubjpass",
+                    })
+                    verbal_children = [
+                        c for c in token.children
+                        if c.dep_ in _VERBAL_DEPS
                     ]
                     if not verbal_children:
                         pos = "ADJ"

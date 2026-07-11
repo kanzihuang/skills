@@ -897,6 +897,39 @@ class TestPOSCorrections:
         # "along" is a phrasal-verb particle, not a true manner adverb
         assert w["pos"] == "VERB", f"Expected VERB, got {w['pos']}"
 
+    def test_vbn_advmod_no_children_becomes_adj(self):
+        """VBN + advmod + no verbal children → ADJ (depictive predicate)."""
+        result = _run_pipeline(
+            [{"lemma": "bewilder", "rep": "bewildered",
+              "forms": ["bewildered"], "coca_level": 5}],
+            "He stood there all bewildered, the glass globe held arrested in mid-air.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"Expected ADJ, got {w['pos']}"
+        assert w["lemma"] == "bewildered", (
+            f"Expected lemma='bewildered', got {w['lemma']}"
+        )
+
+    def test_vbd_advmod_no_children_becomes_adj(self):
+        """VBD + advmod + no verbal children → ADJ."""
+        result = _run_pipeline(
+            [{"lemma": "exhaust", "rep": "exhausted",
+              "forms": ["exhausted"], "coca_level": 6}],
+            "He sat there exhausted.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"Expected ADJ, got {w['pos']}"
+
+    def test_vbg_advmod_stays_verb(self):
+        """VBG + advmod stays VERB (present participle more verbal)."""
+        result = _run_pipeline(
+            [{"lemma": "run", "rep": "running",
+              "forms": ["running"], "coca_level": 2}],
+            "He came running toward us.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "VERB", f"Expected VERB, got {w['pos']}"
+
 
 # ── char_offset word-boundary matching ──
 
