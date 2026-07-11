@@ -1398,6 +1398,54 @@ class TestSmartTruncate:
         assert was_trunc is False
         assert result == sent
 
+    def test_under_max_len_but_poorly_terminated_still_truncates(self):
+        """Sentence under max_len that ends mid-thought (hard_truncate
+        artifact) — Direction 1 still finds a proper sentence boundary."""
+        # Simulates a hard_truncate output: 280 chars, under max_len=500,
+        # but ends with a comma (no proper .!? termination).
+        sent = (
+            "During the fifty-four years that I have inhabited this planet, "
+            "I have been disturbed only three times. The first time was "
+            "twenty-two years ago, when some giddy goose fell from goodness "
+            "knows where. He made the most frightful noise that resounded "
+            "all over the place, and I made four mistakes in my addition. "
+            "I was saying, then,"
+        )
+        target_word = "giddy"
+        toff = sent.find(target_word)
+        result, new_to, was_trunc = smart_truncate(
+            sent, target_word, toff, max_len=500,
+        )
+        # Should truncate at the first .!? after target word even though
+        # the sentence is under max_len — it ends mid-thought.
+        assert was_trunc is True
+        assert len(result) < len(sent)
+        assert result.endswith(".")
+        assert result[new_to:new_to + len(target_word)].lower() == target_word
+
+    def test_short_well_terminated_sentence_unchanged(self):
+        """Short sentence (< max_len) ending with . — unchanged."""
+        sent = "He was very timid."
+        target_word = "timid"
+        toff = sent.find(target_word)
+        result, new_to, was_trunc = smart_truncate(
+            sent, target_word, toff, max_len=500,
+        )
+        assert was_trunc is False
+        assert result == sent
+        assert new_to == toff
+
+    def test_short_sentence_ending_with_quoted_period_unchanged(self):
+        """Short sentence ending with ." — unchanged."""
+        sent = '"Where are the men?"'
+        target_word = "men"
+        toff = sent.find(target_word)
+        result, new_to, was_trunc = smart_truncate(
+            sent, target_word, toff, max_len=500,
+        )
+        assert was_trunc is False
+        assert result == sent
+
     def test_function_word_set_includes_determiners(self):
         """'the', 'a', 'an' are in SENTENCE_END_FUNCTION_WORDS so truncation
         backs up past them.  This test verifies the set is correctly

@@ -268,7 +268,18 @@ def smart_truncate(
     with ``was_truncated=False``.
     """
     if len(sentence) <= max_len:
-        return sentence, target_offset, False
+        # Only return immediately if the sentence already ends with proper
+        # sentence-ending punctuation.  Sentences under max_len that end
+        # mid-thought (without .!?) are likely hard_truncate artifacts —
+        # fall through to Direction 1 / Direction 2 to find a genuine
+        # sentence boundary.
+        stripped = sentence.rstrip()
+        if stripped and stripped[-1] in '.!?':
+            return sentence, target_offset, False
+        # Closing quote after sentence-ending punctuation is also valid
+        if (stripped and len(stripped) > 1
+                and stripped[-1] in '"\'' and stripped[-2] in '.!?'):
+            return sentence, target_offset, False
 
     # Sentences ≤ MIN_TRUNCATION_LENGTH are short enough — don't risk
     # truncation damage.
