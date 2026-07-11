@@ -87,7 +87,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 源文本获取失败 → 该批次所有单词跳过。
 
-**已知局限**: 当源文本在句中包含空行时（通常为 OCR 或排版 artifact），PySBD 会将其切为多个碎片。`_merge_adjacent_fragments()` 自动合并验证通过的大多数碎片。无法自动合并的碎片仍由 `_is_fragment()` 标记（`is_fragment=True`），在 Step 2B 中手动修复。
+**已知局限**: 当源文本在句中包含空行时（通常为 OCR 或排版 artifact），PySBD 会将其切为多个碎片。`_merge_adjacent_fragments()` 自动合并验证通过的大多数碎片。无法自动合并的碎片仍由 `_is_fragment()` 标记（`is_fragment=True`），在 Step 2B 中直接拒绝该词（不修复）。
 
 ---
 
@@ -95,58 +95,14 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 > ⚠️ **不可绕过（MUST）**。
 
-### 2B-0. 自动截断预处理
-
-Run mechanical truncation on sentences exceeding ``MAX_SENTENCE_LENGTH``
-(400 chars).  ``smart_truncate()`` scans for sentence-ending punctuation
-(``.!?``) in two directions from the target word:
-
-1. **Right scan** — from *target_end* to end of sentence: truncates at the
-   first ``.!?`` that actually shortens the sentence.
-2. **Left scan** — from *target_offset* towards the beginning: finds the
-   nearest ``.!?`` + space + capital letter boundary, truncates from there.
-
-Sentences that cannot be shortened are kept as-is.  If a truncated sentence
-still exceeds ``MAX_SENTENCE_LENGTH``, ``validation.py`` reports a hard
-error and Step 2B Claude rejects the word.  There is no manual truncation
-step for individual sentences within ``smart_truncate()``.
-
-```bash
-cd <skill_dir> && .venv/bin/python3 -c "
-import json, sys
-sys.path.insert(0, 'lib')
-from scripts.match_sentences import smart_truncate
-
-with open('/tmp/vocab-anki-input-<tmp_id>.json') as f:
-    data = json.load(f)
-
-auto_truncated = 0
-for w in data['words']:
-    sent = w.get('sentence', '')
-    word = w.get('word', '')
-    to = w.get('target_offset', -1)
-    if to >= 0:
-        new_sent, new_to, was_trunc = smart_truncate(sent, word, to)
-        w['sentence'] = new_sent
-        w['target_offset'] = new_to
-        if was_trunc:
-            w['_auto_truncated'] = True
-            auto_truncated += 1
-
-with open('/tmp/vocab-anki-input-<tmp_id>.json', 'w') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-
-print(f'Auto-truncated: {auto_truncated}')
-"
-```
-
 ### 2B. 手动审核（Claude）
 
 审核重点：
 - ``_auto_truncated`` 标记的条目 — 确认截断位置语义合理
 - 序言/非正文句子（`char_offset` 靠前、内容为作者简介/编辑导语）
-- 语法不完整的句子片段
+- **语法不完整的句子片段** — ``is_fragment=True``、不以 ``. ! ?`` 结尾、小写开头 → **直接丢弃该词**（不修复）。碎片修复已被移除——空行碎片合并已在 ``match_sentences.py`` 中机械处理，无法自动合并的碎片不可靠，不应制成卡片
 - **OCR 标点错误**：句尾 `:` 或 `,` 在语法完整的句子中实为 OCR 对句号的误识别
+- 完整长句（``_auto_truncated`` 未标记但 > ``MAX_SENTENCE_LENGTH``）— 确认无法机械截断后接受
 
 > **连字符复合词片段**（如 "mast-head" 中的 "mast"）已由 match_sentences.py
 > Step 2A-3d 机械跳过，不再出现在输出中。此检查不再需要 Claude 人工处理。
@@ -158,56 +114,15 @@ print(f'Auto-truncated: {auto_truncated}')
 
 **OCR 连字符空格修复**：Internet Archive 文本中常见连字符后有多余空格（如 `"fair-to- middling"`）。修正方法：移除连字符两侧多余空格 → `"fair-to-middling"`。此修正先于 DeepL 翻译。
 
-### 修复因源文本空行产生的碎片句子
+**不完整句子的处理**：``match_sentences.py`` 自动合并了
+大多数被源文本空行切分的相邻碎片。无法自动合并的句子会被标记
+``is_fragment=True``。Step 2B 审查时遇到此类句子**直接丢弃该词**
+——碎片修复不可靠，不值得制成卡片。``_merge_adjacent_fragments()``
+已在 Step 2A 中了做了最大努力的机械修复。
 
-当 `match_sentences.py` 的输出包含不完整句子时（特征：`is_fragment=True`、不以 `. ! ?` 结尾、源文本中同一句的后半部分以空行隔开），按以下流程修复：
+### Step 2B.5: target_offset Verification (MUST run after Step 2B)
 
-1. **定位**: 在源文本中搜索碎片文本定位位置: `text.find(fragment_text)`
-2. **扩展**: 前后扩展找到完整句边界：
-
-   向前找句首（只认 `. ! ?` 后面跟空格+大写字母，或文本开头）：
-   ```python
-   start = fragment_start
-   while start > 0:
-       if source_text[start - 1] in '.!?':
-           after = source_text[start:start + 5].lstrip()
-           if start == 0 or (after and after[0].isupper()):
-               break
-       start -= 1
-   ```
-
-   向后找句末（下一个 `. ! ?`）：
-   ```python
-   end = fragment_start + len(fragment_text)
-   while end < len(source_text) and source_text[end] not in '.!?':
-       end += 1
-   if end < len(source_text):
-       end += 1  # include the punctuation
-   ```
-
-   > ⚠️ **Pitfall**: 不要用 `\n` 作为句子边界。段落内的单换行（`\n`）是排版换行而非句边界。错误示例：`while start > 0 and source_text[start-1] not in '.!?\n'` 会把 `huge,\nstupid` 的 `\n` 当句首，产生 "stupid loggerheads..." 小写开头碎片。
-3. **提取**: `re.sub(r'\s+', ' ', text[start:end]).strip()`
-4. **计算偏移**: 完整句中目标词的新字符位置 → 更新 `target_offset`
-5. **验证**: 用 `build_sentence_regex()` 验证完整句在源文本中可匹配:
-   ```python
-   import re, sys
-   sys.path.insert(0, '.')
-   from lib.utils import build_sentence_regex
-   assert re.search(build_sentence_regex(complete), source_text), \
-       "sentence must be a continuous substring of source"
-   ```
-6. **更新 JSON**: 替换 `sentence`、`target_offset`。若修复仅改变目标词之后的文本（扩展被截断的句尾），`target_offset` 不变；若在目标词之前插入文本，需重新计算。`char_offset` = 完整句在源文本中的起始位置（`text.find(complete_sentence)`）+ 新 `target_offset`
-
-> **Note on char_offset**: `smart_truncate()` (Step 2B-0) handles both
-> end-truncation (Direction 1) and beginning-truncation (Direction 2),
-> recalculating `target_offset` automatically.  No manual `char_offset`
-> updates are needed.
-> Note that `sync_anki.py` does not consume `char_offset` — it is a metadata field
-> for external tooling.
-
-### Step 2B.5: target_offset Verification (MUST run after truncation)
-
-After truncation and fragment repair, verify all ``target_offset`` values
+After Step 2B review, verify all ``target_offset`` values
 still point to the correct word.  This catches off-by-one errors before
 they reach Step 2H sync validation.
 

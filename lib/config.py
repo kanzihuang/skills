@@ -9,9 +9,11 @@ EDGE_TTS_MAX_RETRIES = 2       # extra attempts on transient failure (3 total)
 EDGE_TTS_RETRY_DELAY = 0.75    # seconds between retries
 
 # ── sync_anki.py ────────────────────────────────────────────────────────────
-MAX_SENTENCE_LENGTH = 400      # chars — smart_truncate tries to shorten
-                                # sentences exceeding this; validation.py warns
-                                # when the limit is exceeded
+MAX_SENTENCE_LENGTH = 250      # chars — optimal for flashcard review:
+                                # ~4-5 lines on mobile, readable in ~5 seconds,
+                                # enough context for 2-3 clauses.  smart_truncate
+                                # shortens sentences exceeding this; validation.py
+                                # warns when the limit is exceeded
 MIN_SENTENCE_LENGTH = 30       # chars — match_sentences.py prefers candidates
                                 # ≥ this length; validation.py warns when the
                                 # final sentence falls below it. Based on data:

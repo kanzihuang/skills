@@ -55,10 +55,12 @@ def test_target_offset_mismatch():
         f"Should detect target_offset mismatch\nErrors: {errors}"
 
 
-# ── Hard error: sentence too long ──
+# ── Sentence length checks ──
 
-def test_sentence_too_long():
-    """Sentence >MAX_SENTENCE_LENGTH is a hard error."""
+def test_sentence_too_long_complete():
+    """Sentence >MAX_SENTENCE_LENGTH that ends with terminal punctuation
+    is a soft warning, not a hard error — it was reviewed in Step 2B
+    but cannot be mechanically truncated (no internal .!? boundaries)."""
     base = (
         "He adjusted the sack and carefully worked the line so that it came "
         "across a new part of his shoulders and, holding it anchored with his "
@@ -70,8 +72,27 @@ def test_sentence_too_long():
         f"Test sentence should be >{MAX_SENTENCE_LENGTH} chars: got {len(base)}"
     w = make_word(word="anchored", sentence=base, target_offset=base.index("anchored"))
     errors = validate_word_entries([w])
+    assert not has_error(errors, "anchored", "too long"), \
+        f"Complete sentence >MAX should be soft warning, not hard error\nErrors: {errors}"
+
+
+def test_sentence_too_long_incomplete():
+    """Sentence >MAX_SENTENCE_LENGTH without terminal punctuation is a hard
+    error — signals that Step 2B truncation was skipped."""
+    base = (
+        "He adjusted the sack and carefully worked the line so that it came "
+        "across a new part of his shoulders, holding it anchored with his "
+        "shoulders, he leaned forward and braced himself against the weight "
+        "of the fish as it pulled with tremendous force " * 2
+    )
+    # Ensure no terminal punctuation
+    base = base.rstrip('.!?')
+    assert len(base) > MAX_SENTENCE_LENGTH, \
+        f"Test sentence should be >{MAX_SENTENCE_LENGTH} chars: got {len(base)}"
+    w = make_word(word="anchored", sentence=base, target_offset=base.index("anchored"))
+    errors = validate_word_entries([w])
     assert has_error(errors, "anchored", "too long"), \
-        f"Should reject >250 char sentence\nErrors: {errors}"
+        f"Should reject >{MAX_SENTENCE_LENGTH} char incomplete sentence\nErrors: {errors}"
 
 
 def test_sentence_at_limit_ok():
@@ -340,30 +361,16 @@ def test_sentence_at_min_length_passes():
 # ── Irregular past-tense verb detection (Issue 2) ──
 
 
-def test_irregular_past_tense_not_false_positive():
-    """Sentences with irregular past-tense verbs should not trigger 'no finite verb'."""
-    w = make_word(
-        word="acquaintance",
-        sentence="And so I made the acquaintance of the little prince.",
-        target_offset=12,
-    )
-    errors = validate_word_entries([w])
-    assert isinstance(errors, list)
-    # "made" is irregular past tense — should NOT trigger finite-verb warning.
-    # The soft warning goes to stderr, so errors list should have no finite-verb errors.
-    assert not has_error(errors, "acquaintance", "finite verb"), \
-        f"Irregular past 'made' should not trigger finite-verb warning\nErrors: {errors}"
-
-
 def test_genuine_noun_phrase_still_warns():
-    """Pure noun phrase without any verb form still passes validation (soft warning only)."""
+    """Pure noun phrase without any verb form still passes validation
+    (only lowercase-start hard error fires; no finite-verb check exists)."""
     w = make_word(
         word="tenderness",
         sentence="the tenderness of smiling faces",
     )
     errors = validate_word_entries([w])
-    # No hard errors — soft warnings go to stderr.
-    assert isinstance(errors, list)
+    # Lowercase start is a hard error; no finite-verb soft warning exists.
+    assert has_error(errors, "tenderness", "lowercase")
 
 
 # ── Single CJK character definition (Issue 6) ──

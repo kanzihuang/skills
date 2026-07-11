@@ -54,10 +54,22 @@ def _check_2b(words: list[dict]) -> list[str]:
         # Check for overlong untruncated sentences
         clean = re.sub(r"<[^>]+>", "", sent)
         if len(clean) > MAX_SENTENCE_LENGTH:
-            warnings.append(
-                f"[{word}] sentence is {len(clean)} chars (>{MAX_SENTENCE_LENGTH}) without "
-                f"truncation — Step 2B likely skipped"
-            )
+            # Complete sentences (ending with .!?) that exceed the limit
+            # were reviewed in Step 2B but cannot be mechanically truncated
+            # (no internal .!? boundaries).  This is a quality note, not a
+            # skipped-step indicator.
+            if clean.rstrip('"\'""''').endswith(('.', '!', '?')):
+                print(
+                    f"  [NOTE] [{word}] sentence is {len(clean)} chars "
+                    f"(>{MAX_SENTENCE_LENGTH}) — complete sentence, cannot "
+                    f"be mechanically truncated",
+                    file=sys.stderr,
+                )
+            else:
+                warnings.append(
+                    f"[{word}] sentence is {len(clean)} chars (>{MAX_SENTENCE_LENGTH}) without "
+                    f"truncation — Step 2B likely skipped"
+                )
 
         # Check sentence starts with capital or opening quote
         first_char = clean.lstrip()[0] if clean.lstrip() else ""

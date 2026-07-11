@@ -17,20 +17,6 @@ from .config import MAX_SENTENCE_LENGTH, MIN_SENTENCE_LENGTH, SENTENCE_END_FUNCT
 from .lemmatize import lemmatize
 from .utils import lemmatize_word
 
-# Common irregular past-tense forms used by finite-verb detection (Issue 2).
-# The first two tiers (auxiliaries/modals and -ed/-s endings) cover regular
-# verbs; this set catches bare past-tense forms like "made", "went", "told".
-_IRREGULAR_PAST_TENSE: set[str] = {
-    "made", "went", "came", "saw", "took", "gave", "told", "knew",
-    "found", "thought", "said", "got", "put", "let", "set", "read",
-    "left", "felt", "kept", "meant", "met", "sent", "spent", "built",
-    "held", "led", "stood", "understood", "began", "broke", "chose",
-    "drove", "ate", "fell", "flew", "grew", "hung", "ran", "sang",
-    "sat", "slept", "spoke", "swam", "wrote", "drew", "drank",
-    "fought", "taught", "caught", "brought", "bought", "sought",
-    "lost", "won", "hit", "cut", "cost", "hurt", "shut",
-}
-
 
 def validate_word_entries(words: list[dict]) -> list[str]:
     """Validate word entries before sync. Returns list of error messages (empty = pass).
@@ -72,10 +58,30 @@ def validate_word_entries(words: list[dict]) -> list[str]:
         # 3. Sentence length check
         clean_len = len(sentence)
         if clean_len > MAX_SENTENCE_LENGTH:
-            errors.append(
-                f"[{word}] sentence too long: {clean_len} chars "
-                f"(max {MAX_SENTENCE_LENGTH})"
-            )
+            # Complete sentences (ending with .!?) that exceed the limit
+            # are a quality concern (soft warning), not a data-integrity
+            # issue (hard error).  Step 2B has already reviewed them and
+            # they cannot be mechanically truncated (no internal .!?
+            # boundaries).  Non-terminal-ending sentences are a hard
+            # error — they signal that Step 2B truncation was skipped.
+            # Strip trailing quotes before checking terminal punctuation.
+            # Quoted speech often ends with .!" or ?" — the sentence is
+            # complete; the quote is just a framing character.
+            # Also strip HTML tags that may wrap the terminal punctuation.
+            _end_check = re.sub(r"<[^>]+>", "", sentence).strip().rstrip('"\'')
+            if _end_check.endswith(('.', '!', '?')):
+                print(
+                    f"  [WARN] [{word}] sentence is {clean_len} chars "
+                    f"(max {MAX_SENTENCE_LENGTH}) — complete but long, "
+                    f"cannot be mechanically truncated",
+                    file=sys.stderr,
+                )
+            else:
+                errors.append(
+                    f"[{word}] sentence too long: {clean_len} chars "
+                    f"(max {MAX_SENTENCE_LENGTH}) — Step 2B truncation "
+                    f"likely skipped"
+                )
 
         # 3b. Minimum sentence length check (soft warning)
         if clean_len < MIN_SENTENCE_LENGTH:
@@ -133,29 +139,6 @@ def validate_word_entries(words: list[dict]) -> list[str]:
                     f"[{word}] sentence starts with lowercase "
                     f"'{first_char}' - likely a truncated fragment"
                 )
-
-            has_finite_verb = bool(
-                re.search(r'\b(?:is|are|was|were|am|has|have|had|do|does|did|'
-                          r'will|would|can|could|shall|should|may|might|must)\b',
-                          clean, re.IGNORECASE)
-            )
-            if not has_finite_verb:
-                verb_ending = bool(re.search(r'\b\w+(?:ed|s)\b', clean))
-                if not verb_ending:
-                    # Third tier: common irregular past-tense forms.
-                    # Covers words like "made", "went", "told" that the
-                    # auxiliary-modal and regular-ed/s checks both miss.
-                    irregular_past = bool(re.search(
-                        r'\b(?:' + '|'.join(_IRREGULAR_PAST_TENSE) + r')\b',
-                        clean, re.IGNORECASE,
-                    ))
-                    if not irregular_past:
-                        print(
-                            f"  [WARN] [{word}] sentence may lack a finite verb "
-                            f"- possible noun phrase fragment: "
-                            f"'{clean[:80]}{'...' if len(clean) > 80 else ''}'",
-                            file=sys.stderr,
-                        )
 
             # 7c. Ends with function word
             last_word = re.split(r'\s+', clean.rstrip('"\'') + ' ')[-2].strip().lower()

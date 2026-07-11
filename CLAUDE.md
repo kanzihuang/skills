@@ -123,7 +123,7 @@ Step 2B（句子选择+截断）和 Step 2F（内容验证）是质量门禁，�
 **Step 2B pre-pass**: Run `smart_truncate()` mechanically to shorten sentences
 exceeding `MAX_SENTENCE_LENGTH` by scanning for `.`, `!`, `?` boundaries in two
 directions from the target word.  Sentences that cannot be shortened are kept
-as-is — no manual truncation needed.  See `lib/SHARED_WORKFLOW.md` Step 2B-0.
+as-is — no manual truncation needed.  See `lib/SHARED_WORKFLOW.md` Step 2B.
 
 自动检查（`validation.py`，可由 `sync_anki.py` 内部调用或独立运行 `python -m lib.validation <json>`）只做格式校验，不做语义校验。每步执行后运行 check_step_completed.py 验证（支持 `--step 2B`, `--step 2B-verify`, `--step 2E`, `--step 2F`, `--step 2F-dup`, `--step all`）。
 
@@ -194,7 +194,7 @@ Step 2B truncation must produce **continuous substrings** of the source text —
 
 When source text contains blank lines within a sentence (e.g. `"bigger \n\n\n\nthan himself"`), PySBD treats `\n\n` as a sentence boundary, splitting the sentence into fragments. `_normalize_dialogue_attribution()` handles `[:,]\n{2,}["""]` (attribution→dialogue), but does not cover blank lines within sentences without attribution markers.
 
-**Fix (2026-07-08)**: `match_sentences.py` now marks fragment candidates with `is_fragment=True` (via `_is_fragment()` — detects missing sentence-ending punctuation, unclosed quotes, lowercase starts). `_better()` Tier 0 deprioritizes fragments: a complete sentence always beats a fragment; if the only candidate is a fragment, it still wins (to avoid data loss). `check_step_completed.py --step 2B` flags sentences lacking terminating `. ! ?`. Step 2B provides a manual repair workflow in `SHARED_WORKFLOW.md`.
+**Fix (2026-07-08)**: `match_sentences.py` now marks fragment candidates with `is_fragment=True` (via `_is_fragment()` — detects missing sentence-ending punctuation, unclosed quotes, lowercase starts). `_better()` Tier 0 deprioritizes fragments: a complete sentence always beats a fragment; if the only candidate is a fragment, it still wins (to avoid data loss). `check_step_completed.py --step 2B` flags sentences lacking terminating `. ! ?`. **(Superseded 2026-07-11: Step 2B now rejects fragments instead of repairing them.)**
 
 **Fix (2026-07-09)**: `_merge_adjacent_fragments()` automatically merges most fragments.
 When `split_sentences()` is called with `source_text`, adjacent fragment pairs are
@@ -436,13 +436,15 @@ This reduces the number of words needing manual IPA from Claude. The fallback on
 
 Symptom before fix: `indulgently` had empty IPA despite "indulgent" being in cmudict. Check: `grep '"ipa": ""'` in match_sentences output.
 
-### Irregular past-tense finite-verb detection
+### Irregular past-tense finite-verb detection (REMOVED 2026-07-11)
 
 **Change (2026-07-08)**: `validation.py`'s finite-verb check now has three tiers: (1) auxiliary/modal verbs, (2) regular -ed/-s endings, (3) common irregular past-tense forms (`_IRREGULAR_PAST_TENSE`: 59 words — made, went, told, found, etc.). Previously only tiers 1-2 existed, causing false-positive "may lack a finite verb" warnings for sentences like "I made the acquaintance..." where "made" is a past-tense main verb that matches neither an auxiliary list nor a regular -ed ending.
 
 All three tiers are soft warnings — they print to stderr but never block sync.
 
 Symptom before fix: `"And so I made the acquaintance of the little prince"` flagged as possibly lacking a finite verb.
+
+**Removed (2026-07-11)**: The entire three-tier finite-verb detection and the `_IRREGULAR_PAST_TENSE` hard-coded set (65 words) were removed from `validation.py`.  The check was inherently unreliable — English has 200+ irregular verbs, the set can never be complete — and violated the "no hard-coded semantic word lists in Python" design principle.  Its only production trigger was a false positive on "cast" in "But it cast an enchantment over that house."  True sentence fragments are already caught by `is_fragment=True`, lowercase-start hard error, and function-word-ending hard error.  See also [[MAX_SENTENCE_LENGTH vs HARD_CUTOFF]].
 
 ### OCR punctuation correction in Step 2B
 
@@ -557,9 +559,19 @@ with postposed particles or SCONJ advmod children.
 
 **Change (2026-07-10)**: Rewritten from max_len-window scan to two-direction scan: right (end-truncation at first `.`, `!`, `?` after target) and left (beginning-truncation at nearest `.`, `!`, `?` + capital before target).  `MAX_SENTENCE_LENGTH` raised from 250 to 500.  Manual truncation (`_needs_manual`) removed — sentences smart_truncate cannot shorten are accepted as-is.
 
+**Change (2026-07-11)**: `smart_truncate()` integrated into `match_sentences.py` Step 5 post-processing — runs automatically after `_better()` sentence selection, per (lemma,pos) group.  Removed separate Step 2B-0 pre-pass from `SHARED_WORKFLOW.md`.  Step 2B now starts directly with Claude manual review.
+
+**Change (2026-07-11)**: `smart_truncate()` Direction 1 no longer returns immediately when the truncation result > `MAX_SENTENCE_LENGTH`.  Instead, the result is fed into Direction 2 (left-side truncation), composing both directions.  Also added fallthrough: when both directions fail to reach `max_len`, Direction 1's best result is still returned (it IS shorter than the original).  `is_fragment` status is now recomputed **after** `smart_truncate` instead of inheriting from the pre-truncation `hard_truncate` result — prevents false fragments on properly truncated sentences.
+
+**Change (2026-07-11)**: Step 2B fragment repair workflow removed.  Fragments that survive `_merge_adjacent_fragments()` are now **rejected** (word excluded from deck) instead of manually repaired.  Manual fragment repair is unreliable and the mechanical merging already handles most cases.
+
 **Change (2026-07-11)**: Rule 2 (len ≤ `MIN_TRUNCATION_LENGTH` = 100 → return immediately) removed.  Complete short sentences are already caught by Rule 1's terminal-punctuation check (`.!?`).  Incomplete short sentences should fall through to Direction 1/2 for boundary scanning rather than being silently accepted.  `MIN_TRUNCATION_LENGTH` constant deleted from `lib/config.py`.
 
 **Change (2026-07-11)**: `MAX_SENTENCE_LENGTH` lowered from 500 to 400.  `HARD_CUTOFF` remains at 500 as the upstream safety net.  Direction 1/2 scanning logic unchanged — the nearest sentence boundary is the best one.  If truncation produces a result > 400 chars, `validation.py` reports a hard error and Step 2B Claude rejects the word (sentence cannot be reasonably shortened).  See also [[MAX_SENTENCE_LENGTH vs HARD_CUTOFF]].
+
+**Change (2026-07-11)**: `MAX_SENTENCE_LENGTH` lowered from 400 to 250.  400 chars (~6-8 lines on mobile) takes too long to read during spaced-repetition review.  250 chars (~4-5 lines, ~5 seconds) provides sufficient context for 2-3 clauses while keeping review efficient.  Complete sentences that cannot be mechanically truncated (no internal `. ! ?` boundaries) are now a soft warning, not a hard error — Step 2B has reviewed them and they cannot be shortened.  See also [[finite-verb check removed]].
+
+**Change (2026-07-11)**: Finite-verb detection (three-tier: auxiliaries/modals → -ed/-s endings → `_IRREGULAR_PAST_TENSE`) and the `_IRREGULAR_PAST_TENSE` hard-coded set (65 words) removed from `validation.py`.  The check was inherently unreliable — English has 200+ irregular verbs, the set can never be complete — and violated the "no hard-coded semantic word lists in Python" design principle.  Its only production trigger was a false positive on "cast" in "But it cast an enchantment over that house."  True sentence fragments are already caught by `is_fragment=True`, lowercase-start hard error, and function-word-ending hard error.  See also [[MAX_SENTENCE_LENGTH vs HARD_CUTOFF]].
 
 Run after `match_sentences.py` (Step 2A), before Step 2B Claude review:
 
@@ -725,7 +737,7 @@ Prince appears to be a simple children's tale…") with ``char_offset`` in the
 first ~400 chars of text.  Check: entries where the sentence reads like a
 book review rather than narrative.
 
-### Step 2B fragment repair: never use `\n` as sentence boundary
+### Step 2B fragment repair: never use `\n` as sentence boundary (REMOVED 2026-07-11)
 
 **Change (2026-07-09)**: `lib/SHARED_WORKFLOW.md` Step 2B fragment repair workflow now
 explicitly documents correct sentence-boundary detection.  When walking backward in
@@ -738,6 +750,9 @@ treated as sentence starts, creating lowercase-start fragments like
 `"stupid loggerheads…"`.
 
 Symptom: sentence text starts with lowercase letter.  Check: `grep '"sentence": "[a-z]'`.
+
+**(Superseded 2026-07-11: Step 2B fragment repair workflow was removed entirely.
+Fragments are now rejected — the word is excluded from the deck.)**
 
 ### Step 2E JSON format: ASCII quotes only, pre-merge validation
 

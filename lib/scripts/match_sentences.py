@@ -296,7 +296,17 @@ def smart_truncate(
 
     target_end = target_offset + len(target_word)
 
-    # ── Direction 1: scan right from target_end for .!? ───────────────
+    # ── Direction 1 & 2: scan right then left for .!? boundaries ───────
+    # Direction 1 shortens from the right (after target).  Direction 2
+    # shortens from the left (before target).  They compose: when Direction 1
+    # cannot shorten enough alone, the result is fed into Direction 2 for
+    # additional left-side truncation.
+
+    # State variables for Direction 1 result (not returned immediately —
+    # checked against max_len first).
+    d1_sentence: str | None = None
+    d1_tgt: int = -1
+
     for i in range(target_end, len(sentence)):
         ch = sentence[i]
         if ch in ('.', '!', '?'):
@@ -314,9 +324,13 @@ def smart_truncate(
                     else:
                         if len(result) <= target_end:
                             break  # backed up past target — abandon
-                        result, target_offset = _cleanup_unclosed_quote(
+                        result, tgt = _cleanup_unclosed_quote(
                             result, target_word, target_offset)
-                        return result, target_offset, True
+                        if len(result) <= max_len:
+                            return result, tgt, True
+                        # Result still too long — save for Direction 2
+                        d1_sentence = result
+                        d1_tgt = tgt
                 break  # can't shorten further — fall through to direction 2
             # Punctuation inside an unclosed quote:
             # accept if followed by space + capital (dialogue boundary)
@@ -336,9 +350,12 @@ def smart_truncate(
                         accepted = True  # "."X"
                 if accepted and i + 1 < len(sentence):
                     result = sentence[:i + 1].rstrip()
-                    result, target_offset = _cleanup_unclosed_quote(
+                    result, tgt = _cleanup_unclosed_quote(
                         result, target_word, target_offset)
-                    return result, target_offset, True
+                    if len(result) <= max_len:
+                        return result, tgt, True
+                    d1_sentence = result
+                    d1_tgt = tgt
             # Inside opening quote without dialogue boundary —
             # walk back to before the opening quote.
             quote_pos = sentence.rfind('"', 0, i + 1)
@@ -350,9 +367,12 @@ def smart_truncate(
                     if last_w.lower() not in SENTENCE_END_FUNCTION_WORDS:
                         result = pre_quote
                         if len(result) > target_end:
-                            result, target_offset = _cleanup_unclosed_quote(
+                            result, tgt = _cleanup_unclosed_quote(
                                 result, target_word, target_offset)
-                            return result, target_offset, True
+                            if len(result) <= max_len:
+                                return result, tgt, True
+                            d1_sentence = result
+                            d1_tgt = tgt
             # Continue scanning — this punctuation didn't work out
         elif ch == '"':
             if _is_inside_opening_quote(sentence, i):
@@ -366,10 +386,21 @@ def smart_truncate(
                         if last_w.lower() not in SENTENCE_END_FUNCTION_WORDS:
                             result = pre_quote
                             if len(result) > target_end:
-                                result, target_offset = _cleanup_unclosed_quote(
+                                result, tgt = _cleanup_unclosed_quote(
                                     result, target_word, target_offset)
-                                return result, target_offset, True
+                                if len(result) <= max_len:
+                                    return result, tgt, True
+                                d1_sentence = result
+                                d1_tgt = tgt
                 continue
+
+    # Use Direction 1's best result (if any) as input to Direction 2.
+    # Direction 1's right-truncated sentence is shorter, giving Direction 2
+    # fewer chars to consider when scanning for left-side boundaries.
+    if d1_sentence is not None:
+        sentence = d1_sentence
+        target_offset = d1_tgt
+        target_end = target_offset + len(target_word)
 
     # ── Direction 2: scan left from target_offset for .!? boundaries ───
     # Find the nearest sentence boundary (".!?" + space + capital) before
@@ -412,6 +443,11 @@ def smart_truncate(
             new_sentence = '"' + new_sentence
             new_target_offset += 1
         return new_sentence, new_target_offset, True
+
+    # Direction 2 found nothing.  If Direction 1 produced a result (even if
+    # still > max_len), return it — it is shorter than the original sentence.
+    if d1_sentence is not None:
+        return d1_sentence, d1_tgt, True
 
     return sentence, target_offset, False
 
@@ -1132,10 +1168,19 @@ def process_words(
         if _is_non_body_text(cand['text']):
             continue
 
+        # Auto-truncate sentence at nearest .!? boundary if it exceeds
+        # MAX_SENTENCE_LENGTH.  Runs here (post _better selection) so
+        # truncation targets the best sentence for each (lemma,pos).
+        sent_text = cand['text']
+        tgt_offset = cand['target_offset']
+        sent_text, tgt_offset, was_trunc = smart_truncate(
+            sent_text, cand['matched_form'], tgt_offset,
+        )
+
         # IPA: try lemma first, fall back to matched surface form
         ipa = _cmu_ipa(lemma) or _cmu_ipa(cand['matched_form'])
 
-        results.append({
+        entry = {
             'lemma': cand['lemma'] if cand['pos'] == 'PROPN' else cand['lemma'].lower(),
             'word': cand['matched_form'],
             'forms': all_forms,
@@ -1144,11 +1189,19 @@ def process_words(
             'spacy_lemma': cand.get('spacy_lemma', ''),
             'be_to': cand.get('be_to', False),
             'coca_level': coca_level,
-            'sentence': cand['text'],
-            'target_offset': cand['target_offset'],
+            'sentence': sent_text,
+            'target_offset': tgt_offset,
             'char_offset': char_offset,
             'ipa': ipa,
-        })
+        }
+        if was_trunc:
+            entry['_auto_truncated'] = True
+        # Re-check fragment status on the (possibly truncated) sentence.
+        # The original is_fragment was computed on the hard_truncate result;
+        # smart_truncate may have shortened it at proper sentence boundaries.
+        if _is_fragment(sent_text):
+            entry['is_fragment'] = True
+        results.append(entry)
 
     # Sort results for deterministic output (by lemma, then pos)
     results.sort(key=lambda r: (r['lemma'], r['pos']))

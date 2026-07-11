@@ -215,7 +215,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 
 ## 共享工作流（Step 2A–2H）
 
-> Steps 2A（句子匹配 + POS 分析 + lemma + IPA）、2B（完整性校验 + 截断，不可绕过）、2C（DeepL 翻译）、2E（生成释义，不碰 lemma）、2F（内容验证，不可绕过）、2G（预下载音频）、2H（确认+同步）与 vocab-book 共享。
+> Steps 2A（句子匹配 + POS 分析 + lemma + IPA + smart_truncate 自动截断）、2B（完整性校验，不可绕过）、2C（DeepL 翻译）、2E（生成释义，不碰 lemma）、2F（内容验证，不可绕过）、2G（预下载音频）、2H（确认+同步）与 vocab-book 共享。
 > **详见 `<skill_dir>/lib/SHARED_WORKFLOW.md`**——Claude 执行到对应步骤时必须 Read 该文件获取完整指令。
 
 共享步骤中关键脚本（`<skill_dir>/lib/` 前缀）：
