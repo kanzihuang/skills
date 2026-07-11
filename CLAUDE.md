@@ -859,10 +859,57 @@ Symptom: filter_pipeline reports "0 in Anki" when cards clearly exist,
 or ``n_anki_cards`` count differs between identical runs.  Check stderr
 for WARNING/ERROR lines from AnkiConnect.
 
+### conj POS inheritance: cc chain-walking + AUX copula fallback
+
+**Change (2026-07-11)**: The ``conj`` POS inheritance logic (lines 908-926)
+had two gaps in chain-walking to the coordination root:
+
+1. **cc skip**: The while loop only walked past ``dep=conj`` nodes.  When
+   a conjunct's head is a coordinating conjunction (``cc``, e.g. "and"),
+   the loop stopped at the CCONJ node whose POS is not in the content-word
+   whitelist — inheritance silently failed.  The loop now also walks past
+   ``dep=cc`` nodes.
+
+2. **AUX copula fallback**: spaCy sometimes attaches conjuncts directly to
+   the copula rather than the adjective complement ("was thin and gaunt" →
+   "gaunt" has head="was"(AUX), not "thin"(ADJ)).  When the chain-walking
+   lands on an AUX node AND no intermediate content-word ``conj`` nodes
+   were walked past (``walked_past_content`` guard), check whether the AUX
+   has an ``acomp``/``amod`` child with POS ADJ — the conjunct shares that
+   role and should also be ADJ.
+
+   The ``walked_past_content`` guard prevents false ADJ promotion when the
+   chain goes through a VERB before reaching AUX (e.g. "butchered" →
+   "begged"(VERB,conj) → "was"(AUX) — butchered is a genuine VERB, not a
+   copula complement).
+
+Symptom: "gaunt" tagged VERB in "was thin and gaunt".  Check: ``grep
+'"lemma": "gaunt".*"pos": "VERB"'`` in match_sentences output.
+
+### hyphenated compound token skip (dep=compound + adjacent "-")
+
+**Change (2026-07-11)**: Tokens with ``dep=compound`` that are adjacent to
+a hyphen character in the sentence text are now skipped.  These are
+fragments of hyphenated compounds (e.g. "mast" in "mast-head") — not
+independent word occurrences.  Skipping them prevents duplicate (lemma,pos)
+entries where the same word gets both an ADJ+compound card (from the
+compound fragment) and a NOUN card (from a standalone occurrence).
+
+The filter checks the gap between the token and its head in the sentence
+text.  If the gap starts or ends with ``-``, the token is skipped.
+
+Only ``dep=compound`` is filtered, not ``dep=amod`` — true adjectives in
+hyphenated compounds like "fair-minded" (``dep=amod``) are legitimate
+adjective occurrences and still match.
+
+Symptom: "mast" produces two cards (ADJ from "mast-head" + NOUN from "put
+the mast down") instead of one.  Check: ``grep '"lemma": "mast"'`` in
+match_sentences output for duplicate entries.
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 552 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter, ankiconnect.
+- **Shared tests** live in `lib/tests/` (pytest, 566 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter, ankiconnect.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 33 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.

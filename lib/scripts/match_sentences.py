@@ -851,6 +851,20 @@ def process_words(
             if not hits:
                 continue
 
+            # Skip compound tokens inside hyphenated compounds
+            # (e.g. "mast" in "mast-head").  These are fragments of a
+            # single lexical unit, not independent word occurrences.
+            # The dep=compound relation with an adjacent hyphen in the
+            # sentence text signals this pattern.
+            if token.dep_ == "compound":
+                head = token.head
+                if token.i < head.i:
+                    gap = truncated[token.idx + len(token.text):head.idx]
+                else:
+                    gap = truncated[head.idx + len(head.text):token.idx]
+                if gap.startswith("-") or gap.endswith("-"):
+                    continue
+
             for idx, entry in hits:
                 # Prevent re-processing the same (entry index, token text)
                 # within the same sentence (e.g. "walked" appearing twice).
@@ -893,11 +907,25 @@ def process_words(
                 # inherit its POS when the root has a reliable POS tag.
                 if token.dep_ == "conj":
                     head_token = token.head
-                    while head_token.dep_ == "conj":
+                    walked_past_content = False
+                    while head_token.dep_ in ("conj", "cc"):
+                        if head_token.dep_ == "conj":
+                            walked_past_content = True
                         head_token = head_token.head
                     head_pos = head_token.pos_
                     if head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos:
                         pos = head_pos
+                    elif head_pos == "AUX" and not walked_past_content:
+                        # Direct conjunction of copula: "was thin and gaunt".
+                        # Only fires when the token is a direct child of the
+                        # AUX (no intermediate content-word conj nodes walked
+                        # past).  If the chain passed through a VERB/NOUN/etc,
+                        # the token is coordinated with that content word,
+                        # not with the adjective complement.
+                        for child in head_token.children:
+                            if child.dep_ in ("acomp", "amod") and child.pos_ == "ADJ":
+                                pos = "ADJ"
+                                break
                 # Sentence-initial inverted ADJ: "Absurd as it might seem"
                 # (= "As absurd as ...").  spaCy often tags these as PROPN
                 # (capitalized at sentence start); PROPN→NOUN then converts

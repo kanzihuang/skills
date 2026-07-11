@@ -95,6 +95,13 @@ Content-Type: application/json
   - **先查书架**：调 `/shelf/sync` 获取用户已加入书架的所有书籍，按书名匹配（支持中英文模糊匹配）。书架命中 → 直接用 bookId 调用 `/book/bookmarklist` 和 `/book/info`，跳过搜索
   - 书架未命中时走搜索：`/store/search` → 选书 → `/book/info` → `/book/bookmarklist`
     - **搜索关键词优先用中文书名**：微信读书搜索 API 对英文标题支持差（常见返回空结果），中文书名搜索命中率远高于英文
+    - **参数平铺**：业务参数（`keyword`）必须和 `api_name`、`skill_version` 放在 JSON 同一层，**不要包在 `params` 内**，否则网关不会转发参数。正确格式：
+      ```bash
+      curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
+        -H "Authorization: Bearer $WEREAD_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{"api_name":"/store/search","keyword":"老人与海","skill_version":"1.0.3"}'
+      ```
   - 多版本时，并行检查英文版划线数量，标出划线最多的版本
   - `book_title` 和 `book_author` 用微信读书 API 返回值
 

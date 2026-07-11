@@ -51,6 +51,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
    b. hard_truncate（>500 字符硬截断）
    c. `nlp(sentence)` — 每句只跑一次
    d. 遍历 doc tokens，查 form_index → `(idx, entry, token)`
+      - 跳过连字符复合词片段：`dep=compound` 且与 head 间有 `-` 的 token（如 "mast-head" 中的 "mast"）被自动跳过，避免产生 POS 错误的重复卡片
    e. `_determine_lemma(token)` → lemma，PROPN→NOUN 覆盖
    f. `_better()` 增量比较 → 只保留每个 `(lemma, pos)` 的最佳句
 4. 后处理：回填 `char_offset` + cmudict IPA
@@ -144,6 +145,9 @@ print(f'Auto-truncated: {auto_truncated}')
 - 序言/非正文句子（`char_offset` 靠前、内容为作者简介/编辑导语）
 - 语法不完整的句子片段
 - **OCR 标点错误**：句尾 `:` 或 `,` 在语法完整的句子中实为 OCR 对句号的误识别
+
+> **连字符复合词片段**（如 "mast-head" 中的 "mast"）已由 match_sentences.py
+> Step 2A-3d 机械跳过，不再出现在输出中。此检查不再需要 Claude 人工处理。
 
 **OCR 标点修正规则**：
 - 检查句子末尾标点：若句尾为 `:` 或 `,` 且句子语法完整（有主语+谓语），且冒号/逗号后面的内容不是对话引语 → 可能是 OCR 对句号的误识别
@@ -342,7 +346,7 @@ POS 对齐 + 释义准确 + 翻译一致性。`lemma` 不在此步检查（match
 | 检查 | 说明 |
 |------|------|
 | POS 对齐 | `[词性]` 标注与句中实际用法一致 |
-| NOUN+compound 误标 | `dep=compound` 且 `pos=NOUN` → 检查是否实际起形容词作用（如 "virgin forest"）。同词在其他句中为 ADJ 则存疑 |
+| NOUN+compound 误标 | `dep=compound` 且 `pos=NOUN` → 检查是否实际起形容词作用（如 "virgin forest"）。连字符复合词片段（如 "mast-head" 中的 "mast"）已由 match_sentences.py 机械跳过，不会出现在输出中 |
 | 释义准确 | 代入验证法 + 义项枚举 + 跨句一致性 |
 | 翻译一致性 | `definition_cn` 与 `translation_cn` 语义对齐 |
 | be+VBN+by 情感形容词 | 对 `pos=VERB` + `word` 以 `-ed` 结尾 + 句中存在 "be...-ed...by" 结构的条目，执行 "very + word" 测试（"very disheartened" ✓ → 形容词）。若判定为情感/状态形容词 → `pos`→`ADJ`、`lemma`→`word`（表面词形）、`definition_cn` 改为形容词释义 |

@@ -558,6 +558,46 @@ class TestPOSCorrections:
             assert jerry_entries[0]["pos"] != "VERB", \
                 f"Jerry should not inherit non-whitelist POS, got {jerry_entries[0]['pos']}"
 
+    def test_conj_pos_inheritance_skips_cc_to_reach_content_head(self):
+        """'gaunt' conj whose head is 'and' (cc) → walk past cc to 'thin' (ADJ)."""
+        result = _run_pipeline(
+            [{"lemma": "gaunt", "rep": "gaunt",
+              "forms": ["gaunt"], "coca_level": 9}],
+            "The old man was thin and gaunt with deep wrinkles in the back of his neck.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", \
+            f"gaunt should be ADJ (conj of thin), got {w['pos']}"
+
+    def test_conj_pos_inheritance_skips_cc_verb_coordination(self):
+        """'jumped' conj via 'and' → walk past cc to 'ran' (VERB). No change."""
+        result = _run_pipeline(
+            [{"lemma": "jump", "rep": "jumped",
+              "forms": ["jumped"], "coca_level": 3}],
+            "He ran and jumped over the fence.",
+        )
+        words = result.get("words", [])
+        jump_entries = [w for w in words if w["lemma"] == "jump"]
+        if jump_entries:
+            assert jump_entries[0]["pos"] == "VERB", \
+                f"jumped should stay VERB (conj of ran), got {jump_entries[0]['pos']}"
+
+    def test_conj_of_verb_stays_verb_not_adj(self):
+        """'butchered' conj of 'begged' (VERB) — AUX fallback must NOT fire.
+
+        SpaCy parses this as butchered→begged(VERB,conj)→was(AUX).
+        The chain walks past a VERB content word, so the AUX copula
+        fallback should not trigger — butchered stays VERB.
+        """
+        result = _run_pipeline(
+            [{"lemma": "butcher", "rep": "butchered",
+              "forms": ["butchered"], "coca_level": 5}],
+            "The boy was sad too and we begged her pardon and butchered her promptly.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "VERB", \
+            f"butchered should stay VERB (conj of begged), got {w['pos']}"
+
     def test_be_to_vbn_pos_becomes_adj(self):
         """be-to VBN pattern sets POS=ADJ."""
         result = _run_pipeline(
@@ -2061,7 +2101,66 @@ class TestMergeFragmentQuoteLowercase:
         assert len(merged) == 2
 
 
-# ── B-4: rstrip comma for function word detection ────────────────────────
+# ── B-4: hyphenated compound skip ────────────────────────────────────────
+
+
+class TestHyphenatedCompoundSkip:
+    """dep=compound tokens inside hyphenated compounds should be skipped."""
+
+    def test_mast_in_mast_head_is_skipped(self):
+        """'mast' in 'mast-head' (compound, hyphen) → skipped."""
+        result = _run_pipeline(
+            [{"lemma": "mast", "rep": "mast",
+              "forms": ["mast"], "coca_level": 7}],
+            "In the turtle boats I was in the cross-trees of the mast-head.",
+        )
+        words = result.get("words", [])
+        mast_entries = [w for w in words if w["lemma"] == "mast"]
+        assert len(mast_entries) == 0, \
+            f"mast in mast-head should be skipped, got {len(mast_entries)} entries"
+
+    def test_mast_as_standalone_noun_still_matches(self):
+        """'mast' as standalone noun (dobj) → still matches."""
+        result = _run_pipeline(
+            [{"lemma": "mast", "rep": "mast",
+              "forms": ["mast"], "coca_level": 7}],
+            "Finally he put the mast down and stood up.",
+        )
+        w = result["words"][0]
+        assert w["lemma"] == "mast"
+        assert w["pos"] == "NOUN", f"standalone mast should be NOUN, got {w['pos']}"
+
+    def test_tropic_without_hyphen_still_matches(self):
+        """'tropic' as compound without hyphen → still matches."""
+        result = _run_pipeline(
+            [{"lemma": "tropic", "rep": "tropic",
+              "forms": ["tropic"], "coca_level": 10}],
+            "The brown blotches from its reflection on the tropic sea.",
+        )
+        w = result["words"][0]
+        assert w["lemma"] == "tropic"
+        # compound dep without hyphen — keep the match
+
+    def test_fair_in_fair_minded_is_matched(self):
+        """'fair' in 'fair-minded' (amod, not compound) → matched as ADJ.
+
+        Unlike compound-dep tokens (e.g. "mast" in "mast-head" where mast
+        is a noun modifier), "fair" in "fair-minded" IS a true adjective
+        (公正的).  The amod dep confirms this — only compound-dep tokens
+        adjacent to a hyphen are skipped.
+        """
+        result = _run_pipeline(
+            [{"lemma": "fair", "rep": "fair",
+              "forms": ["fair"], "coca_level": 2}],
+            "He was a fair-minded judge.",
+        )
+        w = result["words"][0]
+        assert w["lemma"] == "fair"
+        assert w["pos"] == "ADJ", \
+            f"fair in fair-minded is a true adjective, got {w['pos']}"
+
+
+# ── B-5: rstrip comma for function word detection ────────────────────────
 
 
 class TestFunctionWordCommaStrip:
