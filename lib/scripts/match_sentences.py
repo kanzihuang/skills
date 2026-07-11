@@ -144,13 +144,16 @@ def _merge_adjacent_fragments(
     handles ``[:,]\\n\\n\"`` dialogue patterns — this function catches the
     remaining cases.
 
-    For every fragment (as determined by ``_is_fragment()``), both forward
-    and backward merges are attempted.  Fragment signals (odd quotes,
-    lowercase start, missing terminal punctuation) indicate that a sentence
-    is incomplete but do not reliably indicate *which direction* is broken.
-    Therefore no direction inference is performed — both are tried, and
-    ``build_sentence_regex()`` verification against *source_text* is the
-    sole safety check.  Merges are applied repeatedly until stable.
+    Fragment signals (odd quotes, lowercase start, missing terminal
+    punctuation) indicate that a sentence is incomplete but do not reliably
+    indicate *which direction* is broken.  Therefore no direction inference
+    is performed — both forward and backward merges are attempted for every
+    fragment.  ``build_sentence_regex()`` verification against *source_text*
+    is the sole safety check.
+
+    Only a single pass is performed — merged results are not re-processed
+    for further merges.  This prevents cascading while still handling the
+    common single-hop fragment patterns.
 
     Returns a new list with merges applied.
     """
@@ -158,46 +161,48 @@ def _merge_adjacent_fragments(
         return list(sentences)
 
     result = list(sentences)
-    changed = True
-    while changed:
-        changed = False
-        merged = []
-        i = 0
-        while i < len(result):
-            s = result[i]
+    merged = []
+    i = 0
+    while i < len(result):
+        s = result[i]
+        odd_quotes = s.count('"') % 2 != 0
 
-            # Forward merge: fragment + next sentence that starts lowercase.
-            if (
-                _is_fragment(s)
-                and i + 1 < len(result)
-                and result[i + 1].strip()
-                and _fragment_starts_lowercase(result[i + 1])
-            ):
+        # Backward merge first: fragment + previous sentence in *merged*.
+        # Both must be fragments.  Tried before forward merge so that a
+        # lowercase-start fragment joins the preceding fragment that was
+        # just forward-merged in the previous step (e.g. "cough"+"most"
+        # then "dreadfully" backward-merged into "cough most").
+        if (
+            _is_fragment(s)
+            and merged
+            and _is_fragment(merged[-1])
+        ):
+            candidate = merged[-1] + " " + s
+            if re.search(build_sentence_regex(candidate), source_text):
+                merged[-1] = candidate
+                i += 1
+                continue
+
+        # Forward merge: fragment + next sentence.
+        # Triggers: (a) next starts lowercase, or (b) fragment has odd
+        #   quotes (unclosed quote whose closing quote may be in the next
+        #   sentence even if it starts uppercase).
+        if (
+            _is_fragment(s)
+            and i + 1 < len(result)
+            and result[i + 1].strip()
+        ):
+            next_lower = _fragment_starts_lowercase(result[i + 1])
+            if next_lower or odd_quotes:
                 candidate = s + " " + result[i + 1]
                 if re.search(build_sentence_regex(candidate), source_text):
                     merged.append(candidate)
                     i += 2
-                    changed = True
                     continue
 
-            # Backward merge: fragment + previous sentence already in
-            # *merged*.  Both must be fragments.
-            if (
-                _is_fragment(s)
-                and merged
-                and _is_fragment(merged[-1])
-            ):
-                candidate = merged[-1] + " " + s
-                if re.search(build_sentence_regex(candidate), source_text):
-                    merged[-1] = candidate
-                    i += 1
-                    changed = True
-                    continue
-
-            merged.append(s)
-            i += 1
-        result = merged
-    return result
+        merged.append(s)
+        i += 1
+    return merged
 
 
 def hard_truncate(sentence: str, max_len: int = HARD_CUTOFF) -> tuple[str, bool]:
