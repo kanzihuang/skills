@@ -19,8 +19,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from lib.config import MAX_SENTENCE_LENGTH
 
 _QUOTES = '"' + '“' + '”' + "'" + '‘' + '’'
 
@@ -35,7 +39,7 @@ def _check_2b(words: list[dict]) -> list[str]:
     """Check if Step 2B (sentence selection + truncation) was executed.
 
     Signs of SKIP:
-      - Any sentence > 250 chars without truncation
+      - Any sentence > MAX_SENTENCE_LENGTH chars without truncation
       - Any sentence starting with lowercase (fragment)
     """
     warnings: list[str] = []
@@ -49,9 +53,9 @@ def _check_2b(words: list[dict]) -> list[str]:
 
         # Check for overlong untruncated sentences
         clean = re.sub(r"<[^>]+>", "", sent)
-        if len(clean) > 250:
+        if len(clean) > MAX_SENTENCE_LENGTH:
             warnings.append(
-                f"[{word}] sentence is {len(clean)} chars (>250) without "
+                f"[{word}] sentence is {len(clean)} chars (>{MAX_SENTENCE_LENGTH}) without "
                 f"truncation — Step 2B likely skipped"
             )
 

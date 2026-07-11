@@ -103,7 +103,16 @@ Content-Type: application/json
         -d '{"api_name":"/store/search","keyword":"老人与海","skill_version":"1.0.3"}'
       ```
   - 多版本时，并行检查英文版划线数量，标出划线最多的版本
-  - `book_title` 和 `book_author` 用微信读书 API 返回值
+  - `book_title` 和 `book_author` 必须为**纯英文**。微信读书对英文书的元数据
+    常混入中文（如 title: `老人与海：The Old Man And The Sea（英文原版）`、
+    author: `[美]海明威`），原样传入会导致牌组名混入中文。传递 `--book-title` /
+    `--book-author` 给 `filter_pipeline.py` 之前必须清理：
+    - **title**: 取英文部分（`：` 或 `:` 后的内容），去除 `（英文原版）`、
+      `(English Edition)` 等中文/括号后缀，得到干净的英文书名
+    - **author**: 去除 `[美]`/`[英]` 等国籍前缀；中文作者名转换为对应英文名
+      （如 海明威→Ernest Hemingway, 简·奥斯汀→Jane Austen, 乔治·奥威尔→George Orwell）
+    - **参考现有牌组**: 若 Step 0 匹配到同名书的任何现有牌组（含 vocab-book 分级牌组），
+      以牌组名中解析的 title/author 为准，不要用 WeRead 原始返回值
 
 **1b. 获取书籍信息：**
 

@@ -32,7 +32,6 @@ import time
 from .ankiconnect import AnkiConnect, AnkiConnectError
 from .audio import _find_anki_media_dir, _upload_media_direct, _repair_audio
 from .bands import compute_bands, _count_coca_levels, _pre_assign_bands
-from .config import MAX_SENTENCE_LENGTH
 from .ipa import _cmu_ipa
 from .lemmatize import lemmatize
 from .utils import (

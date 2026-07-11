@@ -143,6 +143,9 @@ cat /tmp/<safe_title>-*-full.txt | \
   --json-out /tmp/vocab-book-filtered.json
 ```
 
+> **`--book-title` / `--book-author` 必须为纯英文**。书名和作者名会用于自动推导
+> 牌组名 `{title} ({author}) - 分级词汇`，混入中文会导致牌组名异常。
+
 脚本内流水线：
 1. spaCy 健康检查：验证 spaCy + `en_core_web_sm` 可用，失败自动修复
 2. 分词去重：spaCy tokenization → 唯一 surface form 集合
