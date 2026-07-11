@@ -544,6 +544,10 @@ with postposed particles or SCONJ advmod children.
 
 **Change (2026-07-10)**: Rewritten from max_len-window scan to two-direction scan: right (end-truncation at first `.`, `!`, `?` after target) and left (beginning-truncation at nearest `.`, `!`, `?` + capital before target).  `MAX_SENTENCE_LENGTH` raised from 250 to 500.  Manual truncation (`_needs_manual`) removed — sentences smart_truncate cannot shorten are accepted as-is.
 
+**Change (2026-07-11)**: Rule 2 (len ≤ `MIN_TRUNCATION_LENGTH` = 100 → return immediately) removed.  Complete short sentences are already caught by Rule 1's terminal-punctuation check (`.!?`).  Incomplete short sentences should fall through to Direction 1/2 for boundary scanning rather than being silently accepted.  `MIN_TRUNCATION_LENGTH` constant deleted from `lib/config.py`.
+
+**Change (2026-07-11)**: `MAX_SENTENCE_LENGTH` lowered from 500 to 400.  `HARD_CUTOFF` remains at 500 as the upstream safety net.  Direction 1/2 scanning logic unchanged — the nearest sentence boundary is the best one.  If truncation produces a result > 400 chars, `validation.py` reports a hard error and Step 2B Claude rejects the word (sentence cannot be reasonably shortened).  See also [[MAX_SENTENCE_LENGTH vs HARD_CUTOFF]].
+
 Run after `match_sentences.py` (Step 2A), before Step 2B Claude review:
 
 ```python
@@ -615,7 +619,7 @@ commands for splitting JSON into ≤25-word chunks, launching parallel agents,
 and merging results.  See `lib/SHARED_WORKFLOW.md` Step 2E for the documented
 pattern.
 
-### smart_truncate two-direction rewrite (2026-07-10)
+### smart_truncate two-direction rewrite (2026-07-10, updated 2026-07-11)
 
 **Change (2026-07-10)**: `smart_truncate()` rewritten from max_len-window scan to
 two-direction scan from the target word.  Direction 1 scans right from
@@ -623,9 +627,45 @@ two-direction scan from the target word.  Direction 1 scans right from
 Direction 2 scans left from *target_offset* for the nearest `.`, `!`, `?` +
 capital boundary.  Both reuse existing quote-handling logic (dialogue
 boundaries, opening-quote walk-back).  `MAX_SENTENCE_LENGTH` raised from
-250 to 500.  `MIN_TRUNCATION_LENGTH` (100 chars) added — sentences ≤100
-chars are never truncated.  Sentences that cannot be shortened by either
-direction are kept as-is — no `_needs_manual` flag, no manual truncation.
+250 to 500.
+
+**Change (2026-07-11)**: `MIN_TRUNCATION_LENGTH` (100 chars) removed.  Rule 2
+(len ≤ 100 → return immediately) deleted — complete short sentences are
+already caught by Rule 1's terminal-punctuation check (`.!?`).  Incomplete
+short sentences fall through to Direction 1/2.  `MAX_SENTENCE_LENGTH`
+lowered to 400 (see [[smart_truncate() — automated sentence truncation]]).
+
+### VBD/VBN + dep=advmod → ADJ (depictive predicate adjective, 2026-07-11)
+
+**Change (2026-07-11)**: Added mechanical detection of depictive predicate
+adjectives in ``dep=advmod`` position (no comma).  A lone past participle
+(``tag_`` in ``VBD``, ``VBN``) with ``dep=advmod`` and no verbal dependents
+(subjects, objects, agents) is a depictive predicate adjective, not a true
+adverbial modifier.  E.g. "stood there all **bewildered**."
+
+The rule is gated by three conditions:
+1. ``tag_ in ("VBD", "VBN")`` — only past participles; present participles
+   (``VBG``, e.g. "running") are excluded because they are more often genuinely verbal
+2. No verbal dependents — only children with ``_VERBAL_DEPS`` (nsubj, dobj,
+   iobj, xcomp, ccomp, aux, auxpass, agent, nsubjpass, expl) count.
+   Adverbial modifiers (advmod) and determiners (det) are not verbal arguments
+3. ``dep_ == "advmod"`` — only the comma-less variant; the comma-separated
+   variant (``dep=advcl``) was already covered
+
+The *lemma* is also set to the surface form (``token_lower``) to prevent
+lemmatizer reduction (e.g. "bewildered" stays "bewildered" not "bewilder").
+
+Symptom: "bewildered" tagged VERB+advmod instead of ADJ.
+Check: ``grep '"dep": "advmod"'`` in match_sentences output for VBD/VBN entries.
+
+### sync_anki.py dedup uses _better() logic (2026-07-11)
+
+**Change (2026-07-11)**: ``sync_anki.py`` main() deduplication changed from
+first-wins to ``_better_sentence()`` comparison.  When two entries share the
+same ``(lemma, pos)`` key, the entry with the better sentence is kept:
+non-fragment beats fragment (Tier 0), shorter wins in sweet-spot (≥30 chars).
+This is consistent with ``match_sentences.py``'s ``_better()`` sentence
+selection logic.  ``MIN_SENTENCE_LENGTH`` (30) is imported from ``lib.config``.
 
 ### Non-body-text auto-exclusion (`_is_non_body_text`)
 

@@ -98,7 +98,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 ### 2B-0. 自动截断预处理
 
 Run mechanical truncation on sentences exceeding ``MAX_SENTENCE_LENGTH``
-(500 chars).  ``smart_truncate()`` scans for sentence-ending punctuation
+(400 chars).  ``smart_truncate()`` scans for sentence-ending punctuation
 (``.!?``) in two directions from the target word:
 
 1. **Right scan** — from *target_end* to end of sentence: truncates at the
@@ -106,8 +106,10 @@ Run mechanical truncation on sentences exceeding ``MAX_SENTENCE_LENGTH``
 2. **Left scan** — from *target_offset* towards the beginning: finds the
    nearest ``.!?`` + space + capital letter boundary, truncates from there.
 
-Sentences that cannot be shortened are kept as-is.  There is no manual
-truncation step.
+Sentences that cannot be shortened are kept as-is.  If a truncated sentence
+still exceeds ``MAX_SENTENCE_LENGTH``, ``validation.py`` reports a hard
+error and Step 2B Claude rejects the word.  There is no manual truncation
+step for individual sentences within ``smart_truncate()``.
 
 ```bash
 cd <skill_dir> && .venv/bin/python3 -c "
