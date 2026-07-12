@@ -538,7 +538,11 @@ def sync(
         else:
             new_words.append(w)
 
-    # Assign target deck for each new word
+    # Assign target deck for each new word.
+    # Also build a WordId→target_deck mapping for the audio_dir path
+    # where manifest _idx may not match sync-time new_words ordering
+    # (prefetch has empty existing_map, so new_words differs).
+    word_id_to_target_deck: dict[str, str] = {}
     for idx, w in enumerate(new_words):
         lvl = _get_target_level_for_word(w)
         if lvl is not None and lvl in level_to_band:
@@ -546,7 +550,9 @@ def sync(
             target_name = _build_subdeck_name(deck_name, band)
             word_target_deck[idx] = target_name
         else:
-            word_target_deck[idx] = deck_name  # parent deck fallback
+            target_name = deck_name  # parent deck fallback
+            word_target_deck[idx] = target_name
+        word_id_to_target_deck[_make_word_id(w, namespace_id)] = target_name
 
     # 6. Print deck plan (informational, doesn't block)
     if bands:
@@ -622,12 +628,14 @@ def sync(
         with open(manifest_path, "r", encoding="utf-8") as mf:
             manifest = json.load(mf)
         # Restore notes (without deckName — fill in below).
-        # Use _idx (original position in new_words) for correct band
-        # assignment, because manifest notes are in completion order
-        # (ThreadPoolExecutor) not submission order.
+        # Match by WordId (not _idx) because prefetch has empty
+        # existing_map so its new_words/index differ from sync.
         for i, note in enumerate(manifest["notes"]):
-            orig_idx = note.get("_idx", i)  # fallback: old manifests lack _idx
-            note["deckName"] = word_target_deck.get(orig_idx, deck_name)
+            wid = note.get("fields", {}).get("WordId", {}).get("value", "")
+            note["deckName"] = word_id_to_target_deck.get(
+                wid,
+                word_target_deck.get(note.get("_idx", i), deck_name),
+            )
             notes_to_add.append(note)
         # Load audio files from disk
         for filename, filepath in manifest["audio_files"].items():
