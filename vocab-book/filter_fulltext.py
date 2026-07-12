@@ -39,6 +39,10 @@ from lib.coca import (load_coca, in_coca,                         # noqa: E402
                          get_word_level, load_level_range)
 
 
+class FilterError(Exception):
+    """Expected error — caught by main() for clean exit; tests catch to avoid subprocess."""
+
+
 # ── band parsing ─────────────────────────────────────────────────────────────
 
 DEFAULT_BANDS: list[tuple[int, int]] = [(1, 3), (4, 6), (7, 9), (10, 25)]
@@ -86,9 +90,7 @@ def parse_bands(
     if len(bare_numbers) > 1 and not has_bilateral:
         for n in bare_numbers:
             if n < 1 or n > 25:
-                print(f"Error: level '{n}' out of COCA range (1-25)",
-                      file=sys.stderr)
-                sys.exit(1)
+                raise FilterError(f"level '{n}' out of COCA range (1-25)")
             bilateral_bands.append((n, n))
         filter_lo = min(bare_numbers)
         filter_hi = max(bare_numbers)
@@ -101,17 +103,15 @@ def parse_bands(
             try:
                 lo, hi = int(lo_str), int(hi_str)
             except ValueError:
-                print(f"Error: band '{p}' contains non-integer values",
-                      file=sys.stderr)
-                sys.exit(1)
+                raise FilterError(f"band '{p}' contains non-integer values")
             bilateral_bands.append((lo, hi))
         elif "-" in p:
             # Single-sided: "3-" or "-10"
             if len(parts) > 1:
-                print(f"Error: band {i} ('{p}') missing boundary — "
-                      f"bilateral bands required when using commas",
-                      file=sys.stderr)
-                sys.exit(1)
+                raise FilterError(
+                f"band {i} ('{p}') missing boundary — "
+                f"bilateral bands required when using commas"
+            )
             # Single-sided as sole argument → filter-only, default bands
             try:
                 if p.startswith("-"):
@@ -119,37 +119,31 @@ def parse_bands(
                 else:
                     filter_lo = int(p[:-1])
             except ValueError:
-                print(f"Error: invalid band value '{p}'", file=sys.stderr)
-                sys.exit(1)
+                raise FilterError(f"invalid band value '{p}'")
         else:
             # Bare number (e.g. "3") → single-sided, use default bands
             try:
                 filter_lo = int(p)
                 filter_hi = 25
             except ValueError:
-                print(f"Error: invalid band value '{p}'", file=sys.stderr)
-                sys.exit(1)
+                raise FilterError(f"invalid band value '{p}'")
 
     if bilateral_bands:
         # Validate
         for i, (lo, hi) in enumerate(bilateral_bands, 1):
             if lo > hi:
-                print(f"Error: band '{lo}-{hi}' lo({lo}) > hi({hi})",
-                      file=sys.stderr)
-                sys.exit(1)
+                raise FilterError(f"band '{lo}-{hi}' lo({lo}) > hi({hi})")
             if lo < 1 or hi > 25:
-                print(f"Error: band '{lo}-{hi}' out of COCA range (1-25)",
-                      file=sys.stderr)
-                sys.exit(1)
+                raise FilterError(f"band '{lo}-{hi}' out of COCA range (1-25)")
 
         # Check for overlap between sorted bands
         sorted_bands = sorted(bilateral_bands)
         for i in range(len(sorted_bands) - 1):
             if sorted_bands[i][1] >= sorted_bands[i + 1][0]:
-                print(f"Error: band '{sorted_bands[i][0]}-{sorted_bands[i][1]}' "
-                      f"overlaps with '{sorted_bands[i + 1][0]}-{sorted_bands[i + 1][1]}'",
-                      file=sys.stderr)
-                sys.exit(1)
+                raise FilterError(
+                f"band '{sorted_bands[i][0]}-{sorted_bands[i][1]}' "
+                f"overlaps with '{sorted_bands[i + 1][0]}-{sorted_bands[i + 1][1]}'"
+            )
 
         filter_lo = min(b[0] for b in bilateral_bands)
         filter_hi = max(b[1] for b in bilateral_bands)
@@ -239,9 +233,7 @@ def run_filter(
     if suffix:
         if not (len(suffix) == 12
                 and all(c in "0123456789abcdef" for c in suffix)):
-            print(f"Error: --suffix must be 12 hex chars, got '{suffix}'",
-                  file=sys.stderr)
-            sys.exit(1)
+            raise FilterError(f"--suffix must be 12 hex chars, got '{suffix}'")
     else:
         suffix = uuid.uuid4().hex[:12]
 
@@ -412,14 +404,18 @@ def main() -> None:
         print("Error: no text provided on stdin", file=sys.stderr)
         sys.exit(1)
 
-    run_filter(
-        text,
-        basic_range=basic_range_arg,
-        book_title=book_title,
-        book_author=book_author,
-        suffix=suffix,
-        json_out_path=json_out_path,
-    )
+    try:
+        run_filter(
+            text,
+            basic_range=basic_range_arg,
+            book_title=book_title,
+            book_author=book_author,
+            suffix=suffix,
+            json_out_path=json_out_path,
+        )
+    except FilterError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

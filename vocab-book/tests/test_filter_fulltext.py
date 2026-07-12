@@ -11,28 +11,8 @@ via _run_filter_json(), cutting suite time from ~120s to ~1s.
 """
 
 import json
-import os
-import subprocess
-import sys
 
 import pytest
-
-# Path to filter_fulltext.py (for subprocess error-case tests)
-_FILTER_SCRIPT = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "filter_fulltext.py",
-)
-
-
-def _run_filter(text: str, *extra_args: str) -> "subprocess.CompletedProcess[str]":
-    """Run filter_fulltext.py as subprocess (error-case tests that sys.exit)."""
-    return subprocess.run(
-        [sys.executable, _FILTER_SCRIPT, *extra_args],
-        input=text,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
 
 
 def _run_filter_json(
@@ -273,20 +253,22 @@ class TestBandsAndSuffix:
         assert len(bands) == 4  # default bands
 
     def test_overlap_error(self, nlp):
-        """Overlapping bands → exit with error."""
-        result = _run_filter(SAMPLE_TEXT, "--basic-range", "4-6,6-8")
-        assert result.returncode != 0
-        assert "overlaps" in result.stderr
+        """Overlapping bands → FilterError."""
+        from filter_fulltext import FilterError
+        with pytest.raises(FilterError, match="overlaps"):
+            _run_filter_json(SAMPLE_TEXT, "--basic-range", "4-6,6-8", nlp=nlp)
 
     def test_lo_greater_than_hi_error(self, nlp):
-        """lo > hi → exit with error."""
-        result = _run_filter(SAMPLE_TEXT, "--basic-range", "6-4")
-        assert result.returncode != 0
+        """lo > hi → FilterError."""
+        from filter_fulltext import FilterError
+        with pytest.raises(FilterError, match="lo\\(6\\) > hi\\(4\\)"):
+            _run_filter_json(SAMPLE_TEXT, "--basic-range", "6-4", nlp=nlp)
 
     def test_out_of_range_error(self, nlp):
-        """Band out of 1-25 range → exit with error."""
-        result = _run_filter(SAMPLE_TEXT, "--basic-range", "3-30")
-        assert result.returncode != 0
+        """Band out of 1-25 range → FilterError."""
+        from filter_fulltext import FilterError
+        with pytest.raises(FilterError, match="out of COCA range"):
+            _run_filter_json(SAMPLE_TEXT, "--basic-range", "3-30", nlp=nlp)
 
     def test_single_level_band(self, nlp):
         """--basic-range 1-1 → single-level band is valid."""
@@ -302,17 +284,19 @@ class TestBandsAndSuffix:
         assert data1["suffix"] == "ab12cd34ef56"
 
     def test_suffix_invalid_length(self, nlp):
-        """Invalid --suffix (wrong length) → exit with error."""
-        result = _run_filter(SAMPLE_TEXT, "--suffix", "too_short")
-        assert result.returncode != 0
+        """Invalid --suffix (wrong length) → FilterError."""
+        from filter_fulltext import FilterError
+        with pytest.raises(FilterError, match="12 hex chars"):
+            _run_filter_json(SAMPLE_TEXT, "--suffix", "too_short", nlp=nlp)
 
     def test_suffix_invalid_chars(self, nlp):
-        """Invalid --suffix (non-hex chars) → exit with error."""
-        result = _run_filter(SAMPLE_TEXT, "--suffix", "gggggggggggg")
-        assert result.returncode != 0
+        """Invalid --suffix (non-hex chars) → FilterError."""
+        from filter_fulltext import FilterError
+        with pytest.raises(FilterError, match="12 hex chars"):
+            _run_filter_json(SAMPLE_TEXT, "--suffix", "gggggggggggg", nlp=nlp)
 
     def test_comma_single_sided_in_multi(self, nlp):
-        """Single-sided bands in comma context → error."""
-        result = _run_filter(SAMPLE_TEXT, "--basic-range", "4-,6-8")
-        assert result.returncode != 0
-        assert "missing boundary" in result.stderr
+        """Single-sided bands in comma context → FilterError."""
+        from filter_fulltext import FilterError
+        with pytest.raises(FilterError, match="missing boundary"):
+            _run_filter_json(SAMPLE_TEXT, "--basic-range", "4-,6-8", nlp=nlp)

@@ -302,20 +302,23 @@ def test_band_change_migrates_cards():
 # ── scenario 4: invalid bands → parse_bands() error ───────────────────────────
 
 def test_overlapping_bands_error():
-    """Overlapping bands exit with error."""
-    with pytest.raises(SystemExit):
+    """Overlapping bands raise FilterError."""
+    from filter_fulltext import FilterError
+    with pytest.raises(FilterError, match="overlaps"):
         parse_bands("4-6,6-8")
 
 
 def test_lo_greater_than_hi_error():
-    """lo > hi exits with error."""
-    with pytest.raises(SystemExit):
+    """lo > hi raises FilterError."""
+    from filter_fulltext import FilterError
+    with pytest.raises(FilterError, match=r"lo\(6\) > hi\(4\)"):
         parse_bands("6-4")
 
 
 def test_out_of_range_error():
-    """Band out of 1-25 range exits."""
-    with pytest.raises(SystemExit):
+    """Band out of 1-25 range raises FilterError."""
+    from filter_fulltext import FilterError
+    with pytest.raises(FilterError, match="out of COCA range"):
         parse_bands("3-30")
 
 
