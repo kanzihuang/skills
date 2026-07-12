@@ -996,6 +996,24 @@ class TestPOSCorrections:
         w = result["words"][0]
         assert w["pos"] == "VERB", f"Expected VERB, got {w['pos']}"
 
+    def test_conj_of_vbn_advcl_head_inherits_adj(self):
+        """Conj of VBN+advcl head inherits ADJ, not VERB.
+
+        When the coordination root is VBN in advcl position with no verbal
+        dependents, it is a depictive predicate adjective.  The conjunct
+        shares this adjectival role and should be ADJ.
+
+        E.g. "Drained of blood and awash he looked..." → awash(NOUN,conj)
+        whose head Drained(VBN,advcl) has only prep/cc/conj children.
+        """
+        result = _run_pipeline(
+            [{"lemma": "awash", "rep": "awash",
+              "forms": ["awash"], "coca_level": 9}],
+            "Drained of blood and awash he looked the colour of the silver backing of a mirror and his stripes still showed.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", f"Expected ADJ, got {w['pos']}"
+
 
 # ── char_offset word-boundary matching ──
 

@@ -1022,6 +1022,34 @@ The guard is: ``has_own_subject = any(c.dep_ in ("nsubj", "nsubjpass",
 Symptom: "teetered" tagged ADJ with dep=conj and nsubj child.
 Check: ``grep '"lemma": "teeter".*"pos": "ADJ"'`` in match_sentences output.
 
+### conj POS inheritance: VBN/VBD+advcl coordination root → ADJ
+
+**Change (2026-07-12)**: The conj POS inheritance chain now checks whether
+the coordination root is a depictive predicate adjective before promoting
+a conjunct to VERB.  When a conj token's coordination root is VBN/VBD in
+advcl position with no verbal dependents (subjects, objects, agents), the
+root is functionally adjectival — the conjunct inherits ADJ instead of VERB.
+
+**Example**: "Drained of blood and awash he looked..." → "awash"(NOUN,conj)
+whose head "Drained"(VBN,advcl) has only prep/cc/conj children (none in
+_VERBAL_DEPS).  Previously: awash was promoted NOUN→VERB via conj chain.
+Now: awash is promoted to ADJ because the coordination root "Drained" has
+no verbal arguments — it is a depictive predicate adjective.
+
+**Guard conditions** (same as the existing VBN+advcl→ADJ rule):
+1. head_pos == "VERB"
+2. head_token.tag_ in ("VBD", "VBN") — past participles only (excludes VBG)
+3. head_token.dep_ == "advcl"
+4. No children in _VERBAL_DEPS (nsubj, dobj, iobj, xcomp, ccomp, aux,
+   auxpass, agent, nsubjpass, expl, pobj)
+
+**_VERBAL_DEPS is now hoisted** to before the conj chain, and the
+duplicate definition after the VBN+advmod→ADJ rule was removed.
+
+Symptom: words like "awash" tagged VERB in conj position after a VBN+advcl
+head with no verbal dependents.
+Check: ``grep '"dep": "conj"'`` for entries whose head is VBN+advcl.
+
 ### hyphenated compound token skip (dep=compound + adjacent "-")
 
 **Change (2026-07-11)**: Tokens with ``dep=compound`` that are adjacent to

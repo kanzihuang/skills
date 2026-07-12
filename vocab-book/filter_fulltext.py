@@ -69,6 +69,32 @@ def parse_bands(
 
     parts = [p.strip() for p in arg.split(",") if p.strip()]
 
+    # Classify parts before processing
+    bare_numbers: list[int] = []
+    has_bilateral = False
+    for p in parts:
+        if _is_bilateral(p):
+            has_bilateral = True
+        elif "-" not in p:
+            try:
+                bare_numbers.append(int(p))
+            except ValueError:
+                pass  # handled below
+
+    # Multiple bare numbers with no bilateral bands → each is a
+    # single-level band (e.g. "8,9" → COCA 8 and COCA 9 separately)
+    if len(bare_numbers) > 1 and not has_bilateral:
+        for n in bare_numbers:
+            if n < 1 or n > 25:
+                print(f"Error: level '{n}' out of COCA range (1-25)",
+                      file=sys.stderr)
+                sys.exit(1)
+            bilateral_bands.append((n, n))
+        filter_lo = min(bare_numbers)
+        filter_hi = max(bare_numbers)
+        # Skip the per-part loop below — we've handled everything
+        parts = []
+
     for i, p in enumerate(parts, 1):
         if _is_bilateral(p):
             lo_str, hi_str = p.split("-", 1)

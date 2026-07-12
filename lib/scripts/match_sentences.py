@@ -1099,6 +1099,17 @@ def process_words(
                 if pos == "PROPN" and (token.text[0].islower() or token.i == 0
                                        or token_lower in form_index):
                     pos = "NOUN"
+                # Shared set: verbal dependents that indicate a genuine
+                # clause structure (subjects, objects, agents).
+                # Hoisted here so both conj-chain and later VBN rules
+                # can use it.  Adverbial modifiers and determiners are
+                # not verbal arguments — a bare VBN with only non-verbal
+                # children is adjectival.
+                _VERBAL_DEPS = frozenset({
+                    "nsubj", "csubj", "dobj", "iobj", "pobj",
+                    "xcomp", "ccomp", "aux", "auxpass", "agent",
+                    "expl", "nsubjpass",
+                })
                 # conj POS inheritance: in coordinated structures
                 # (A, B, C and D), spaCy sometimes mis-tags individual
                 # conjuncts (e.g. "arithmetic" as ADJ in a list of NOUNs).
@@ -1114,6 +1125,22 @@ def process_words(
                     head_pos = head_token.pos_
                     if head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos:
                         pos = head_pos
+                        # When the coordination root is VBN/VBD in advcl
+                        # position with no verbal dependents, it is a
+                        # depictive predicate adjective — the conjunct
+                        # shares this adjectival role.
+                        # E.g. "Drained of blood and awash he looked..."
+                        # → "awash"(NOUN,conj,head=Drained(VBN,advcl)).
+                        # "Drained" has only prep/cc/conj children → ADJ.
+                        if (head_pos == "VERB"
+                                and head_token.tag_ in ("VBD", "VBN")
+                                and head_token.dep_ == "advcl"):
+                            verbal_children = [
+                                c for c in head_token.children
+                                if c.dep_ in _VERBAL_DEPS
+                            ]
+                            if not verbal_children:
+                                pos = "ADJ"
                     elif head_pos == "AUX" and not walked_past_content:
                         # Direct conjunction of copula: "was thin and gaunt".
                         # Only fires when the token is a direct child of the
@@ -1174,17 +1201,6 @@ def process_words(
                             pos = "ADJ"
                             lemma = token_lower
                             break
-                # Shared set: verbal dependents that indicate a genuine
-                # clause structure (subjects, objects, agents).
-                # Adverbial modifiers (advmod), determiners (det),
-                # prepositions (prep), and conjunctions (cc) are not
-                # verbal arguments — a VBN with only non-verbal
-                # children is adjectival.
-                _VERBAL_DEPS = frozenset({
-                    "nsubj", "csubj", "dobj", "iobj", "pobj",
-                    "xcomp", "ccomp", "aux", "auxpass", "agent",
-                    "expl", "nsubjpass",
-                })
                 # VBD/VBN + advcl + no verbal dependents → ADJ.
                 # A lone past participle in advcl position with no
                 # verbal children (subjects, objects, agents) is a

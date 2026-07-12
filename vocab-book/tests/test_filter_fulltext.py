@@ -215,6 +215,31 @@ class TestBandsAndSuffix:
         bands = data["bands"]
         assert len(bands) == 4  # default
 
+    def test_multi_bare_numbers_as_separate_bands(self):
+        """--basic-range 8,9 → two single-level bands, is_bilateral=True."""
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "8,9")
+        assert data["is_bilateral"] is True
+        bands = data["bands"]
+        assert len(bands) == 2
+        assert bands[0] == {"name": "COCA 8", "lo": 8, "hi": 8}
+        assert bands[1] == {"name": "COCA 9", "lo": 9, "hi": 9}
+
+    def test_multi_bare_numbers_three_levels(self):
+        """--basic-range 5,7,10 → three single-level bands."""
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "5,7,10")
+        assert data["is_bilateral"] is True
+        bands = data["bands"]
+        assert len(bands) == 3
+        assert bands[0] == {"name": "COCA 5", "lo": 5, "hi": 5}
+        assert bands[2] == {"name": "COCA 10", "lo": 10, "hi": 10}
+
+    def test_single_bare_number_unchanged(self):
+        """--basic-range 3 (single bare number) → legacy single-sided behavior."""
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3")
+        assert data["is_bilateral"] is False
+        bands = data["bands"]
+        assert len(bands) == 4  # default bands
+
     def test_overlap_error(self):
         """Overlapping bands → exit with error."""
         result = _run_filter(SAMPLE_TEXT, "--basic-range", "4-6,6-8")
