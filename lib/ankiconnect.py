@@ -312,7 +312,9 @@ class AnkiConnect:
     def ensure_deck_and_model(self, deck_name: str, model_name: str) -> bool:
         """Verify that the deck exists and the model is available.
 
-        Creates the deck if missing. Returns True if model is available.
+        Creates the deck if missing. Ensures CocaLevel field exists
+        on the model for card migration support. Returns True if
+        model is available.
         """
         # Create deck (idempotent)
         self.create_deck(deck_name)
@@ -325,6 +327,13 @@ class AnkiConnect:
                 "Please import the .apkg file first to install the model, "
                 "then retry syncing."
             )
+
+        # Ensure CocaLevel field exists (for card migration)
+        model_fields = self._call("modelFieldNames", modelName=model_name)
+        if "CocaLevel" not in model_fields:
+            self._call("modelFieldAdd",
+                       modelName=model_name, fieldName="CocaLevel")
+
         return True
 
     def query_anki_all_lemmas(self) -> set[str]:
