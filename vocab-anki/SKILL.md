@@ -39,7 +39,7 @@ description: >
 > **核心原则：每次执行都必须重新从微信读书获取最新划线。禁止依赖缓存的 JSON 或之前的运行结果，因为用户可能在此期间添加了新的划线。**
 >
 > **确认策略：整个流程仅在 Step 2H（音频已预下载、同步/导出前）进行一次用户确认。其他步骤（含 Step 2G 音频预下载）仅输出进度，不询问。**
-> **推迟同步：用户说"暂不同步"时，流程仍执行至 Step 2G（含），然后结束。**
+> **推迟同步：用户说"暂不同步"时，仅跳过 Step 2H（同步到 Anki）。Step 0b（AnkiConnect 检查）和 Step 1d（Anki 去重）仍正常执行——去重是过滤已有卡片，不属于同步。**
 
 ### Step 0: 前置检查（含 Anki 牌组 bookId 桥接）
 
@@ -66,6 +66,8 @@ wait
 - **全库 0 张 "Vocabulary Card (WeRead)" 笔记** → Step 1e 直接得 A=0，**不查 Anki**。
 - 若有卡片 → 取一个 cardId → 通过 `cardsInfo` API 获取 `deckName`，形成映射表：
 - **deckName 以 Anki `cardsInfo` 返回的实际值为准**（含大小写、重音符号），不得手动修改或根据 `book_title`/`book_author` 自行构造。
+
+> **"暂不同步到 Anki"不影响 Step 0b**——去重需要查询 Anki 已有卡片，不查便无法知道哪些词是新的。仅当 Anki 真正不可达（如远程环境无法连接本地 Anki）时才跳过 Step 0b 和 Step 1d 的 Anki 去重。
 
 ```
 {牌组名: bookId}
@@ -176,7 +178,7 @@ curl -s -X POST 'https://i.weread.qq.com/api/agent/gateway' \
 	  --json-out /tmp/vocab-anki-filtered-<bookId>.json
 ```
 
-- `--anki-dedup same-book`：启用同书 Anki 去重（查已有卡片）；若 Step 0b 确认全库 0 张 Vocabulary Card 笔记，可省略此 flag 跳过 Anki 查询
+- `--anki-dedup same-book`：启用同书 Anki 去重（查已有卡片）；若 Step 0b 确认全库 0 张 Vocabulary Card 笔记，可省略此 flag 跳过 Anki 查询。**注意**："暂不同步到 Anki"不是省略此 flag 的理由——去重是过滤步骤，不属于同步。仅当 Anki 真正不可达时才跳过
 - `--book-id <bookId>`：bookId 标识，用于 WordId 构建 + 同书去重目标
 - `--book-title` / `--book-author`：书籍元数据，用于自动推导牌组名（从 Step 1 WeRead API 获取）
 - `--json-out <path>`：将过滤结果写入结构化 JSON 文件，供 Step 2B/2E Claude 读取填充 `excluded` 数组，避免手动转录
