@@ -1074,6 +1074,34 @@ bash scripts/package_skill.sh [output_dir]
 ```
 Creates self-contained zip files for each skill, embedding required `lib/` modules.
 
+### `_merge_adjacent_fragments` bidirectional merge (2026-07-12)
+
+**Change**: `_merge_adjacent_fragments()` rewritten from iterative
+while-changed forward-only merging to single-pass bidirectional merging.
+
+- **Forward merge** (unchanged trigger): fragment + lowercase-next → merge.
+  Added odd-quote relaxation: fragment with odd `"` count also attempts forward
+  merge even when the next sentence starts uppercase.
+- **Backward merge** (new): fragment + previous fragment in `merged` →
+  merge backward via `merged[-1] + " " + s`.  Both must be fragments.
+- **Single pass**: `while changed` loop removed — no cascading.
+- **Verification**: `build_sentence_regex()` against source text.
+
+Symptom: fragments survive `_merge_adjacent_fragments` and get rejected in
+Step 2B.  Check `grep '"is_fragment": true'` in match_sentences output.
+
+### `_cleanup_unclosed_quote` forward search for closing quote (2026-07-12)
+
+**Change**: `_cleanup_unclosed_quote()` accepts optional `tail` parameter
+(the untruncated text after the truncation point).  When stripping before
+the unclosed `"` would produce a lowercase-start sentence, searches `tail`
+forward for the missing closing `"`.  If found, extends the result to include
+it — correctness prioritised over `MAX_SENTENCE_LENGTH`.  Falls back to
+original stripping when no `tail` or no closing `"` found.
+
+Symptom: `smart_truncate` produces lowercase-start sentences from dialogue
+where the closing `"` was truncated.
+
 ## License
 
 Apache License 2.0 — all contributions are under this license.

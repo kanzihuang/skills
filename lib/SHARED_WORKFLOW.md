@@ -44,7 +44,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
    - `_normalize_quotes()` — Unicode 弯引号（`""''`）→ ASCII 直引号，避免传播到 JSON 输出
    - `_normalize_dialogue_attribution()` 合并 `[:,]\n\n"` → `\1 "`（对话引语与上文连成整句）
 1. PySBD 一次切句 + 篇章检测跳过序言
-1a. 碎片合并：`_merge_adjacent_fragments()` 自动合并被源文本空行切分的相邻碎片句（如 `"which was at"` + `"the same time both simple and majestic."`），通过 `build_sentence_regex()` 验证合并结果是源文本的连续子串
+1a. 碎片合并：`_merge_adjacent_fragments()` 自动合并被源文本空行切分的相邻碎片句。单次遍历，每个片段先试后向合并（前句+当前片段，两者必须都是片段）再试前向合并（片段+小写续句，或片段+奇引号无条件前向）。通过 `build_sentence_regex()` 验证合并结果是源文本的连续子串
 2. 建 `form_index`：`form_lower → [(idx, entry), ...]`
 3. 遍历每个句子：
    a. 快速 pre-filter（简单 token 查 form_index）
@@ -87,7 +87,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 源文本获取失败 → 该批次所有单词跳过。
 
-**已知局限**: 当源文本在句中包含空行时（通常为 OCR 或排版 artifact），PySBD 会将其切为多个碎片。`_merge_adjacent_fragments()` 自动合并验证通过的大多数碎片。无法自动合并的碎片仍由 `_is_fragment()` 标记（`is_fragment=True`），在 Step 2B 中直接拒绝该词（不修复）。
+**已知局限**: 当源文本在句中包含空行时（通常为 OCR 或排版 artifact），PySBD 会将其切为多个碎片。`_merge_adjacent_fragments()` 自动合并大多数碎片（双向合并 + 奇引号放松）。`_cleanup_unclosed_quote()` 在 `smart_truncate` 截断时通过前向搜索闭合引号保留对话归属句。两个修复协同大幅降低碎片率。无法自动合并的碎片仍由 `_is_fragment()` 标记（`is_fragment=True`），在 Step 2B 中直接拒绝该词（不修复）。
 
 ---
 

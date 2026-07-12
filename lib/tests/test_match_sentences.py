@@ -1998,6 +1998,42 @@ class TestCleanupUnclosedQuote:
         assert not result.startswith('"')
         assert "target" in result
 
+    # ── forward-search (tail parameter) ─────────────────────────────────
+
+    def test_forward_search_finds_closing_quote(self):
+        """When tail contains the missing closing \", extend result to include it."""
+        result, tgt = _cleanup_unclosed_quote(
+            '"That man," said the prince, "that man would be scorned.',
+            "scorned", 48,
+            tail=' Nevertheless he is the only one."',
+        )
+        # Forward search found the closing " in tail — balanced quotes
+        assert result.count('"') % 2 == 0
+        assert 'Nevertheless' in result
+        assert result.endswith('."')
+        assert result[tgt:tgt + len("scorned")].lower() == "scorned"
+
+    def test_forward_search_without_tail(self):
+        """Without tail, falls back to original stripping behavior."""
+        result, tgt = _cleanup_unclosed_quote(
+            '"That man," said the prince, "that man would be scorned.',
+            "scorned", 48,
+        )
+        # No tail — strips before the unclosed ", result starts lowercase
+        assert result.startswith("that man")
+        assert "scorned" in result
+
+    def test_forward_search_no_closing_quote_in_tail(self):
+        """When tail has no closing \", falls back to stripping."""
+        result, tgt = _cleanup_unclosed_quote(
+            '"He said, "hello world. She replied.',
+            "world", 17,
+            tail=' No closing quote here.',
+        )
+        # tail has no " — forward search fails, falls back to stripping
+        assert "world" in result
+        assert "hello world" in result
+
 
 # ── Problem 2 & 3: _cmu_ipa suffix stripping ────────────────────────────────
 
