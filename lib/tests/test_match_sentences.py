@@ -748,6 +748,37 @@ class TestPOSCorrections:
             f"Selected sentence: {w['sentence']}"
         )
 
+    def test_char_offset_uses_form_in_matched_sentence_not_later(self):
+        """When all_forms contains two forms and the sentence contains only
+        the second form, _sentence_char_offset must return the offset of
+        the form within the matched sentence — not the first form's next
+        occurrence in a later sentence.
+
+        Regression test: "sardine" (singular) appears in a later sentence,
+        but the matched sentence for "sardines" only contains the plural.
+        Searching text[match_start:] for \bsardine\b would find the
+        singular at a later offset, producing a wrong char_offset.
+        """
+        text = (
+            '"I go now for the sardines," the boy said.  '
+            'Each sardine was hooked through both eyes.'
+        )
+        result = _run_pipeline(
+            [{"lemma": "sardine", "rep": "sardines",
+              "forms": ["sardine", "sardines"], "coca_level": 9}],
+            text,
+        )
+        w = result["words"][0]
+        assert "sardines" in w["sentence"], (
+            f"sentence should contain 'sardines', got: {w['sentence']}"
+        )
+        word_at_offset = text[w["char_offset"]:w["char_offset"] + 8]
+        assert word_at_offset == "sardines", (
+            f"char_offset {w['char_offset']} should point to 'sardines', "
+            f"but found {repr(word_at_offset)}. "
+            f"Selected sentence: {w['sentence']}"
+        )
+
     def test_adv_dobj_becomes_noun(self):
         """ADV + dobj (direct object) → NOUN.  dep=dobj contradicts ADV
         because direct objects must be nominals.  This catches spaCy
@@ -1962,6 +1993,44 @@ class TestSmartTruncateDialogueSentenceBoundary:
         )
         # Verify target word is preserved
         assert new_sent[new_tgt:new_tgt + len("endure")].lower() == "endure"
+
+
+class TestWalkBackDialogueAttributionComma:
+    """smart_truncate walk-back should accept dialogue-attribution comma
+    (", followed by opening ") by replacing the comma with a period."""
+
+    def test_walk_back_strips_dialogue_attribution_comma(self):
+        """When the walk-back truncation produces text ending with a
+        dialogue-attribution comma (e.g. "...and he thought," + '"'),
+        the comma should be replaced with a period — the clause is
+        grammatically complete."""
+        # The sentence must exceed max_len to trigger smart_truncate.
+        # Simulate a hard-truncated dialogue passage (no closing quote)
+        # like the real tern case from The Old Man and the Sea.
+        sentence = (
+            'He was sorry for the birds, especially the small delicate dark '
+            'terns that were always flying and looking and almost never '
+            'finding, and he thought, "The birds have a harder life than we '
+            'do except for the robber birds and the heavy strong ones. Why '
+            'did they make birds so delicate and fine as those sea swallows '
+            'when the ocean can be so cruel? She is kind and very beautiful '
+            'and it comes so suddenly and such birds'
+        )
+        assert len(sentence) > 250
+        new_sent, new_tgt, was_trunc = smart_truncate(
+            sentence, "terns", 63, max_len=250)
+        assert was_trunc, "should truncate at dialogue-attribution comma"
+        assert new_sent.endswith("and he thought."), (
+            f"should end with period, not comma: {new_sent[-30:]!r}"
+        )
+        assert not _is_fragment(new_sent), (
+            f"should not be a fragment: {new_sent!r}"
+        )
+        assert new_sent.count('"') % 2 == 0, (
+            f"should have balanced quotes: {new_sent.count(chr(34))}"
+        )
+        assert new_sent[new_tgt:new_tgt + len("terns")].lower() == "terns"
+        assert len(new_sent) <= 250
 
 
 class TestCleanupUnclosedQuote:

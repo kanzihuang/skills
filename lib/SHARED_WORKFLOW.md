@@ -87,7 +87,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 源文本获取失败 → 该批次所有单词跳过。
 
-**已知局限**: 当源文本在句中包含空行时（通常为 OCR 或排版 artifact），PySBD 会将其切为多个碎片。`_merge_adjacent_fragments()` 自动合并大多数碎片（双向合并 + 奇引号放松）。`_cleanup_unclosed_quote()` 在 `smart_truncate` 截断时通过前向搜索闭合引号保留对话归属句。两个修复协同大幅降低碎片率。无法自动合并的碎片仍由 `_is_fragment()` 标记（`is_fragment=True`），在 Step 2B 中直接拒绝该词（不修复）。
+**已知局限**: 当源文本在句中包含空行时（通常为 OCR 或排版 artifact），PySBD 会将其切为多个碎片。`_merge_adjacent_fragments()` 自动合并大多数碎片（双向合并 + 奇引号放松）。`_cleanup_unclosed_quote()` 在 `smart_truncate` 截断时通过前向搜索闭合引号保留对话归属句。`_walk_back_pre_quote_ok()` + `_strip_dialogue_attribution_comma()` 处理对话引出语逗号模式（``, "`` → ``.``）。三个修复协同大幅降低碎片率。无法自动合并/修复的碎片仍由 `_is_fragment()` 标记（`is_fragment=True`），在 Step 2B 中直接拒绝该词（不修复）。
 
 ---
 
@@ -115,10 +115,11 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 **OCR 连字符空格修复**：Internet Archive 文本中常见连字符后有多余空格（如 `"fair-to- middling"`）。修正方法：移除连字符两侧多余空格 → `"fair-to-middling"`。此修正先于 DeepL 翻译。
 
 **不完整句子的处理**：``match_sentences.py`` 自动合并了
-大多数被源文本空行切分的相邻碎片。无法自动合并的句子会被标记
+大多数被源文本空行切分的相邻碎片，并通过 walk-back 对话逗号处理
+修复对话归属句截断。无法自动修复的句子会被标记
 ``is_fragment=True``。Step 2B 审查时遇到此类句子**直接丢弃该词**
 ——碎片修复不可靠，不值得制成卡片。``_merge_adjacent_fragments()``
-已在 Step 2A 中了做了最大努力的机械修复。
+和 ``smart_truncate`` 已在 Step 2A 中了做了最大努力的机械修复。
 
 ### Step 2B.5: target_offset Verification (MUST run after Step 2B)
 

@@ -304,11 +304,65 @@ def _cleanup_unclosed_quote(
             # punctuation, the truncation is invalid — keep the original
             # sentence so it can be reviewed in Step 2B rather than
             # silently reduced to a fragment.
+            #
+            # Exception: dialogue-attribution comma ("…and he thought,"
+            # followed by the opening ").  Strip the comma — the clause
+            # is grammatically complete without it.
+            if before_last_quote[-1] == ',':
+                # The character at last_quote is '"' by construction
+                # (last_quote = result.rfind('"')).  A comma immediately
+                # before an opening quote is a dialogue-attribution
+                # pattern — the clause is grammatically complete.
+                # Replace the comma with a period.
+                return before_last_quote[:-1].rstrip() + '.', new_tgt
             if before_last_quote[-1] not in '.!?':
                 return result, target_offset
             return before_last_quote, new_tgt
 
     return result, target_offset  # target word would be lost — keep original
+
+
+def _walk_back_pre_quote_ok(pre_quote: str, sentence: str,
+                            quote_pos: int) -> bool:
+    """Check whether *pre_quote* (text before an opening ``"``) is an
+    acceptable walk-back truncation point.
+
+    Accepts text ending with terminal punctuation (``. ! ?``, except
+    bare ``,``), and also text ending with ``,`` when the comma is
+    immediately before the opening ``"`` — a dialogue-attribution
+    pattern like ``…and he thought, "The birds…"``.  In the latter case
+    *pre_quote* is modified in place (trailing comma stripped).
+    """
+    if not pre_quote:
+        return False
+    last = pre_quote[-1]
+    if last in ('.', '!', '?'):
+        if pre_quote.rstrip().endswith(','):
+            return False  # "text,." is OCR debris
+        return True
+    # Dialogue-attribution comma: "…and he thought," + space + "
+    if last == ',' and quote_pos < len(sentence) and sentence[quote_pos] == '"':
+        # Strip the trailing comma — the clause is grammatically
+        # complete without it (e.g. "…and he thought.").
+        return True
+    return False
+
+
+def _strip_dialogue_attribution_comma(text: str, sentence: str,
+                                      quote_pos: int) -> str:
+    """Strip trailing ``,`` from *text* when it is a dialogue-attribution
+    comma (followed by ``"`` in *sentence* at *quote_pos*).  The comma is
+    replaced with a period — the clause before a dialogue quote is
+    grammatically complete and needs terminal punctuation when the
+    quoted speech is removed.
+
+    Returns the (possibly modified) text.
+    """
+    if (text and text[-1] == ','
+            and quote_pos < len(sentence)
+            and sentence[quote_pos] == '"'):
+        return text[:-1].rstrip() + '.'
+    return text
 
 
 def smart_truncate(
@@ -416,8 +470,10 @@ def smart_truncate(
             quote_pos = sentence.rfind('"', 0, i + 1)
             if quote_pos >= 0:
                 pre_quote = sentence[:quote_pos].rstrip()
-                if (pre_quote and pre_quote[-1] in ('.', '!', '?')
-                        and not pre_quote.rstrip().endswith(',')):
+                if _walk_back_pre_quote_ok(pre_quote, sentence, quote_pos):
+                    # Strip dialogue-attribution comma if present
+                    pre_quote = _strip_dialogue_attribution_comma(
+                        pre_quote, sentence, quote_pos)
                     last_w = pre_quote.split()[-1].strip().rstrip(';:')
                     if last_w.lower() not in SENTENCE_END_FUNCTION_WORDS:
                         result = pre_quote
@@ -435,8 +491,10 @@ def smart_truncate(
                 quote_pos = sentence.rfind('"', 0, i + 1)
                 if quote_pos >= 0:
                     pre_quote = sentence[:quote_pos].rstrip()
-                    if (pre_quote and pre_quote[-1] in ('.', '!', '?')
-                            and not pre_quote.rstrip().endswith(',')):
+                    if _walk_back_pre_quote_ok(pre_quote, sentence, quote_pos):
+                        # Strip dialogue-attribution comma if present
+                        pre_quote = _strip_dialogue_attribution_comma(
+                            pre_quote, sentence, quote_pos)
                         last_w = pre_quote.split()[-1].strip().rstrip(';:')
                         if last_w.lower() not in SENTENCE_END_FUNCTION_WORDS:
                             result = pre_quote
@@ -652,8 +710,25 @@ def _sentence_char_offset(
     if m:
         match_start = start + m.start()
         if forms:
-            # Search for any form from the match position using word
-            # boundaries — robust against normalization position drift.
+            # Search for any form within the matched sentence extent
+            # using word boundaries — robust against normalization
+            # position drift.  Limit the search to the regex match
+            # extent to avoid matching the same word in a later
+            # sentence (e.g. "sardine" matching singular in a
+            # different sentence when the current sentence has the
+            # plural "sardines").
+            match_end = start + m.end()
+            search_text = text[match_start:match_end]
+            for form in forms:
+                if not form:
+                    continue
+                fm = re.search(r'\b' + re.escape(form) + r'\b',
+                               search_text, re.IGNORECASE)
+                if fm:
+                    return match_start + fm.start()
+            # No form found within the sentence — fall back to wider
+            # search (handles edge cases where the flexible regex
+            # matched a slightly different extent).
             for form in forms:
                 if not form:
                     continue

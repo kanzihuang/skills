@@ -1154,6 +1154,63 @@ Symptom: sentence is shorter than the original but `_auto_truncated` is `None`
 (was_truncated=False), and `is_fragment=True`.  The sentence was reduced to
 `d1_sentence`'s length even though truncation was "rejected."
 
+### `_sentence_char_offset` form search scoped to sentence extent (2026-07-12)
+
+**Change**: `_sentence_char_offset()` searched for word forms in
+`text[match_start:]` — the entire remaining source text after the sentence
+match.  When `all_forms` contained multiple surface forms (e.g. `["sardine",
+"sardines"]`) and the matched sentence only contained the second form, the
+first form's regex (`\bsardine\b`) would match in a **later** sentence,
+returning the wrong `char_offset`.
+
+**Example**: The matched sentence at offset ~10936 contained "sardines"
+(plural), but `\bsardine\b` matched "sardine" (singular) at offset 24712 in
+a different sentence ("Each sardine was hooked…").  `char_offset` was 24712
+instead of the correct 10954.
+
+**Fix**: The form search now uses `text[match_start : start + m.end()]`
+(the regex match extent) as the primary search window.  A fallback to the
+full `text[match_start:]` search handles edge cases where the flexible
+regex matched a slightly different extent.
+
+Symptom: `text[char_offset:char_offset+len(word)]` returns a different form
+of the word than what appears in the sentence.  Check: compare the extracted
+word at `char_offset` against the `word` field and verify it's in the
+sentence text.
+
+### Walk-back + `_cleanup_unclosed_quote` accept dialogue-attribution comma (2026-07-12)
+
+**Change**: When `smart_truncate` walks back to before an opening `"`, the
+text before the quote often ends with a dialogue-attribution comma:
+`…and he thought, "The birds…"`.  Both the walk-back logic and
+`_cleanup_unclosed_quote` previously rejected comma-ending text as a
+potential fragment, even though the clause is grammatically complete.
+
+**Fix**: Three changes work together:
+
+1. **`_walk_back_pre_quote_ok()`** — new helper that accepts `pre_quote`
+   ending with `,` when the comma is immediately before `"` in the
+   sentence (dialogue-attribution pattern).
+2. **`_strip_dialogue_attribution_comma()`** — new helper that replaces the
+   trailing `,` with `.` — the clause before a dialogue quote is
+   grammatically complete and needs terminal punctuation when the quoted
+   speech is removed.
+3. **`_cleanup_unclosed_quote`** — the "target word BEFORE unclosed quote"
+   branch now detects comma-ending `before_last_quote` and replaces `,` with
+   `.` instead of rejecting it.
+
+**Example**: The tern sentence from *The Old Man and the Sea* — a 496-char
+hard-truncated dialogue passage.  The walk-back produced `"He was sorry for
+the birds, …and he thought,"` (146 chars, comma-ending).  Before the fix
+this was rejected as a fragment and "tern" was excluded from the deck.
+After the fix, the comma is replaced with a period: `"…and he thought."` —
+a valid, complete 146-char sentence.
+
+Symptom: `is_fragment=True` on sentences where the target word is in the
+narrative part before a long quoted dialogue passage, and the sentence
+exceeds `MAX_SENTENCE_LENGTH`.  Check: `grep '"is_fragment": true'` for
+entries whose sentence contains `,"` (comma-quote dialogue attribution).
+
 ## License
 
 Apache License 2.0 — all contributions are under this license.
