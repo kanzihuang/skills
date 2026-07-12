@@ -234,6 +234,7 @@ def _is_inside_opening_quote(text: str, pos: int) -> bool:
 
 def _cleanup_unclosed_quote(
     result: str, target_word: str, target_offset: int,
+    tail: str | None = None,
 ) -> tuple[str, int]:
     """Remove unclosed opening quote and preceding text after truncation.
 
@@ -242,6 +243,11 @@ def _cleanup_unclosed_quote(
     whose matching close was truncated away.  Remove that quote and the text
     before it (typically a prior, balanced quoted passage), keeping only the
     clean text after it — as long as *target_word* is preserved.
+
+    If *tail* (text from the original sentence after the truncation point)
+    is provided, a forward search for the missing closing ``"`` is attempted
+    first — extending the truncated result to include it.  This preserves
+    the original dialogue structure instead of stripping the attribution.
 
     Returns ``(cleaned_text, new_target_offset)``.
     """
@@ -264,38 +270,23 @@ def _cleanup_unclosed_quote(
             and new_tgt + len(target_word) <= len(after_quote)
             and after_quote[new_tgt:new_tgt + len(target_word)].lower()
             == target_word.lower()):
-        # Stripping everything before the unclosed " produces a
-        # lowercase-start sentence — the dialogue attribution was the
-        # only capitalised part.
-        if after_quote and after_quote[0].islower():
-            # When the full result (with " removed instead of stripped)
-            # fits within max_len, keep it — preserves dialogue context.
-            fixed = result[:last_quote] + " " + result[last_quote + 1:]
-            fixed = fixed.strip()
-            if len(fixed) <= MAX_SENTENCE_LENGTH:
-                # Recalculate target position — the " at last_quote was
-                # replaced with a space, so positions before last_quote
-                # are unchanged, positions after shift by -1 (or 0 if
-                # they were before last_quote).
-                fixed_tgt = target_offset
-                if len(fixed) != len(result):
-                    # Space replaced " — length unchanged, no shift
-                    pass
-                if last_quote < target_offset:
-                    # " was before the target — find target in fixed
-                    fixed_tgt = fixed.lower().find(target_word.lower(), max(0, target_offset - 5))
-                    if fixed_tgt < 0:
-                        return after_quote, new_tgt
-                if (fixed_tgt >= 0
-                        and fixed_tgt + len(target_word) <= len(fixed)
-                        and fixed[fixed_tgt:fixed_tgt + len(target_word)].lower()
+        # Stripping everything before the unclosed " would produce a
+        # lowercase-start sentence.  Try forward search first: find the
+        # missing closing " in *tail* and extend the result to include it.
+        if tail and after_quote and after_quote[0].islower():
+            closing = tail.find('"')
+            if closing >= 0:
+                extended = result + tail[:closing + 1]
+                ext_tgt = target_offset
+                if (ext_tgt >= 0
+                        and ext_tgt + len(target_word) <= len(extended)
+                        and extended[ext_tgt:ext_tgt + len(target_word)].lower()
                         == target_word.lower()):
-                    return fixed, fixed_tgt
-            # fixed is too long — capitalise the first letter of
-            # after_quote so it passes _is_fragment Signal 3 (lowercase
-            # start check).  The sentence is otherwise complete.
-            capped = after_quote[0].upper() + after_quote[1:]
-            return capped, new_tgt
+                    # Verify balanced quotes after extension
+                    if extended.count('"') % 2 == 0:
+                        return extended, ext_tgt
+        # Forward search failed — fall through to original behaviour:
+        # strip the text before the unclosed quote.
         return after_quote, new_tgt
 
     # Target word is BEFORE the last unclosed quote — the unclosed quote
@@ -380,7 +371,8 @@ def smart_truncate(
                         if len(result) <= target_end:
                             break  # backed up past target — abandon
                         result, tgt = _cleanup_unclosed_quote(
-                            result, target_word, target_offset)
+                            result, target_word, target_offset,
+                            tail=sentence[cut_pos:])
                         if len(result) <= max_len:
                             return result, tgt, True
                         # Result still too long — save for Direction 2
@@ -406,7 +398,8 @@ def smart_truncate(
                 if accepted and i + 1 < len(sentence):
                     result = sentence[:i + 1].rstrip()
                     result, tgt = _cleanup_unclosed_quote(
-                        result, target_word, target_offset)
+                        result, target_word, target_offset,
+                        tail=sentence[i + 1:])
                     if len(result) <= max_len:
                         return result, tgt, True
                     d1_sentence = result
