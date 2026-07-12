@@ -1479,8 +1479,11 @@ class TestSmartTruncate:
             + "I am going to the store to buy groceries for dinner tonight. "
             + "The weather is beautiful today." * 20
         )
+        # "groceries" is at position 57 in the constructed sentence
+        groceries_offset = sent.find("groceries")
+        assert groceries_offset == 57
         result, to, was_trunc = smart_truncate(
-            sent, "groceries", 55, max_len=200,
+            sent, "groceries", groceries_offset, max_len=200,
         )
         # The period inside an opening quote, followed by space + capital,
         # is now accepted as a valid sentence boundary for truncation.
@@ -2033,6 +2036,42 @@ class TestCleanupUnclosedQuote:
         # tail has no " — forward search fails, falls back to stripping
         assert "world" in result
         assert "hello world" in result
+
+    # ── fragment guard: stripping quoted speech must not produce a fragment ──
+
+    def test_before_unclosed_quote_fragment_rejected(self):
+        """Stripping quoted speech must not produce a comma-ending fragment.
+
+        When _cleanup_unclosed_quote strips from the unclosed " to the end
+        and the remaining text has no terminal punctuation, the result is
+        a sentence fragment — reject the strip and return the original.
+        """
+        # Simulates: smart_truncate Direction 1 truncates at '.' inside
+        # quoted speech, then _cleanup_unclosed_quote strips the unclosed
+        # quote + trailing dialogue, leaving "and he thought," — a fragment.
+        result, tgt = _cleanup_unclosed_quote(
+            'He was sorry for the birds, and he thought, "The birds have a harder life.',
+            "birds", 12,
+        )
+        # The stripped result before " would be "He was sorry for the birds, and he thought,"
+        # — ends with comma, no terminal punctuation → must NOT be returned.
+        # The function should return the original unchanged.
+        assert result == 'He was sorry for the birds, and he thought, "The birds have a harder life.'
+        assert tgt == 12
+
+    def test_before_unclosed_quote_valid_sentence_accepted(self):
+        """When stripping quoted speech yields a valid sentence, accept it."""
+        # The text before " ends with '.' — valid truncation.
+        # Use odd number of quotes so _cleanup_unclosed_quote actually runs.
+        # "fish" is at position 11 in this string.
+        result, tgt = _cleanup_unclosed_quote(
+            'He ate the fish quickly. "Delicious, he said.',
+            "fish", 11,
+        )
+        # Text before " is "He ate the fish quickly." — ends with '.' → OK
+        assert result == "He ate the fish quickly."
+        assert tgt == 11
+        assert "fish" in result
 
 
 # ── Problem 2 & 3: _cmu_ipa suffix stripping ────────────────────────────────

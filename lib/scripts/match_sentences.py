@@ -299,6 +299,13 @@ def _cleanup_unclosed_quote(
                 and new_tgt + len(target_word) <= len(before_last_quote)
                 and before_last_quote[new_tgt:new_tgt + len(target_word)].lower()
                 == target_word.lower()):
+            # Guard: stripping quoted speech must not produce a
+            # sentence fragment.  If the remaining text has no terminal
+            # punctuation, the truncation is invalid — keep the original
+            # sentence so it can be reviewed in Step 2B rather than
+            # silently reduced to a fragment.
+            if before_last_quote[-1] not in '.!?':
+                return result, target_offset
             return before_last_quote, new_tgt
 
     return result, target_offset  # target word would be lost — keep original
@@ -373,7 +380,7 @@ def smart_truncate(
                         result, tgt = _cleanup_unclosed_quote(
                             result, target_word, target_offset,
                             tail=sentence[cut_pos:])
-                        if len(result) <= max_len:
+                        if len(result) <= max_len and not _is_fragment(result):
                             return result, tgt, True
                         # Result still too long — save for Direction 2
                         d1_sentence = result
@@ -400,7 +407,7 @@ def smart_truncate(
                     result, tgt = _cleanup_unclosed_quote(
                         result, target_word, target_offset,
                         tail=sentence[i + 1:])
-                    if len(result) <= max_len:
+                    if len(result) <= max_len and not _is_fragment(result):
                         return result, tgt, True
                     d1_sentence = result
                     d1_tgt = tgt
@@ -417,7 +424,7 @@ def smart_truncate(
                         if len(result) > target_end:
                             result, tgt = _cleanup_unclosed_quote(
                                 result, target_word, target_offset)
-                            if len(result) <= max_len:
+                            if len(result) <= max_len and not _is_fragment(result):
                                 return result, tgt, True
                             d1_sentence = result
                             d1_tgt = tgt
@@ -436,11 +443,18 @@ def smart_truncate(
                             if len(result) > target_end:
                                 result, tgt = _cleanup_unclosed_quote(
                                     result, target_word, target_offset)
-                                if len(result) <= max_len:
+                                if len(result) <= max_len and not _is_fragment(result):
                                     return result, tgt, True
                                 d1_sentence = result
                                 d1_tgt = tgt
                 continue
+
+    # Save original values for fallback — *sentence* is about to be
+    # overwritten with d1_sentence which may be a fragment.  When both
+    # Direction 1 and Direction 2 fail, the fallback must return the
+    # ORIGINAL sentence, not the fragment-producing d1_sentence.
+    _orig_sentence = sentence
+    _orig_tgt = target_offset
 
     # Use Direction 1's best result (if any) as input to Direction 2.
     # Direction 1's right-truncated sentence is shorter, giving Direction 2
@@ -492,12 +506,12 @@ def smart_truncate(
             new_target_offset += 1
         return new_sentence, new_target_offset, True
 
-    # Direction 2 found nothing.  If Direction 1 produced a result (even if
-    # still > max_len), return it — it is shorter than the original sentence.
-    if d1_sentence is not None:
+    # Direction 2 found nothing.  If Direction 1 produced a valid result
+    # (even if still > max_len), return it — it is shorter than the original.
+    if d1_sentence is not None and not _is_fragment(d1_sentence):
         return d1_sentence, d1_tgt, True
 
-    return sentence, target_offset, False
+    return _orig_sentence, _orig_tgt, False
 
 
 def _has_be_to_pattern(doc, token_idx: int) -> bool:

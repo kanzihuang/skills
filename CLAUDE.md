@@ -1102,6 +1102,58 @@ original stripping when no `tail` or no closing `"` found.
 Symptom: `smart_truncate` produces lowercase-start sentences from dialogue
 where the closing `"` was truncated.
 
+### `_cleanup_unclosed_quote` before_last_quote produces comma-ending fragment (2026-07-12)
+
+**Change**: When `smart_truncate` Direction 1 truncates at `.` inside an
+opening quote (with dialogue boundary `.` + space + capital), the result has
+an unclosed `"`.  The "target word BEFORE unclosed quote" branch strips the
+quoted speech, but the remaining text may end with `,` — a fragment.
+
+**Example**: `'He was sorry for the birds, and he thought, "The birds have a harder life.'`
+→ stripping from `"` onward leaves `'He was sorry for the birds, and he thought,'`
+— ends with comma, no terminal punctuation.
+
+**Fix**: Added fragment guard in the `before_last_quote` branch: if the stripped
+result has no terminal punctuation (`.!?`), reject the strip and return the
+original `result` unchanged.  `smart_truncate` then falls through to try other
+truncation points or return the original sentence.
+
+Symptom: sentence ends with `,` or other non-terminal punctuation after
+auto-truncation.  Check: `grep '_auto_truncated.*true'` for entries whose
+sentence ends with `,`.
+
+### `smart_truncate` returns unclosed-quote fragments with `len <= max_len` (2026-07-12)
+
+**Change**: `_cleanup_unclosed_quote`'s fragment guard correctly prevents
+stripping quoted speech that would produce a comma-ending fragment.  But
+the original (un-stripped) result still has an unclosed `"` (odd quote count)
+and may be within `max_len`.  `smart_truncate` previously returned it
+immediately, producing a fragment.
+
+**Fix**: Added `not _is_fragment(result)` checks at all return sites in
+`smart_truncate` where `_cleanup_unclosed_quote` results are returned.
+Also added the check to the `d1_sentence` fallback at the end of the function.
+
+Symptom: `is_fragment=True` and `_auto_truncated=True` on entries where the
+sentence has an odd number of `"` characters.  Check: `grep '"is_fragment": true'`
+with odd `"` count.
+
+### `smart_truncate` fallback returns overwritten `d1_sentence` instead of original (2026-07-12)
+
+**Change**: Direction 1 saves its best result in `d1_sentence`, then
+overwrites the local `sentence` variable with it (line 454-455) for Direction 2.
+When both Direction 1 and Direction 2 fail, the function fell through to
+`return sentence, target_offset, False` — but `sentence` had been overwritten
+with the (possibly fragment) `d1_sentence`, not the original.
+
+**Fix**: Save `_orig_sentence` and `_orig_tgt` BEFORE the mutation at lines
+454-455, and use them in the fallback `return` when `d1_sentence` is a fragment
+or `None`.
+
+Symptom: sentence is shorter than the original but `_auto_truncated` is `None`
+(was_truncated=False), and `is_fragment=True`.  The sentence was reduced to
+`d1_sentence`'s length even though truncation was "rejected."
+
 ## License
 
 Apache License 2.0 — all contributions are under this license.
