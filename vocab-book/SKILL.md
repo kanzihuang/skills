@@ -160,6 +160,7 @@ fi
 # --basic-range 支持:
 #   - 双边: 3-10 → 一个牌组 "COCA 3-10"
 #   - 多组双边: 3-5,6-8,9-10 → 三个牌组
+#   - 独立等级: 8,9 → 两个单级牌组 "COCA 8" + "COCA 9"
 #   - 单边/省略: 默认分组 COCA 1-3, 4-6, 7-9, 10
 # --suffix: 复用已有 UUID（Step 0 检测到的）
 cat /tmp/<safe_title>-*-full.txt | \
