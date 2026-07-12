@@ -198,12 +198,12 @@ def _compute_final_level_counts(
     return counts
 
 
-def _build_subdeck_name(parent_deck: str, band: dict, count: int) -> str:
-    """Build a full sub-deck path with word count.
+def _build_subdeck_name(parent_deck: str, band: dict) -> str:
+    """Build a full sub-deck path.
 
-    e.g. "My Book - 分级词汇::COCA 3-5 (42 words)"
+    e.g. "My Book - 分级词汇::COCA 3-5"
     """
-    return f"{parent_deck}::{band['name']} ({count} words)"
+    return f"{parent_deck}::{band['name']}"
 
 
 def _print_deck_plan(
@@ -281,56 +281,6 @@ def _migrate_misplaced_cards(
             pass
 
     return migrated
-
-
-def _update_deck_names_with_counts(
-    ac: "AnkiConnect",
-    parent_deck: str,
-    bands: list[dict],
-) -> None:
-    """Rename sub-decks to include final card counts.
-
-    After all additions and migrations, each sub-deck name reflects
-    its actual card count: 'COCA 4' → 'COCA 4 (15 words)'.
-
-    Uses createDeck + changeDeck since AnkiConnect has no renameDeck.
-    """
-    for band in bands:
-        old_prefix = f"{parent_deck}::{band['name']}"
-        # Find all sub-decks matching this band prefix (may have old count names)
-        try:
-            all_decks = ac.deck_names_and_ids()
-        except AnkiConnectError:
-            continue
-
-        old_decks = [d for d in all_decks if d.startswith(old_prefix)]
-        if not old_decks:
-            continue
-
-        # Count total cards across all matching old decks
-        total_cards = 0
-        all_card_ids: list[int] = []
-        for old_deck in old_decks:
-            note_ids = ac.find_notes_in_deck(old_deck)
-            total_cards += len(note_ids)
-            if note_ids:
-                cids = ac.get_cards_of_notes(note_ids)
-                all_card_ids.extend(cids)
-
-        new_name = f"{parent_deck}::{band['name']} ({total_cards} words)"
-
-        # If the best-matching old deck is already the correct name, skip
-        if any(d == new_name for d in old_decks) and len(old_decks) == 1:
-            continue
-
-        try:
-            # Create target deck (idempotent)
-            ac.create_deck(new_name)
-            # Move all cards to new deck name
-            if all_card_ids:
-                ac.change_deck(all_card_ids, new_name)
-        except AnkiConnectError:
-            pass
 
 
 def _make_word_id(word_data: dict, book_id: str,
@@ -593,9 +543,7 @@ def sync(
         lvl = _get_target_level_for_word(w)
         if lvl is not None and lvl in level_to_band:
             band = level_to_band[lvl]
-            target_name = _build_subdeck_name(
-                deck_name, band, 0  # count updated post-sync
-            )
+            target_name = _build_subdeck_name(deck_name, band)
             word_target_deck[idx] = target_name
         else:
             word_target_deck[idx] = deck_name  # parent deck fallback
@@ -616,10 +564,10 @@ def sync(
     print(f"\n  New words to add: {len(new_words)}")
     print(f"  Already in deck: {len(skipped_words)}")
 
-    # 7. Create sub-decks (preliminary names, will rename with counts later)
+    # 7. Create sub-decks
     if bands and not prefetch and not dry_run:
         for band in bands:
-            sub_deck = _build_subdeck_name(deck_name, band, 0)
+            sub_deck = _build_subdeck_name(deck_name, band)
             ac.ensure_deck_and_model(sub_deck, MODEL_NAME)
 
     # 8. Migrate misplaced cards
@@ -631,9 +579,6 @@ def sync(
             print(f"  Migrated {migration_count} card(s) to correct sub-decks")
 
     if not new_words:
-        # Still update deck names (counts may have changed from migration)
-        if bands and not prefetch and not dry_run:
-            _update_deck_names_with_counts(ac, deck_name, bands)
         print("\nDeck is up to date — nothing to add.")
         return {
             "added": 0,
@@ -892,11 +837,7 @@ def sync(
                     "error": errmsg,
                 }
 
-    # 9. Post-sync: rename sub-decks with final card counts
-    if bands and not dry_run and not prefetch:
-        _update_deck_names_with_counts(ac, deck_name, bands)
-
-    # 10. Trigger AnkiWeb sync (fire-and-forget)
+    # 9. Trigger AnkiWeb sync (fire-and-forget)
     ankiweb_synced = False
     if ac and not no_ankiweb_sync and not dry_run:
         try:

@@ -1003,6 +1003,25 @@ had two gaps in chain-walking to the coordination root:
 Symptom: "gaunt" tagged VERB in "was thin and gaunt".  Check: ``grep
 '"lemma": "gaunt".*"pos": "VERB"'`` in match_sentences output.
 
+### AUX copula fallback: nsubj guard for separate-clause conjuncts
+
+**Change (2026-07-12)**: The AUX copula fallback now checks whether the
+conjunct token has its own subject (``nsubj``, ``nsubjpass``, ``csubj``
+child).  If it does, the token heads a separate clause and is NOT a
+copula complement — the fallback does not fire.
+
+Before this fix, "He was tired and he teetered on it" caused "teetered"
+(VERB, VBD, conj of "was"(AUX)) to be promoted to ADJ.  "was" has
+"tired"(ADJ, acomp), so the AUX fallback incorrectly assumed "teetered"
+shared the adjectival role.  But "teetered" has its own subject "he" —
+it's a separate clause, not a copula complement.
+
+The guard is: ``has_own_subject = any(c.dep_ in ("nsubj", "nsubjpass",
+"csubj") for c in token.children)``.  When true, skip the AUX fallback.
+
+Symptom: "teetered" tagged ADJ with dep=conj and nsubj child.
+Check: ``grep '"lemma": "teeter".*"pos": "ADJ"'`` in match_sentences output.
+
 ### hyphenated compound token skip (dep=compound + adjacent "-")
 
 **Change (2026-07-11)**: Tokens with ``dep=compound`` that are adjacent to

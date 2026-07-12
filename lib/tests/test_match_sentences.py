@@ -598,6 +598,23 @@ class TestPOSCorrections:
         assert w["pos"] == "VERB", \
             f"butchered should stay VERB (conj of begged), got {w['pos']}"
 
+    def test_conj_of_copula_with_own_subject_stays_verb(self):
+        """'teetered' conj of 'was' but has own nsubj → separate clause, stays VERB.
+
+        In 'He was tired and he teetered', 'teetered' is the main verb of
+        the second clause with its own subject 'he'.  The AUX copula
+        fallback must NOT promote it to ADJ just because 'was' has
+        'tired' (ADJ, acomp).
+        """
+        result = _run_pipeline(
+            [{"lemma": "teeter", "rep": "teetered",
+              "forms": ["teetered"], "coca_level": 9}],
+            "He was too tired even to examine the line and he teetered on it as his delicate feet gripped it fast.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "VERB", \
+            f"teetered should stay VERB (separate clause with own nsubj), got {w['pos']}"
+
     def test_be_to_vbn_pos_becomes_adj(self):
         """be-to VBN pattern sets POS=ADJ."""
         result = _run_pipeline(
@@ -1242,6 +1259,27 @@ class TestJsonOut:
 
         result = _run_pipeline_json_out(in_coca, text)
         assert result['book_id'] == ''
+
+    def test_bands_and_is_bilateral_propagated_from_input(self):
+        """bands and is_bilateral from filter output are carried to match output."""
+        in_coca = [{"lemma": "test", "rep": "test", "forms": ["test"],
+                     "coca_level": 9}]
+        text = "This is a test."
+        result = _run_pipeline_json_out(in_coca, text, filter_extra={
+            "bands": [{"name": "COCA 9", "lo": 9, "hi": 9}],
+            "is_bilateral": True,
+        })
+        assert result['bands'] == [{"name": "COCA 9", "lo": 9, "hi": 9}]
+        assert result['is_bilateral'] is True
+
+    def test_bands_absent_defaults_to_empty(self):
+        """When input has no bands/is_bilateral, output defaults to empty list/False."""
+        in_coca = [{"lemma": "test", "rep": "test", "forms": ["test"],
+                     "coca_level": 5}]
+        text = "This is a test."
+        result = _run_pipeline_json_out(in_coca, text)
+        assert result['bands'] == []
+        assert result['is_bilateral'] is False
 
 
 # ── Fragment merge (_merge_adjacent_fragments) ──

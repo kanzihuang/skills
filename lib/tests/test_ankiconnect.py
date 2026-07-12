@@ -361,3 +361,95 @@ class TestFindVocabBookSuffix:
         deck, suffix = ac.find_vocab_book_suffix("Any Book", "Author")
         assert deck is None
         assert suffix is None
+
+
+class TestGetWordIdMapWithDeckBatching:
+    """Verify notesInfo and cardsInfo are batched to avoid oversized responses."""
+
+    def _make_note(self, nid: int, word_id: str, cards: list[int]) -> dict:
+        return {
+            "noteId": nid,
+            "cards": cards,
+            "fields": {
+                "WordId": {"value": word_id, "order": 0},
+            },
+        }
+
+    def _make_card(self, cid: int, nid: int, deck: str) -> dict:
+        return {"cardId": cid, "note": nid, "deckName": deck}
+
+    def test_batches_120_notes_into_3_calls(self, mock_requests):
+        """120 notes → 3 notesInfo calls (50+50+20)."""
+        note_ids = list(range(1000, 1120))
+        notes = [self._make_note(nid, f"word_{nid}", [nid * 10]) for nid in note_ids]
+        cards = [self._make_card(nid * 10, nid, "Parent Deck") for nid in note_ids]
+
+        call_count = {"count": 0}
+        call_records = []
+
+        def side_effect(action, **params):
+            call_records.append((action, params))
+            if action == "findNotes":
+                return note_ids
+            elif action == "notesInfo":
+                call_count["count"] += 1
+                requested = params["notes"]
+                # Return only the notes that were requested
+                return [n for n in notes if n["noteId"] in requested]
+            elif action == "cardsInfo":
+                requested = params["cards"]
+                return [c for c in cards if c["cardId"] in requested]
+            return []
+
+        with patch.object(AnkiConnect, "_call", side_effect=side_effect):
+            ac = AnkiConnect()
+            result = ac.get_word_id_map_with_deck("Parent Deck")
+
+        # 120 notes → ceil(120/50) = 3 calls
+        assert call_count["count"] == 3, \
+            f"Expected 3 notesInfo calls, got {call_count['count']}"
+
+        # All 120 notes returned
+        assert len(result) == 120, \
+            f"Expected 120 WordIds, got {len(result)}"
+
+    def test_batches_50_notes_into_1_call(self, mock_requests):
+        """50 notes exactly → 1 notesInfo call (boundary)."""
+        note_ids = list(range(1, 51))
+        notes = [self._make_note(nid, f"word_{nid}", [nid * 10]) for nid in note_ids]
+        cards = [self._make_card(nid * 10, nid, "Parent Deck") for nid in note_ids]
+
+        call_count = {"count": 0}
+
+        def side_effect(action, **params):
+            if action == "findNotes":
+                return note_ids
+            elif action == "notesInfo":
+                call_count["count"] += 1
+                requested = params["notes"]
+                return [n for n in notes if n["noteId"] in requested]
+            elif action == "cardsInfo":
+                requested = params["cards"]
+                return [c for c in cards if c["cardId"] in requested]
+            return []
+
+        with patch.object(AnkiConnect, "_call", side_effect=side_effect):
+            ac = AnkiConnect()
+            result = ac.get_word_id_map_with_deck("Parent Deck")
+
+        assert call_count["count"] == 1, \
+            f"Expected 1 notesInfo call for 50 notes, got {call_count['count']}"
+        assert len(result) == 50
+
+    def test_empty_deck_returns_empty(self, mock_requests):
+        """When findNotes returns nothing, result is empty dict."""
+        def side_effect(action, **params):
+            if action == "findNotes":
+                return []
+            return []
+
+        with patch.object(AnkiConnect, "_call", side_effect=side_effect):
+            ac = AnkiConnect()
+            result = ac.get_word_id_map_with_deck("Empty Deck")
+
+        assert result == {}

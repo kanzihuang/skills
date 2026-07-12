@@ -196,10 +196,10 @@ cat /tmp/<safe_title>-*-full.txt | \
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
 - WordId = `{safe_filename(lemma)}_{pos}_{suffix}`；音频命名 = `{safe_filename(lemma)}_{pos}_{suffix}_word.mp3` / `_sent.mp3`
-- 同步时按 COCA 分级创建层级子牌组，子牌组名含单词量
+- 同步时按 COCA 分级创建层级子牌组
 - **父牌组去重**：查询父牌组下全部子牌组，复用 UUID 跨批去重
 - 卡片新增 `CocaLevel` 隐藏字段（不在模板显示），用于自动迁移错位卡片
-- **牌组名由脚本自动生成**：父牌组 `{book_title} ({book_author}) - 分级词汇`，子牌组 `COCA {lo}-{hi} (N words)`。Claude 不要设置 `deck_name` 字段，也不要传 `--deck` 参数
+- **牌组名由脚本自动生成**：父牌组 `{book_title} ({book_author}) - 分级词汇`，子牌组 `COCA {lo}-{hi}`（Anki 原生显示卡片数量）。Claude 不要设置 `deck_name` 字段，也不要传 `--deck` 参数
 
 ## 异常处理
 
@@ -225,7 +225,7 @@ cat /tmp/<safe_title>-*-full.txt | \
 - **UUID 复用跨批**：检测已有牌组的 UUID 后缀并在后续运行中复用，实现跨批去重
 - **父牌组去重**：查询父牌组下所有子牌组，仅添加全新的词
 - **卡片迁移**：词频等级变更时，自动将卡片移动到正确子牌组，保留复习进度
-- **计数牌组名**：子牌组名包含卡片数量（如 `COCA 4 (15 words)`），同步后自动更新
+- **稳定子牌组名**：子牌组名不含单词数量（如 `COCA 4`）。Anki 原生在牌组列表中显示卡片数，牌组名保持稳定
 - **per-sentence POS 分析**：spaCy 在具体句子上判定词性，不全局投票。lemma 机械化产出，Claude 不参与
 - **序言自动过滤**：`match_sentences.py` 自动跳过前言
 - **Claude + Python 分离**：Claude 做知识工作（释义、句子审核），Python 做机械工作（POS、lemma、TTS、同步、过滤、IPA、截断、碎片合并）

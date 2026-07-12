@@ -412,6 +412,9 @@ class AnkiConnect:
 
           - Parent-level dedup (single lookup covers all sub-decks)
           - Card migration detection (compare current_deck vs target_deck)
+
+        Batches notesInfo calls (50 notes per batch) to avoid exceeding
+        AnkiConnect's response buffer (~11MB for 300+ cards).
         """
         note_ids = self.find_notes(
             f'deck:"{parent_deck}" note:"Vocabulary Card (WeRead)"'
@@ -419,7 +422,11 @@ class AnkiConnect:
         if not note_ids:
             return {}
 
-        info = self.notes_info(note_ids)
+        # Batch notesInfo to avoid oversized responses
+        BATCH = 50
+        info: list[dict] = []
+        for i in range(0, len(note_ids), BATCH):
+            info.extend(self.notes_info(note_ids[i:i + BATCH]))
 
         # Collect all card IDs then look up deck names in one batch
         note_to_cards: dict[int, list[int]] = {}
@@ -432,14 +439,14 @@ class AnkiConnect:
         if not all_card_ids:
             return {}
 
-        # Get deck name for every card
-        cards_info = self._call("cardsInfo", cards=all_card_ids)
-        # Build note_id → deck_name (first card's deck for each note)
+        # Batch cardsInfo as well (defense-in-depth)
         note_deck: dict[int, str] = {}
-        for card in cards_info:
-            nid = card.get("note")
-            if nid not in note_deck:
-                note_deck[nid] = card.get("deckName", parent_deck)
+        for i in range(0, len(all_card_ids), BATCH):
+            cards_info = self._call("cardsInfo", cards=all_card_ids[i:i + BATCH])
+            for card in cards_info:
+                nid = card.get("note")
+                if nid not in note_deck:
+                    note_deck[nid] = card.get("deckName", parent_deck)
 
         result: dict[str, tuple[int, str]] = {}
         for n in info:

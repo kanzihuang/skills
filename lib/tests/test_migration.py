@@ -373,15 +373,15 @@ class TestGetTargetLevel:
 
 
 class TestBuildSubdeckName:
-    def test_with_count(self):
+    def test_basic(self):
         band = {"name": "COCA 3-5", "lo": 3, "hi": 5}
-        name = _build_subdeck_name("Parent", band, 42)
-        assert name == "Parent::COCA 3-5 (42 words)"
+        name = _build_subdeck_name("Parent", band)
+        assert name == "Parent::COCA 3-5"
 
     def test_single_level(self):
         band = {"name": "COCA 10", "lo": 10, "hi": 25}
-        name = _build_subdeck_name("Parent", band, 5)
-        assert name == "Parent::COCA 10 (5 words)"
+        name = _build_subdeck_name("Parent", band)
+        assert name == "Parent::COCA 10"
 
 
 class TestParseBands:

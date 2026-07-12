@@ -1114,10 +1114,20 @@ def process_words(
                         # past).  If the chain passed through a VERB/NOUN/etc,
                         # the token is coordinated with that content word,
                         # not with the adjective complement.
-                        for child in head_token.children:
-                            if child.dep_ in ("acomp", "amod") and child.pos_ == "ADJ":
-                                pos = "ADJ"
-                                break
+                        # Guard: if the token has its own subject (nsubj,
+                        # nsubjpass, csubj), it heads a separate clause —
+                        # NOT a copula complement sharing the copula's
+                        # subject.  E.g. "He was tired and he teetered" →
+                        # "teetered" has nsubj "he" → stays VERB.
+                        has_own_subject = any(
+                            c.dep_ in ("nsubj", "nsubjpass", "csubj")
+                            for c in token.children
+                        )
+                        if not has_own_subject:
+                            for child in head_token.children:
+                                if child.dep_ in ("acomp", "amod") and child.pos_ == "ADJ":
+                                    pos = "ADJ"
+                                    break
                 # Sentence-initial inverted ADJ: "Absurd as it might seem"
                 # (= "As absurd as ...").  spaCy often tags these as PROPN
                 # (capitalized at sentence start); PROPN→NOUN then converts
@@ -1366,6 +1376,8 @@ def process_words(
         'source_text_path': source_text_path,
         'book_id': data.get('book_id', ''),
         'suffix': data.get('suffix', ''),
+        'bands': data.get('bands', []),
+        'is_bilateral': data.get('is_bilateral', False),
         'words': results,
         'excluded': data.get('excluded', []),
     }
