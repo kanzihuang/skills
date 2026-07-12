@@ -1125,6 +1125,13 @@ def process_words(
                     head_pos = head_token.pos_
                     if head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos:
                         pos = head_pos
+                        # When inheriting ADJ via conj chain, ensure lemma is
+                        # the surface form — _determine_lemma may have reduced
+                        # a VBN/VBD token via the VERB channel (e.g. "tempered"
+                        # → "temper"), and the ADJ lemma should be the surface
+                        # form (e.g. "tempered" conj of "sharp" → ADJ).
+                        if pos == "ADJ" and token.tag_ in ("VBD", "VBN"):
+                            lemma = token_lower
                         # When the coordination root is VBN/VBD in advcl
                         # position with no verbal dependents, it is a
                         # depictive predicate adjective — the conjunct
@@ -1141,6 +1148,7 @@ def process_words(
                             ]
                             if not verbal_children:
                                 pos = "ADJ"
+                                lemma = token_lower
                     elif head_pos == "AUX" and not walked_past_content:
                         # Direct conjunction of copula: "was thin and gaunt".
                         # Only fires when the token is a direct child of the
@@ -1161,6 +1169,7 @@ def process_words(
                             for child in head_token.children:
                                 if child.dep_ in ("acomp", "amod") and child.pos_ == "ADJ":
                                     pos = "ADJ"
+                                    lemma = token_lower
                                     break
                 # Sentence-initial inverted ADJ: "Absurd as it might seem"
                 # (= "As absurd as ...").  spaCy often tags these as PROPN

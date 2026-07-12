@@ -1050,6 +1050,25 @@ Symptom: words like "awash" tagged VERB in conj position after a VBN+advcl
 head with no verbal dependents.
 Check: ``grep '"dep": "conj"'`` for entries whose head is VBN+advcl.
 
+### conj chain ADJ promotion: lemma now set to surface form
+
+**Change (2026-07-12)**: When conj POS inheritance promotes a VBN/VBD token
+to ADJ (via any of the three paths: direct head_pos=ADJ, VBN+advcl root
+depictive, or AUX copula fallback), the *lemma* is now set to
+``token_lower`` (surface form).  Previously only the VBN+advcl→ADJ and
+VBN+advmod→ADJ rules (outside the conj block) updated the lemma; the
+conj-chain paths left the reduced verb lemma (e.g. "tempered"→"temper") in
+place.
+
+**Why**: ``_determine_lemma()`` reduces VBN/VBD tokens via the VERB channel.
+When the conj chain later promotes to ADJ (e.g. "tempered" conj of "sharp",
+"was thin and gaunt"), the lemma must be the surface form — the word is
+being used as an adjective, not a verb.
+
+Symptom: VBN/VBD entries with ``pos=ADJ`` but ``lemma`` reduced to verb
+base (e.g. "tempered" ADJ with lemma="temper").
+Check: ``grep '"pos": "ADJ"'`` for entries where lemma ≠ word.
+
 ### hyphenated compound token skip (dep=compound + adjacent "-")
 
 **Change (2026-07-11)**: Tokens with ``dep=compound`` that are adjacent to

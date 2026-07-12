@@ -1014,6 +1014,25 @@ class TestPOSCorrections:
         w = result["words"][0]
         assert w["pos"] == "ADJ", f"Expected ADJ, got {w['pos']}"
 
+    def test_conj_pos_inheritance_adj_lemma_is_surface_form(self):
+        """VBN conj of ADJ head → ADJ with surface-form lemma, not verb lemma.
+
+        'tempered' in 'sharp and not tempered' — spaCy may tag it as VBN
+        and _determine_lemma reduces it to 'temper' via the VERB channel.
+        The conj chain promotes it to ADJ (conj of 'sharp'), and the lemma
+        must be the surface form 'tempered', not the reduced 'temper'.
+        """
+        result = _run_pipeline(
+            [{"lemma": "temper", "rep": "tempered",
+              "forms": ["tempered"], "coca_level": 7}],
+            "It should be sharp and not tempered so it will break.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", \
+            f"tempered should be ADJ (conj of sharp), got {w['pos']}"
+        assert w["lemma"] == "tempered", \
+            f"tempered lemma should be surface form 'tempered', got '{w['lemma']}'"
+
 
 # ── char_offset word-boundary matching ──
 
