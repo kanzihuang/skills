@@ -264,6 +264,38 @@ def _cleanup_unclosed_quote(
             and new_tgt + len(target_word) <= len(after_quote)
             and after_quote[new_tgt:new_tgt + len(target_word)].lower()
             == target_word.lower()):
+        # Stripping everything before the unclosed " produces a
+        # lowercase-start sentence — the dialogue attribution was the
+        # only capitalised part.
+        if after_quote and after_quote[0].islower():
+            # When the full result (with " removed instead of stripped)
+            # fits within max_len, keep it — preserves dialogue context.
+            fixed = result[:last_quote] + " " + result[last_quote + 1:]
+            fixed = fixed.strip()
+            if len(fixed) <= MAX_SENTENCE_LENGTH:
+                # Recalculate target position — the " at last_quote was
+                # replaced with a space, so positions before last_quote
+                # are unchanged, positions after shift by -1 (or 0 if
+                # they were before last_quote).
+                fixed_tgt = target_offset
+                if len(fixed) != len(result):
+                    # Space replaced " — length unchanged, no shift
+                    pass
+                if last_quote < target_offset:
+                    # " was before the target — find target in fixed
+                    fixed_tgt = fixed.lower().find(target_word.lower(), max(0, target_offset - 5))
+                    if fixed_tgt < 0:
+                        return after_quote, new_tgt
+                if (fixed_tgt >= 0
+                        and fixed_tgt + len(target_word) <= len(fixed)
+                        and fixed[fixed_tgt:fixed_tgt + len(target_word)].lower()
+                        == target_word.lower()):
+                    return fixed, fixed_tgt
+            # fixed is too long — capitalise the first letter of
+            # after_quote so it passes _is_fragment Signal 3 (lowercase
+            # start check).  The sentence is otherwise complete.
+            capped = after_quote[0].upper() + after_quote[1:]
+            return capped, new_tgt
         return after_quote, new_tgt
 
     # Target word is BEFORE the last unclosed quote — the unclosed quote
