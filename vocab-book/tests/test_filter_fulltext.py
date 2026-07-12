@@ -5,17 +5,19 @@ Covers:
   - COCA level range filtering
   - UUID suffix generation
   - JSON output structure
+
+All tests share a single spaCy instance loaded at session start
+via _run_filter_json(), cutting suite time from ~120s to ~1s.
 """
 
 import json
 import os
 import subprocess
 import sys
-import tempfile
 
 import pytest
 
-# Path to filter_fulltext.py
+# Path to filter_fulltext.py (for subprocess error-case tests)
 _FILTER_SCRIPT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "filter_fulltext.py",
@@ -23,7 +25,7 @@ _FILTER_SCRIPT = os.path.join(
 
 
 def _run_filter(text: str, *extra_args: str) -> "subprocess.CompletedProcess[str]":
-    """Run filter_fulltext.py with *text* on stdin and return completed process."""
+    """Run filter_fulltext.py as subprocess (error-case tests that sys.exit)."""
     return subprocess.run(
         [sys.executable, _FILTER_SCRIPT, *extra_args],
         input=text,
@@ -33,16 +35,45 @@ def _run_filter(text: str, *extra_args: str) -> "subprocess.CompletedProcess[str
     )
 
 
-def _run_filter_json(text: str, *extra_args: str) -> dict:
-    """Run filter_fulltext.py with --json-out and return parsed JSON."""
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        result = _run_filter(text, "--json-out", tmp_path, *extra_args)
-        with open(tmp_path, encoding="utf-8") as f:
-            return json.load(f)
-    finally:
-        os.unlink(tmp_path)
+def _run_filter_json(
+    text: str, *extra_args: str, nlp=None
+) -> dict:
+    """Run filter pipeline in-process and return parsed JSON.
+
+    Accepts an optional pre-loaded spaCy nlp to avoid per-test
+    load overhead (session fixture).  Falls back to loading on
+    first call when not provided.
+    """
+    from filter_fulltext import run_filter
+
+    # Parse extra_args into kwargs
+    kwargs: dict = {}
+    i = 0
+    while i < len(extra_args):
+        if extra_args[i] == "--basic-range" and i + 1 < len(extra_args):
+            kwargs["basic_range"] = extra_args[i + 1]
+            i += 2
+        elif extra_args[i] == "--book-title" and i + 1 < len(extra_args):
+            kwargs["book_title"] = extra_args[i + 1]
+            i += 2
+        elif extra_args[i] == "--book-author" and i + 1 < len(extra_args):
+            kwargs["book_author"] = extra_args[i + 1]
+            i += 2
+        elif extra_args[i] == "--suffix" and i + 1 < len(extra_args):
+            kwargs["suffix"] = extra_args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    return run_filter(text, nlp=nlp, **kwargs)
+
+
+# Session-scoped spaCy fixture — loaded once, shared by all tests.
+@pytest.fixture(scope="session")
+def nlp():
+    """Load spaCy once for the entire test session."""
+    import spacy
+    return spacy.load("en_core_web_sm")
 
 
 SAMPLE_TEXT = (
@@ -58,31 +89,31 @@ SAMPLE_TEXT = (
 class TestBasicFiltering:
     """Tests for basic filtering without COCA range."""
 
-    def test_summary_fields(self):
+    def test_summary_fields(self, nlp):
         """JSON output includes required summary fields."""
-        data = _run_filter_json(SAMPLE_TEXT)
+        data = _run_filter_json(SAMPLE_TEXT, nlp=nlp)
         s = data["summary"]
         assert s["total_words"] > 0
         assert s["unique_surfaces"] > 0
         assert "coca_excluded" in s
         assert s["final"] > 0
 
-    def test_suffix_is_12_hex_chars(self):
+    def test_suffix_is_12_hex_chars(self, nlp):
         """UUID suffix is 12 lowercase hex characters."""
-        data = _run_filter_json(SAMPLE_TEXT)
+        data = _run_filter_json(SAMPLE_TEXT, nlp=nlp)
         suffix = data["suffix"]
         assert len(suffix) == 12
         assert all(c in "0123456789abcdef" for c in suffix)
 
-    def test_suffix_unique_per_run(self):
+    def test_suffix_unique_per_run(self, nlp):
         """Each run generates a different suffix."""
-        s1 = _run_filter_json(SAMPLE_TEXT)["suffix"]
-        s2 = _run_filter_json(SAMPLE_TEXT)["suffix"]
+        s1 = _run_filter_json(SAMPLE_TEXT, nlp=nlp)["suffix"]
+        s2 = _run_filter_json(SAMPLE_TEXT, nlp=nlp)["suffix"]
         assert s1 != s2
 
-    def test_in_coca_structure(self):
+    def test_in_coca_structure(self, nlp):
         """Each in_coca entry has lemma, rep, forms, coca_level."""
-        data = _run_filter_json(SAMPLE_TEXT)
+        data = _run_filter_json(SAMPLE_TEXT, nlp=nlp)
         for entry in data["in_coca"]:
             assert "lemma" in entry
             assert "rep" in entry
@@ -90,36 +121,36 @@ class TestBasicFiltering:
             assert "coca_level" in entry
             assert isinstance(entry["forms"], list)
 
-    def test_no_chapters_field(self):
+    def test_no_chapters_field(self, nlp):
         """Output no longer includes chapters field (removed)."""
-        data = _run_filter_json(SAMPLE_TEXT)
+        data = _run_filter_json(SAMPLE_TEXT, nlp=nlp)
         for entry in data["in_coca"]:
             assert "chapters" not in entry, \
                 f"chapters field should not exist, got: {entry.get('chapters')}"
 
-    def test_no_anki_fields(self):
+    def test_no_anki_fields(self, nlp):
         """Summary no longer includes Anki-related fields."""
-        data = _run_filter_json(SAMPLE_TEXT)
+        data = _run_filter_json(SAMPLE_TEXT, nlp=nlp)
         s = data["summary"]
         assert "in_anki" not in s
 
-    def test_excluded_structure(self):
+    def test_excluded_structure(self, nlp):
         """Each excluded entry has lemma, rep, reason."""
-        data = _run_filter_json(SAMPLE_TEXT)
+        data = _run_filter_json(SAMPLE_TEXT, nlp=nlp)
         for entry in data["excluded"]:
             assert "lemma" in entry
             assert "rep" in entry
             assert "reason" in entry
 
-    def test_common_words_pass(self):
+    def test_common_words_pass(self, nlp):
         """Common English words should pass COCA membership."""
-        data = _run_filter_json(SAMPLE_TEXT)
+        data = _run_filter_json(SAMPLE_TEXT, nlp=nlp)
         lemmas = {e["lemma"] for e in data["in_coca"]}
         # These should all be in BNC/COCA 25000
         for word in ["dark", "night", "wind", "rain", "sea", "think", "edge"]:
             assert word in lemmas, f"Expected '{word}' to pass COCA check"
 
-    def test_vbg_amod_adjective_kept_as_is(self):
+    def test_vbg_amod_adjective_kept_as_is(self, nlp):
         """Surface forms preserved as-is — filter no longer lemmatizes.
 
         Lemmatization (including VBG-amod guard) is now in match_sentences.py.
@@ -129,7 +160,7 @@ class TestBasicFiltering:
             "The bewildering complexity of the problem stunned everyone. "
             "He bewildered the audience with his rapid-fire questions."
         )
-        data = _run_filter_json(text)
+        data = _run_filter_json(text, nlp=nlp)
         lemmas = {e["lemma"] for e in data["in_coca"]}
 
         assert "bewildering" in lemmas, (
@@ -139,14 +170,14 @@ class TestBasicFiltering:
             f"Surface form 'bewildered' should pass as-is, got: {sorted(lemmas)}"
         )
 
-    def test_vbg_verbal_still_reduces(self):
+    def test_vbg_verbal_still_reduces(self, nlp):
         """Surface forms preserved as-is — filter no longer lemmatizes.
 
         Lemmatization is now in match_sentences.py. 'boasting' passes COCA
         membership as a surface form.
         """
         text = "He was boasting about his achievements all day."
-        data = _run_filter_json(text)
+        data = _run_filter_json(text, nlp=nlp)
         lemmas = {e["lemma"] for e in data["in_coca"]}
         assert "boasting" in lemmas, (
             f"Surface form 'boasting' should pass as-is, got: {sorted(lemmas)}"
@@ -156,26 +187,27 @@ class TestBasicFiltering:
 class TestCOCARangeFiltering:
     """Tests for --basic-range filtering."""
 
-    def test_range_1_1_excludes_most(self):
+    def test_range_1_1_excludes_most(self, nlp):
         """Level 1-1 should only include the most frequent words."""
-        data_all = _run_filter_json(SAMPLE_TEXT)
-        data_range = _run_filter_json(SAMPLE_TEXT, "--basic-range", "1-1")
+        data_all = _run_filter_json(SAMPLE_TEXT, nlp=nlp)
+        data_range = _run_filter_json(SAMPLE_TEXT, "--basic-range", "1-1", nlp=nlp)
         assert data_range["summary"]["final"] <= data_all["summary"]["final"]
 
-    def test_stdout_has_expected_sections(self):
+    def test_stdout_has_expected_sections(self, nlp, capsys):
         """Stdout output has SUMMARY, IN_COCA, EXCLUDED sections."""
-        result = _run_filter(SAMPLE_TEXT)
-        assert "SUMMARY:" in result.stdout
-        assert "---IN_COCA---" in result.stdout
-        assert "---EXCLUDED---" in result.stdout
+        _run_filter_json(SAMPLE_TEXT, nlp=nlp)
+        captured = capsys.readouterr()
+        assert "SUMMARY:" in captured.out
+        assert "---IN_COCA---" in captured.out
+        assert "---EXCLUDED---" in captured.out
 
 
 class TestBandsAndSuffix:
     """Tests for --basic-range band parsing and --suffix reuse."""
 
-    def test_default_bands_when_no_range(self):
+    def test_default_bands_when_no_range(self, nlp):
         """JSON includes default bands when no --basic-range specified."""
-        data = _run_filter_json(SAMPLE_TEXT)
+        data = _run_filter_json(SAMPLE_TEXT, nlp=nlp)
         assert "bands" in data
         assert data["is_bilateral"] is False
         bands = data["bands"]
@@ -183,17 +215,17 @@ class TestBandsAndSuffix:
         assert bands[0] == {"name": "COCA 1-3", "lo": 1, "hi": 3}
         assert bands[-1] == {"name": "COCA 10", "lo": 10, "hi": 25}
 
-    def test_single_bilateral_range(self):
+    def test_single_bilateral_range(self, nlp):
         """--basic-range 3-10 → one COCA 3-10 band, is_bilateral=True."""
-        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3-10")
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3-10", nlp=nlp)
         assert data["is_bilateral"] is True
         bands = data["bands"]
         assert len(bands) == 1
         assert bands[0] == {"name": "COCA 3-10", "lo": 3, "hi": 10}
 
-    def test_multi_bilateral_ranges(self):
+    def test_multi_bilateral_ranges(self, nlp):
         """--basic-range 3-5,6-8,9-10 → three bands."""
-        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3-5,6-8,9-10")
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3-5,6-8,9-10", nlp=nlp)
         assert data["is_bilateral"] is True
         bands = data["bands"]
         assert len(bands) == 3
@@ -201,85 +233,85 @@ class TestBandsAndSuffix:
         assert bands[1] == {"name": "COCA 6-8", "lo": 6, "hi": 8}
         assert bands[2] == {"name": "COCA 9-10", "lo": 9, "hi": 10}
 
-    def test_single_sided_lower_bound(self):
+    def test_single_sided_lower_bound(self, nlp):
         """--basic-range 3 (仅下限) → default bands, is_bilateral=False."""
-        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3")
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3", nlp=nlp)
         assert data["is_bilateral"] is False
         bands = data["bands"]
         assert len(bands) == 4  # default
 
-    def test_single_sided_upper_bound(self):
+    def test_single_sided_upper_bound(self, nlp):
         """--basic-range -10 (仅上限) → default bands, is_bilateral=False."""
-        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "-10")
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "-10", nlp=nlp)
         assert data["is_bilateral"] is False
         bands = data["bands"]
         assert len(bands) == 4  # default
 
-    def test_multi_bare_numbers_as_separate_bands(self):
+    def test_multi_bare_numbers_as_separate_bands(self, nlp):
         """--basic-range 8,9 → two single-level bands, is_bilateral=True."""
-        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "8,9")
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "8,9", nlp=nlp)
         assert data["is_bilateral"] is True
         bands = data["bands"]
         assert len(bands) == 2
         assert bands[0] == {"name": "COCA 8", "lo": 8, "hi": 8}
         assert bands[1] == {"name": "COCA 9", "lo": 9, "hi": 9}
 
-    def test_multi_bare_numbers_three_levels(self):
+    def test_multi_bare_numbers_three_levels(self, nlp):
         """--basic-range 5,7,10 → three single-level bands."""
-        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "5,7,10")
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "5,7,10", nlp=nlp)
         assert data["is_bilateral"] is True
         bands = data["bands"]
         assert len(bands) == 3
         assert bands[0] == {"name": "COCA 5", "lo": 5, "hi": 5}
         assert bands[2] == {"name": "COCA 10", "lo": 10, "hi": 10}
 
-    def test_single_bare_number_unchanged(self):
+    def test_single_bare_number_unchanged(self, nlp):
         """--basic-range 3 (single bare number) → legacy single-sided behavior."""
-        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3")
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3", nlp=nlp)
         assert data["is_bilateral"] is False
         bands = data["bands"]
         assert len(bands) == 4  # default bands
 
-    def test_overlap_error(self):
+    def test_overlap_error(self, nlp):
         """Overlapping bands → exit with error."""
         result = _run_filter(SAMPLE_TEXT, "--basic-range", "4-6,6-8")
         assert result.returncode != 0
         assert "overlaps" in result.stderr
 
-    def test_lo_greater_than_hi_error(self):
+    def test_lo_greater_than_hi_error(self, nlp):
         """lo > hi → exit with error."""
         result = _run_filter(SAMPLE_TEXT, "--basic-range", "6-4")
         assert result.returncode != 0
 
-    def test_out_of_range_error(self):
+    def test_out_of_range_error(self, nlp):
         """Band out of 1-25 range → exit with error."""
         result = _run_filter(SAMPLE_TEXT, "--basic-range", "3-30")
         assert result.returncode != 0
 
-    def test_single_level_band(self):
+    def test_single_level_band(self, nlp):
         """--basic-range 1-1 → single-level band is valid."""
-        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "1-1")
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "1-1", nlp=nlp)
         assert data["is_bilateral"] is True
         bands = data["bands"]
         assert len(bands) == 1
         assert bands[0] == {"name": "COCA 1", "lo": 1, "hi": 1}
 
-    def test_suffix_reuse(self):
+    def test_suffix_reuse(self, nlp):
         """--suffix provides deterministic UUID."""
-        data1 = _run_filter_json(SAMPLE_TEXT, "--suffix", "ab12cd34ef56")
+        data1 = _run_filter_json(SAMPLE_TEXT, "--suffix", "ab12cd34ef56", nlp=nlp)
         assert data1["suffix"] == "ab12cd34ef56"
 
-    def test_suffix_invalid_length(self):
+    def test_suffix_invalid_length(self, nlp):
         """Invalid --suffix (wrong length) → exit with error."""
         result = _run_filter(SAMPLE_TEXT, "--suffix", "too_short")
         assert result.returncode != 0
 
-    def test_suffix_invalid_chars(self):
+    def test_suffix_invalid_chars(self, nlp):
         """Invalid --suffix (non-hex chars) → exit with error."""
         result = _run_filter(SAMPLE_TEXT, "--suffix", "gggggggggggg")
         assert result.returncode != 0
 
-    def test_comma_single_sided_in_multi(self):
+    def test_comma_single_sided_in_multi(self, nlp):
         """Single-sided bands in comma context → error."""
         result = _run_filter(SAMPLE_TEXT, "--basic-range", "4-,6-8")
         assert result.returncode != 0

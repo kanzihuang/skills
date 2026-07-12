@@ -209,47 +209,25 @@ def _check_spacy() -> bool:
         return False
 
 
-def main() -> None:
-    # -- parse CLI args -------------------------------------------------------
-    basic_range_arg: Optional[str] = None
-    json_out_path: Optional[str] = None
-    book_title: Optional[str] = None
-    book_author: Optional[str] = None
-    suffix: Optional[str] = None
+def run_filter(
+    text: str,
+    *,
+    nlp: "spacy.Language | None" = None,
+    basic_range: str | None = None,
+    book_title: str | None = None,
+    book_author: str | None = None,
+    suffix: str | None = None,
+    json_out_path: str | None = None,
+) -> dict:
+    """Run the full filter pipeline. Returns the JSON output dict.
 
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        if args[i] == "--basic-range" and i + 1 < len(args):
-            basic_range_arg = args[i + 1]
-            i += 2
-        elif args[i] == "--json-out" and i + 1 < len(args):
-            json_out_path = args[i + 1]
-            i += 2
-        elif args[i] == "--book-title" and i + 1 < len(args):
-            book_title = args[i + 1]
-            i += 2
-        elif args[i] == "--book-author" and i + 1 < len(args):
-            book_author = args[i + 1]
-            i += 2
-        elif args[i] == "--suffix" and i + 1 < len(args):
-            suffix = args[i + 1]
-            i += 2
-        else:
-            i += 1
+    Accepts an optional pre-loaded spaCy nlp for test performance.
+    When nlp is None, loads spaCy internally (CLI mode).
+    """
+    import spacy  # noqa: F811
 
     # Parse bands + filter range
-    bands, basic_min, basic_max, is_bilateral = parse_bands(basic_range_arg)
-
-    # -- pre-flight: verify spaCy is functional --------------------------------
-    if not _check_spacy():
-        sys.exit(1)
-
-    # -- read stdin -----------------------------------------------------------
-    text = sys.stdin.read()
-    if not text.strip():
-        print("Error: no text provided on stdin", file=sys.stderr)
-        sys.exit(1)
+    bands, basic_min, basic_max, is_bilateral = parse_bands(basic_range)
 
     # Validate plain-text format (defence-in-depth against HTML wrappers)
     from lib.utils import validate_plain_text
@@ -259,7 +237,6 @@ def main() -> None:
 
     # Generate or reuse UUID suffix for WordId/audio namespace isolation
     if suffix:
-        # Validate: must be exactly 12 lowercase hex chars
         if not (len(suffix) == 12
                 and all(c in "0123456789abcdef" for c in suffix)):
             print(f"Error: --suffix must be 12 hex chars, got '{suffix}'",
@@ -268,14 +245,11 @@ def main() -> None:
     else:
         suffix = uuid.uuid4().hex[:12]
 
+    # Load spaCy once (test mode reuses a cached instance)
+    if nlp is None:
+        nlp = spacy.load("en_core_web_sm")
+
     # ── tokenize & COCA filter ────────────────────────────────────────────
-    # Filter is surface-form-only: each unique surface form is checked against
-    # the COCA word families directly. No lemmatization — the authoritative
-    # lemma is determined later by match_sentences.py from the specific sentence.
-    import spacy
-
-    nlp = spacy.load("en_core_web_sm")
-
     surface_forms: set[str] = set()
     raw_token_count = 0
 
@@ -351,50 +325,101 @@ def main() -> None:
         print(f"{surface}\t{rep}\t{reason}")
 
     # -- JSON output ----------------------------------------------------------
-    if json_out_path:
-        # Build band entries; last default band (10,25) → "COCA 10"
-        band_entries: list[dict] = []
-        for idx, (lo, hi) in enumerate(bands):
-            if not is_bilateral and idx == len(bands) - 1 and lo == 10 and hi == 25:
-                name = "COCA 10"
-            elif lo == hi:
-                name = f"COCA {lo}"
-            else:
-                name = f"COCA {lo}-{hi}"
-            band_entries.append({"name": name, "lo": lo, "hi": hi})
+    # Build band entries; last default band (10,25) → "COCA 10"
+    band_entries: list[dict] = []
+    for idx, (lo, hi) in enumerate(bands):
+        if not is_bilateral and idx == len(bands) - 1 and lo == 10 and hi == 25:
+            name = "COCA 10"
+        elif lo == hi:
+            name = f"COCA {lo}"
+        else:
+            name = f"COCA {lo}-{hi}"
+        band_entries.append({"name": name, "lo": lo, "hi": hi})
 
-        json_out = {
-            "book_title": book_title or "",
-            "book_author": book_author or "",
-            "suffix": suffix,
-            "bands": band_entries,
-            "is_bilateral": is_bilateral,
-            "summary": {
-                "total_words": total_raw_words,
-                "unique_surfaces": total_unique,
-                "coca_excluded": n_coca_excluded,
-                "final": n_final,
-            },
-            "in_coca": [
-                {
-                    "lemma": surface,
-                    "rep": rep,
-                    "forms": [surface],
-                    "coca_level": passed_coca_levels.get(surface),
-                }
-                for surface, rep, forms in passed
-            ],
-            "excluded": [
-                {"lemma": surface, "rep": rep, "reason": reason}
-                for surface, rep, reason in rejected
-            ],
-        }
+    json_out = {
+        "book_title": book_title or "",
+        "book_author": book_author or "",
+        "suffix": suffix,
+        "bands": band_entries,
+        "is_bilateral": is_bilateral,
+        "summary": {
+            "total_words": total_raw_words,
+            "unique_surfaces": total_unique,
+            "coca_excluded": n_coca_excluded,
+            "final": n_final,
+        },
+        "in_coca": [
+            {
+                "lemma": surface,
+                "rep": rep,
+                "forms": [surface],
+                "coca_level": passed_coca_levels.get(surface),
+            }
+            for surface, rep, forms in passed
+        ],
+        "excluded": [
+            {"lemma": surface, "rep": rep, "reason": reason}
+            for surface, rep, reason in rejected
+        ],
+    }
+    if json_out_path:
         with open(json_out_path, "w", encoding="utf-8") as f:
             json.dump(json_out, f, ensure_ascii=False, indent=2)
 
     # Summary line for Claude
     print(f"\nDone. {n_final} words → {json_out_path}" if json_out_path
           else f"\nDone. {n_final} words ready.")
+
+    return json_out
+
+
+def main() -> None:
+    # -- parse CLI args -------------------------------------------------------
+    basic_range_arg: Optional[str] = None
+    json_out_path: Optional[str] = None
+    book_title: Optional[str] = None
+    book_author: Optional[str] = None
+    suffix: Optional[str] = None
+
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == "--basic-range" and i + 1 < len(args):
+            basic_range_arg = args[i + 1]
+            i += 2
+        elif args[i] == "--json-out" and i + 1 < len(args):
+            json_out_path = args[i + 1]
+            i += 2
+        elif args[i] == "--book-title" and i + 1 < len(args):
+            book_title = args[i + 1]
+            i += 2
+        elif args[i] == "--book-author" and i + 1 < len(args):
+            book_author = args[i + 1]
+            i += 2
+        elif args[i] == "--suffix" and i + 1 < len(args):
+            suffix = args[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    # -- pre-flight: verify spaCy is functional --------------------------------
+    if not _check_spacy():
+        sys.exit(1)
+
+    # -- read stdin -----------------------------------------------------------
+    text = sys.stdin.read()
+    if not text.strip():
+        print("Error: no text provided on stdin", file=sys.stderr)
+        sys.exit(1)
+
+    run_filter(
+        text,
+        basic_range=basic_range_arg,
+        book_title=book_title,
+        book_author=book_author,
+        suffix=suffix,
+        json_out_path=json_out_path,
+    )
 
 
 if __name__ == "__main__":
