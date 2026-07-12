@@ -2486,6 +2486,34 @@ class TestHyphenatedCompoundSkip:
         assert w["pos"] == "ADJ", \
             f"fair in fair-minded is a true adjective, got {w['pos']}"
 
+    def test_head_of_hyphenated_compound_is_skipped(self):
+        """'garland' in 'half-garland' (head of compound) → skipped.
+
+        The compound child 'half' is the modifier adjacent to '-'; 'garland'
+        is the head.  Both should be skipped — the word only appears as
+        part of a hyphenated compound, not independently.
+        """
+        result = _run_pipeline(
+            [{"lemma": "garland", "rep": "garland",
+              "forms": ["garland"], "coca_level": 9}],
+            "They made a half-garland on the projecting steel.",
+        )
+        words = result.get("words", [])
+        garland_entries = [w for w in words if w["lemma"] == "garland"]
+        assert len(garland_entries) == 0, \
+            f"garland in half-garland should be skipped, got {len(garland_entries)} entries"
+
+    def test_standalone_garland_still_matches(self):
+        """'garland' without hyphenated compound → still matches."""
+        result = _run_pipeline(
+            [{"lemma": "garland", "rep": "garland",
+              "forms": ["garland"], "coca_level": 9}],
+            "She wore a garland of flowers in her hair.",
+        )
+        w = result["words"][0]
+        assert w["lemma"] == "garland"
+        assert w["pos"] == "NOUN", f"standalone garland should be NOUN, got {w['pos']}"
+
 
 # ── B-5: rstrip comma for function word detection ────────────────────────
 

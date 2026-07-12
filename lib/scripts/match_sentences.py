@@ -1047,7 +1047,9 @@ def process_words(
             # (e.g. "mast" in "mast-head").  These are fragments of a
             # single lexical unit, not independent word occurrences.
             # The dep=compound relation with an adjacent hyphen in the
-            # sentence text signals this pattern.
+            # sentence text signals this pattern.  amod-dep tokens
+            # (e.g. "fair" in "fair-minded") are true adjectives and
+            # intentionally kept — only compound-dep tokens are skipped.
             if token.dep_ == "compound":
                 head = token.head
                 if token.i < head.i:
@@ -1056,6 +1058,11 @@ def process_words(
                     gap = truncated[head.idx + len(head.text):token.idx]
                 if gap.startswith("-") or gap.endswith("-"):
                     continue
+            # Also skip the head (root noun) of a hyphenated compound
+            # (e.g. "garland" in "half-garland", "head" in "mast-head").
+            # The head follows the hyphen character directly in the text.
+            if token.i > 0 and doc[token.i - 1].text == "-":
+                continue
 
             for idx, entry in hits:
                 # Prevent re-processing the same (entry index, token text)
