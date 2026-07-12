@@ -33,7 +33,6 @@ from .config import MIN_SENTENCE_LENGTH
 
 from .ankiconnect import AnkiConnect, AnkiConnectError
 from .audio import _find_anki_media_dir, _upload_media_direct, _repair_audio
-from .bands import compute_bands, _count_coca_levels, _pre_assign_bands
 from .ipa import _cmu_ipa
 from .lemmatize import lemmatize
 from .utils import (
@@ -100,18 +99,6 @@ def parse_args() -> argparse.Namespace:
         help="Skip triggering AnkiWeb sync after cards are added",
     )
     parser.add_argument(
-        "--max-bands",
-        type=int,
-        default=5,
-        help="Maximum number of COCA frequency sub-decks (default: 5)",
-    )
-    parser.add_argument(
-        "--min-band-size",
-        type=int,
-        default=100,
-        help="Minimum words per frequency band (default: 100)",
-    )
-    parser.add_argument(
         "-v", "--verbose", action="store_true", help="Show detailed progress"
     )
     return parser.parse_args()
@@ -152,25 +139,198 @@ def _derive_deck_name(data: dict, cli_deck: str | None = None) -> str:
     return deck_name
 
 
-def _get_existing_per_deck(
-    ac: "AnkiConnect",  # noqa: F821
-    deck_name: str,
-    bands: list[tuple[str, int, int]],
-    band_assignment: dict[int, str],
-) -> dict[str, dict[str, int]]:
-    """Query existing WordId→note_id for each target deck separately.
-
-    Returns {deck_name: {WordId: note_id}}.
-    Only queries decks that have at least one word assigned.
-    """
-    target_decks: set[str] = set(band_assignment.values())
-    result: dict[str, dict[str, int]] = {}
-    for deck in target_decks:
-        result[deck] = ac.get_word_id_map(deck)
-    return result
-
-
 # _cmu_ipa() imported from .ipa
+
+
+# ---------------------------------------------------------------------------
+# Band / deck helpers (vocab-book)
+# ---------------------------------------------------------------------------
+
+
+def _compute_level_word_counts(words: list[dict]) -> dict[int, int]:
+    """Count new words per COCA level from the input word list."""
+    counts: dict[int, int] = {}
+    for w in words:
+        lvl = w.get("coca_level")
+        if isinstance(lvl, int) and 1 <= lvl <= 25:
+            counts[lvl] = counts.get(lvl, 0) + 1
+    return counts
+
+
+def _get_target_level_for_word(w: dict) -> int | None:
+    """Get the target COCA level for a word (1-25 or None)."""
+    lvl = w.get("coca_level")
+    if isinstance(lvl, int) and 1 <= lvl <= 25:
+        return lvl
+    return None
+
+
+def _compute_final_level_counts(
+    words: list[dict],
+    existing_map: dict[str, tuple[int, str]],
+    namespace_id: str,
+    bands: list[dict],
+) -> dict[int, int]:
+    """Compute final card count per COCA level after dedup.
+
+    For each word: if WordId already exists → count at its current level
+    (parsed from CocaLevel or deck name); if new → count at the
+    word's target level.
+    """
+    # Build level → band mapping
+    level_to_band: dict[int, tuple[int, int]] = {}
+    for b in bands:
+        for lvl in range(b["lo"], b["hi"] + 1):
+            level_to_band[lvl] = (b["lo"], b["hi"])
+
+    # Start with existing counts per level from the batch
+    counts: dict[int, int] = {}
+    for w in words:
+        wid = _make_word_id(w, namespace_id)
+        if wid in existing_map:
+            lvl = w.get("coca_level")
+            if isinstance(lvl, int) and 1 <= lvl <= 25:
+                counts[lvl] = counts.get(lvl, 0) + 1
+        else:
+            lvl = _get_target_level_for_word(w)
+            if lvl is not None:
+                counts[lvl] = counts.get(lvl, 0) + 1
+    return counts
+
+
+def _build_subdeck_name(parent_deck: str, band: dict, count: int) -> str:
+    """Build a full sub-deck path with word count.
+
+    e.g. "My Book - 分级词汇::COCA 3-5 (42 words)"
+    """
+    return f"{parent_deck}::{band['name']} ({count} words)"
+
+
+def _print_deck_plan(
+    data: dict,
+    deck_name: str,
+    new_word_counts: dict[int, int],
+    bands: list[dict],
+) -> None:
+    """Print the deck plan — sub-deck names and word counts."""
+    print(f"\n  Deck plan for \"{deck_name}\":")
+    for band in bands:
+        lo, hi = band["lo"], band["hi"]
+        level_new = sum(
+            c for lvl, c in new_word_counts.items() if lo <= lvl <= hi
+        )
+        print(f"    {band['name']}: {level_new} new words")
+    print()
+
+
+def _migrate_misplaced_cards(
+    ac: "AnkiConnect",
+    parent_deck: str,
+    bands: list[dict],
+) -> int:
+    """Migrate ALL cards under parent to correct COCA sub-deck.
+
+    Reads CocaLevel field from each card, determines target sub-deck,
+    and moves cards that are in the wrong deck.  Returns count of
+    migrated cards.
+    """
+    existing = ac.get_word_id_map_with_deck(parent_deck)
+    if not existing:
+        return 0
+
+    # Build level → target sub-deck mapping (without count in name)
+    level_to_target: dict[str, str] = {}  # coca_level_str → target deck prefix
+    for band in bands:
+        for lvl in range(band["lo"], band["hi"] + 1):
+            prefix = f"{parent_deck}::{band['name']}"
+            level_to_target[str(lvl)] = prefix
+
+    # Get full note info to read CocaLevel
+    all_note_ids = list({nid for nid, _deck in existing.values()})
+    if not all_note_ids:
+        return 0
+
+    # Fetch CocaLevel from notesInfo
+    info = ac.notes_info(all_note_ids)
+    note_coca: dict[int, str] = {}
+    for n in info:
+        coca = (n.get("fields", {})
+                 .get("CocaLevel", {})
+                 .get("value", ""))
+        note_coca[n["noteId"]] = coca
+
+    migrated = 0
+    for word_id, (note_id, current_deck) in existing.items():
+        coca_str = note_coca.get(note_id, "")
+        if not coca_str:
+            continue
+        target_prefix = level_to_target.get(coca_str)
+        if not target_prefix:
+            continue
+        # Check if current deck starts with target prefix
+        if current_deck.startswith(target_prefix):
+            continue  # Already in correct deck
+
+        # Migrate: move cards to correct sub-deck
+        try:
+            card_ids = ac.get_cards_of_notes([note_id])
+            if card_ids:
+                ac.change_deck(card_ids, target_prefix)
+                migrated += 1
+        except AnkiConnectError:
+            pass
+
+    return migrated
+
+
+def _update_deck_names_with_counts(
+    ac: "AnkiConnect",
+    parent_deck: str,
+    bands: list[dict],
+) -> None:
+    """Rename sub-decks to include final card counts.
+
+    After all additions and migrations, each sub-deck name reflects
+    its actual card count: 'COCA 4' → 'COCA 4 (15 words)'.
+
+    Uses createDeck + changeDeck since AnkiConnect has no renameDeck.
+    """
+    for band in bands:
+        old_prefix = f"{parent_deck}::{band['name']}"
+        # Find all sub-decks matching this band prefix (may have old count names)
+        try:
+            all_decks = ac.deck_names_and_ids()
+        except AnkiConnectError:
+            continue
+
+        old_decks = [d for d in all_decks if d.startswith(old_prefix)]
+        if not old_decks:
+            continue
+
+        # Count total cards across all matching old decks
+        total_cards = 0
+        all_card_ids: list[int] = []
+        for old_deck in old_decks:
+            note_ids = ac.find_notes_in_deck(old_deck)
+            total_cards += len(note_ids)
+            if note_ids:
+                cids = ac.get_cards_of_notes(note_ids)
+                all_card_ids.extend(cids)
+
+        new_name = f"{parent_deck}::{band['name']} ({total_cards} words)"
+
+        # If the best-matching old deck is already the correct name, skip
+        if any(d == new_name for d in old_decks) and len(old_decks) == 1:
+            continue
+
+        try:
+            # Create target deck (idempotent)
+            ac.create_deck(new_name)
+            # Move all cards to new deck name
+            if all_card_ids:
+                ac.change_deck(all_card_ids, new_name)
+        except AnkiConnectError:
+            pass
 
 
 def _make_word_id(word_data: dict, book_id: str,
@@ -297,6 +457,7 @@ def build_note_entry(
             + sent[target_offset + len(display_word):]
         )
 
+    coca_level = str(word_data.get("coca_level", ""))
     return {
         "deckName": "",  # filled in later by caller
         "modelName": MODEL_NAME,
@@ -309,6 +470,7 @@ def build_note_entry(
             "TranslationCN": word_data["translation_cn"],
             "WordAudio": word_audio_ref,
             "SentenceAudio": sent_audio_ref,
+            "CocaLevel": coca_level,
         },
         "tags": ["weread"],
     }
@@ -335,8 +497,6 @@ def sync(
     audio_dir: str | None = None,
     no_direct_media: bool = False,
     no_ankiweb_sync: bool = False,
-    max_bands: int = 5,
-    min_band_size: int = 100,
 ) -> dict:
     """Run the full sync workflow. Returns a summary dict."""
     words = data["words"]
@@ -347,38 +507,24 @@ def sync(
     #   vocab-book: filter_fulltext.py 生成的 UUID suffix（如 "a1b2c3d4e5f6"）
     namespace_id = data.get("book_id", "") or data.get("suffix", "")
 
+    # Read bands from JSON (set by filter_fulltext.py)
+    bands: list[dict] = data.get("bands", [])
+
     # 1. Connect to Anki (skip for prefetch — audio-only mode)
     ac = None
-
-    # Compute frequency bands from the full word list (before dedup).
-    # band_assignment maps word_index in new_words → deck_name;
-    # populated after new_words is finalized below.
-    band_assignment: dict[int, str] = {}
-    bands = compute_bands(
-        _count_coca_levels(words), max_bands, min_band_size
-    )
+    existing_map: dict[str, tuple[int, str]] = {}
 
     if not prefetch:
-        print(f'Connecting to AnkiConnect...')
+        print('Connecting to AnkiConnect...')
         ac = AnkiConnect()
 
-        # Auto-correct deck name by bookId: if cards for this book
-        # already exist under a different deck name, reuse that one.
-        # Prevents accent / spelling drift across batches
-        # (e.g. "Saint-Exupery" vs "Saint-Exupéry").
-        #
-        # When found_deck is a subdeck (e.g. "X - 分级词汇::X - 分级词汇
-        # - COCA 4"), extract the top-level parent.  For highlight mode
-        # (book_id without suffix), also strip the " - 分级词汇" suffix
-        # since highlight cards belong in the plain deck.
+        # Auto-correct deck name by bookId
         if namespace_id:
             found_deck, count = ac.find_deck_for_book_id(namespace_id)
             if found_deck and found_deck != deck_name:
                 resolved = found_deck
-                # Subdeck hierarchy → extract top-level parent
                 if "::" in resolved:
                     resolved = resolved.split("::")[0]
-                # Highlight mode: strip graded suffix from parent
                 if data.get("book_id") and not data.get("suffix"):
                     if resolved.endswith(" - 分级词汇"):
                         resolved = resolved[:-len(" - 分级词汇")]
@@ -387,104 +533,107 @@ def sync(
                           f'(found {count} cards with bookId={namespace_id})')
                     deck_name = resolved
 
-    # Format band names with the resolved deck name as prefix.
-    # e.g. "COCA 4" → "The Little Prince (Antoine de Saint-Exupéry) - COCA 4"
-    if bands:
-        bands = [(f"{deck_name} - {name}", lo, hi) for name, lo, hi in bands]
+        # 2. Create parent deck
+        if not dry_run:
+            ac.ensure_deck_and_model(deck_name, MODEL_NAME)
+        print(f'  Deck: "{deck_name}"')
 
-    if not prefetch:
-        # 2. Create hierarchical decks (or flat deck if no bands)
+        # 3. Parent-level dedup: query all cards across all sub-decks
         if bands:
-            # Create parent deck first
-            if not dry_run:
-                ac.ensure_deck_and_model(deck_name, MODEL_NAME)
-            print(f'  Deck: "{deck_name}" (parent)')
-
-            # Create each band sub-deck
-            for band_name, _lo, _hi in bands:
-                sub_deck = f"{deck_name}::{band_name}"
-                if not dry_run:
-                    ac.ensure_deck_and_model(sub_deck, MODEL_NAME)
-                print(f'    └ "{band_name}"')
-
-            # Pre-compute band assignment for all input words.
-            # Each word is only deduped against its own target sub-deck.
-            _pre_assign_bands(words, deck_name, bands, band_assignment)
-            print(f"\nQuerying existing cards per sub-deck...")
-            existing = _get_existing_per_deck(ac, deck_name, bands, band_assignment)
-            total_existing = sum(len(v) for v in existing.values())
-            print(f"  Found {total_existing} existing cards across {len(existing)} decks")
+            print("\nQuerying existing cards across all sub-decks...")
+            existing_map = ac.get_word_id_map_with_deck(deck_name)
+            print(f"  Found {len(existing_map)} existing cards in parent deck")
         else:
-            # Single flat deck
-            if not dry_run:
-                ac.ensure_deck_and_model(deck_name, MODEL_NAME)
-            print(f'  Deck: "{deck_name}"')
-            print(f"  Model: {MODEL_NAME}")
-
-            # Get existing WordId map from target deck
-            print(f"\nQuerying existing cards in deck...")
-            existing = {deck_name: ac.get_word_id_map(deck_name)}
-            print(f"  Found {len(existing[deck_name])} existing cards")
+            # No bands → flat deck
+            existing_word_ids = ac.get_word_id_map(deck_name)
+            existing_map = {
+                wid: (nid, deck_name)
+                for wid, nid in existing_word_ids.items()
+            }
+            print(f"  Found {len(existing_map)} existing cards")
     else:
-        existing = {}  # prefetch: no Anki connection, skip dedup
+        existing_map = {}  # prefetch: no Anki connection
 
-    # 5. Identify new words (WordId = safe_filename(resolved_lemma)_book_id).
+    # 4. Compute new word counts per level and build target deck mapping
+    level_new_counts = _compute_level_word_counts(words)
+    word_target_deck: dict[int, str] = {}  # idx in new_words → target deck
+
+    # Build level→band index for assignment
+    level_to_band: dict[int, dict] = {}
+    for band in bands:
+        for lvl in range(band["lo"], band["hi"] + 1):
+            level_to_band[lvl] = band
+
+    # 5. Identify new words + migration candidates (parent-level dedup)
     new_words = []
     skipped_words = []
-    seen_word_ids: set[str] = set()  # track within-batch duplicates
-    for idx, w in enumerate(words):
-        original_id = _make_word_id(w, namespace_id)
+    seen_word_ids: set[str] = set()
 
-        # Dedup within batch: same WordId within this run → skip.
-        # Two words that lemmatize to the same root (e.g. "boa" + "boas"
-        # both → "boa") produce the same WordId, audio filename, and card.
-        # The first occurrence wins; subsequent ones are skipped before
-        # audio generation to prevent filename collision and field overwrite.
-        if original_id in seen_word_ids:
+    for idx, w in enumerate(words):
+        word_id = _make_word_id(w, namespace_id)
+
+        # Intra-batch dedup
+        if word_id in seen_word_ids:
             if verbose:
-                print(f"  SKIP {w['word']} (duplicate lemma in batch → {original_id})")
+                print(f"  SKIP {w['word']} (duplicate lemma in batch → {word_id})")
             skipped_words.append(w)
             continue
-        seen_word_ids.add(original_id)
+        seen_word_ids.add(word_id)
 
-        # Dedup against existing Anki cards in this word's target deck
-        target_deck = band_assignment.get(idx, deck_name)
-        deck_cards = existing.get(target_deck, {})
-        if original_id in deck_cards:
+        # Parent-level dedup: check across all sub-decks
+        if word_id in existing_map:
             if verbose:
                 print(f"  SKIP {w['word']} (already in deck)")
             skipped_words.append(w)
         else:
             new_words.append(w)
 
+    # Assign target deck for each new word
+    for idx, w in enumerate(new_words):
+        lvl = _get_target_level_for_word(w)
+        if lvl is not None and lvl in level_to_band:
+            band = level_to_band[lvl]
+            target_name = _build_subdeck_name(
+                deck_name, band, 0  # count updated post-sync
+            )
+            word_target_deck[idx] = target_name
+        else:
+            word_target_deck[idx] = deck_name  # parent deck fallback
 
-
-    # Rebuild band_assignment for new_words (0-based indices after dedup)
+    # 6. Print deck plan (informational, doesn't block)
     if bands:
-        band_assignment.clear()
-        band_map: dict[tuple[int, int], str] = {}
-        for band_name, lo, hi in bands:
-            band_map[(lo, hi)] = f"{deck_name}::{band_name}"
-        for idx, w in enumerate(new_words):
-            lvl = w.get("coca_level")
-            if isinstance(lvl, int):
-                for (lo, hi), sub_deck in band_map.items():
-                    if lo <= lvl <= hi:
-                        band_assignment[idx] = sub_deck
-                        break
-            if idx not in band_assignment:
-                band_assignment[idx] = deck_name
-        # Print band distribution
-        band_counts: dict[str, int] = {}
-        for deck in band_assignment.values():
+        _print_deck_plan(data, deck_name, level_new_counts, bands)
+
+    # Print level distribution
+    if bands:
+        level_dist: dict[str, int] = {}
+        for deck in word_target_deck.values():
             short = deck.split("::")[-1] if "::" in deck else deck
-            band_counts[short] = band_counts.get(short, 0) + 1
-        print(f"\n  Band distribution: {', '.join(f'{k}: {v}' for k, v in band_counts.items())}")
+            level_dist[short] = level_dist.get(short, 0) + 1
+        print(f"  New word distribution: "
+              f"{', '.join(f'{k}: {v}' for k, v in level_dist.items())}")
 
     print(f"\n  New words to add: {len(new_words)}")
     print(f"  Already in deck: {len(skipped_words)}")
 
+    # 7. Create sub-decks (preliminary names, will rename with counts later)
+    if bands and not prefetch and not dry_run:
+        for band in bands:
+            sub_deck = _build_subdeck_name(deck_name, band, 0)
+            ac.ensure_deck_and_model(sub_deck, MODEL_NAME)
+
+    # 8. Migrate misplaced cards
+    migration_count = 0
+    if bands and not prefetch and not dry_run:
+        print(f"\nChecking for misplaced cards...")
+        migration_count = _migrate_misplaced_cards(ac, deck_name, bands)
+        if migration_count:
+            print(f"  Migrated {migration_count} card(s) to correct sub-decks")
+
     if not new_words:
+        # Still update deck names (counts may have changed from migration)
+        if bands and not prefetch and not dry_run:
+            _update_deck_names_with_counts(ac, deck_name, bands)
         print("\nDeck is up to date — nothing to add.")
         return {
             "added": 0,
@@ -492,6 +641,7 @@ def sync(
             "audio_uploaded": 0,
             "words_added": [],
             "words_skipped": [w["word"] for w in skipped_words],
+            "migrated": migration_count,
         }
 
     if dry_run:
@@ -506,7 +656,7 @@ def sync(
             "words_skipped": [w["word"] for w in skipped_words],
         }
 
-    # 6. Generate audio and build notes for new words (parallel)
+    # 9. Generate audio and build notes for new words (parallel)
     if prefetch:
         print(f"\nPrefetching audio for {len(new_words)} new words (parallel)...")
     else:
@@ -532,7 +682,7 @@ def sync(
         # (ThreadPoolExecutor) not submission order.
         for i, note in enumerate(manifest["notes"]):
             orig_idx = note.get("_idx", i)  # fallback: old manifests lack _idx
-            note["deckName"] = band_assignment.get(orig_idx, deck_name)
+            note["deckName"] = word_target_deck.get(orig_idx, deck_name)
             notes_to_add.append(note)
         # Load audio files from disk
         for filename, filepath in manifest["audio_files"].items():
@@ -568,7 +718,7 @@ def sync(
 
                 try:
                     note, word_audio, final_ipa = future.result()
-                    note["deckName"] = band_assignment.get(idx, deck_name)
+                    note["deckName"] = word_target_deck.get(idx, deck_name)
                     notes_to_add.append(note)
                     audio_uploads.extend(word_audio)
 
@@ -742,7 +892,11 @@ def sync(
                     "error": errmsg,
                 }
 
-    # 9. Trigger AnkiWeb sync (fire-and-forget)
+    # 9. Post-sync: rename sub-decks with final card counts
+    if bands and not dry_run and not prefetch:
+        _update_deck_names_with_counts(ac, deck_name, bands)
+
+    # 10. Trigger AnkiWeb sync (fire-and-forget)
     ankiweb_synced = False
     if ac and not no_ankiweb_sync and not dry_run:
         try:
@@ -936,8 +1090,6 @@ def main() -> None:
             audio_dir=args.audio_dir,
             no_direct_media=args.no_direct_media,
             no_ankiweb_sync=args.no_ankiweb_sync,
-            max_bands=args.max_bands,
-            min_band_size=args.min_band_size,
         )
         if result.get("error"):
             sys.exit(1)

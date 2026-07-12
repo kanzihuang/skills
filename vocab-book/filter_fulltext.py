@@ -39,6 +39,100 @@ from lib.coca import (load_coca, in_coca,                         # noqa: E402
                          get_word_level, load_level_range)
 
 
+# ── band parsing ─────────────────────────────────────────────────────────────
+
+DEFAULT_BANDS: list[tuple[int, int]] = [(1, 3), (4, 6), (7, 9), (10, 25)]
+
+
+def _is_bilateral(band_str: str) -> bool:
+    """Check if a band string is bilateral (has both lo and hi)."""
+    return "-" in band_str and not band_str.startswith("-") and not band_str.endswith("-")
+
+
+def parse_bands(
+    arg: str | None,
+) -> tuple[list[tuple[int, int]], int, int, bool]:
+    """Parse --basic-range into (bands, filter_lo, filter_hi, is_bilateral).
+
+    is_bilateral = all bands have explicit lo and hi → use specified bands.
+    Otherwise → use DEFAULT_BANDS for deck structure.
+
+    Returns (bands, filter_lo, filter_hi, is_bilateral).
+    """
+    bilateral_bands: list[tuple[int, int]] = []
+    use_default = True
+    filter_lo = 1
+    filter_hi = 25
+
+    if not arg:
+        return DEFAULT_BANDS, filter_lo, filter_hi, False
+
+    parts = [p.strip() for p in arg.split(",") if p.strip()]
+
+    for i, p in enumerate(parts, 1):
+        if _is_bilateral(p):
+            lo_str, hi_str = p.split("-", 1)
+            try:
+                lo, hi = int(lo_str), int(hi_str)
+            except ValueError:
+                print(f"Error: band '{p}' contains non-integer values",
+                      file=sys.stderr)
+                sys.exit(1)
+            bilateral_bands.append((lo, hi))
+        elif "-" in p:
+            # Single-sided: "3-" or "-10"
+            if len(parts) > 1:
+                print(f"Error: band {i} ('{p}') missing boundary — "
+                      f"bilateral bands required when using commas",
+                      file=sys.stderr)
+                sys.exit(1)
+            # Single-sided as sole argument → filter-only, default bands
+            try:
+                if p.startswith("-"):
+                    filter_hi = int(p[1:])
+                else:
+                    filter_lo = int(p[:-1])
+            except ValueError:
+                print(f"Error: invalid band value '{p}'", file=sys.stderr)
+                sys.exit(1)
+        else:
+            # Bare number (e.g. "3") → single-sided, use default bands
+            try:
+                filter_lo = int(p)
+                filter_hi = 25
+            except ValueError:
+                print(f"Error: invalid band value '{p}'", file=sys.stderr)
+                sys.exit(1)
+
+    if bilateral_bands:
+        # Validate
+        for i, (lo, hi) in enumerate(bilateral_bands, 1):
+            if lo > hi:
+                print(f"Error: band '{lo}-{hi}' lo({lo}) > hi({hi})",
+                      file=sys.stderr)
+                sys.exit(1)
+            if lo < 1 or hi > 25:
+                print(f"Error: band '{lo}-{hi}' out of COCA range (1-25)",
+                      file=sys.stderr)
+                sys.exit(1)
+
+        # Check for overlap between sorted bands
+        sorted_bands = sorted(bilateral_bands)
+        for i in range(len(sorted_bands) - 1):
+            if sorted_bands[i][1] >= sorted_bands[i + 1][0]:
+                print(f"Error: band '{sorted_bands[i][0]}-{sorted_bands[i][1]}' "
+                      f"overlaps with '{sorted_bands[i + 1][0]}-{sorted_bands[i + 1][1]}'",
+                      file=sys.stderr)
+                sys.exit(1)
+
+        filter_lo = min(b[0] for b in bilateral_bands)
+        filter_hi = max(b[1] for b in bilateral_bands)
+        return sorted_bands, filter_lo, filter_hi, True
+
+    # Single-sided: use default bands
+    return DEFAULT_BANDS, filter_lo, filter_hi, False
+
+
 # ── main pipeline ───────────────────────────────────────────────────────────
 
 def _check_spacy() -> bool:
@@ -91,20 +185,17 @@ def _check_spacy() -> bool:
 
 def main() -> None:
     # -- parse CLI args -------------------------------------------------------
-    basic_min: int = 0
-    basic_max: int = 0
+    basic_range_arg: Optional[str] = None
     json_out_path: Optional[str] = None
     book_title: Optional[str] = None
     book_author: Optional[str] = None
+    suffix: Optional[str] = None
 
     args = sys.argv[1:]
     i = 0
     while i < len(args):
         if args[i] == "--basic-range" and i + 1 < len(args):
-            parts = args[i + 1].split("-")
-            if len(parts) == 2:
-                basic_min = int(parts[0])
-                basic_max = int(parts[1])
+            basic_range_arg = args[i + 1]
             i += 2
         elif args[i] == "--json-out" and i + 1 < len(args):
             json_out_path = args[i + 1]
@@ -115,8 +206,14 @@ def main() -> None:
         elif args[i] == "--book-author" and i + 1 < len(args):
             book_author = args[i + 1]
             i += 2
+        elif args[i] == "--suffix" and i + 1 < len(args):
+            suffix = args[i + 1]
+            i += 2
         else:
             i += 1
+
+    # Parse bands + filter range
+    bands, basic_min, basic_max, is_bilateral = parse_bands(basic_range_arg)
 
     # -- pre-flight: verify spaCy is functional --------------------------------
     if not _check_spacy():
@@ -134,8 +231,16 @@ def main() -> None:
 
     coca_set = load_coca()
 
-    # Generate UUID suffix for WordId/audio namespace isolation
-    suffix = uuid.uuid4().hex[:12]
+    # Generate or reuse UUID suffix for WordId/audio namespace isolation
+    if suffix:
+        # Validate: must be exactly 12 lowercase hex chars
+        if not (len(suffix) == 12
+                and all(c in "0123456789abcdef" for c in suffix)):
+            print(f"Error: --suffix must be 12 hex chars, got '{suffix}'",
+                  file=sys.stderr)
+            sys.exit(1)
+    else:
+        suffix = uuid.uuid4().hex[:12]
 
     # ── tokenize & COCA filter ────────────────────────────────────────────
     # Filter is surface-form-only: each unique surface form is checked against
@@ -221,10 +326,23 @@ def main() -> None:
 
     # -- JSON output ----------------------------------------------------------
     if json_out_path:
+        # Build band entries; last default band (10,25) → "COCA 10"
+        band_entries: list[dict] = []
+        for idx, (lo, hi) in enumerate(bands):
+            if not is_bilateral and idx == len(bands) - 1 and lo == 10 and hi == 25:
+                name = "COCA 10"
+            elif lo == hi:
+                name = f"COCA {lo}"
+            else:
+                name = f"COCA {lo}-{hi}"
+            band_entries.append({"name": name, "lo": lo, "hi": hi})
+
         json_out = {
             "book_title": book_title or "",
             "book_author": book_author or "",
             "suffix": suffix,
+            "bands": band_entries,
+            "is_bilateral": is_bilateral,
             "summary": {
                 "total_words": total_raw_words,
                 "unique_surfaces": total_unique,

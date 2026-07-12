@@ -220,3 +220,144 @@ class TestFindDeckForBookId:
         deck, count = ac.find_deck_for_book_id("22720170")
         assert deck is None
         assert count == 0
+
+
+class TestChangeDeck:
+    """change_deck() — move cards between decks."""
+
+    def test_move_cards_to_new_deck(self, mock_requests):
+        _set_result(mock_requests, True)
+        ac = AnkiConnect()
+        assert ac.change_deck([100, 200], "Parent::COCA 4") is True
+
+
+class TestGetWordIdMapWithDeck:
+    """get_word_id_map_with_deck() — {WordId: (note_id, deck)} for all sub-decks."""
+
+    def test_empty_deck(self, mock_requests):
+        """Returns {} when no notes found."""
+        _set_result(mock_requests, [])  # findNotes → []
+        ac = AnkiConnect()
+        result = ac.get_word_id_map_with_deck("My Book - 分级词汇")
+        assert result == {}
+
+    def test_returns_word_id_to_note_and_deck(self, mock_requests):
+        """Returns {WordId: (note_id, deck_name)} across sub-decks."""
+        mock_requests.json.side_effect = [
+            # findNotes → 2 notes
+            {"result": [1001, 1002], "error": None},
+            # notesInfo → 2 notes
+            {"result": [
+                {
+                    "noteId": 1001,
+                    "cards": [2001, 2002],
+                    "fields": {"WordId": {"value": "ponder_VERB_a1b2c3d4e5f6"}},
+                },
+                {
+                    "noteId": 1002,
+                    "cards": [2003],
+                    "fields": {"WordId": {"value": "astray_ADJ_a1b2c3d4e5f6"}},
+                },
+            ], "error": None},
+            # cardsInfo → deck names for each card
+            {"result": [
+                {"cardId": 2001, "deckName": "Parent::COCA 4 (12 words)", "note": 1001},
+                {"cardId": 2002, "deckName": "Parent::COCA 4 (12 words)", "note": 1001},
+                {"cardId": 2003, "deckName": "Parent::COCA 5 (3 words)", "note": 1002},
+            ], "error": None},
+        ]
+        ac = AnkiConnect()
+        result = ac.get_word_id_map_with_deck("Parent")
+        assert result == {
+            "ponder_VERB_a1b2c3d4e5f6": (1001, "Parent::COCA 4 (12 words)"),
+            "astray_ADJ_a1b2c3d4e5f6": (1002, "Parent::COCA 5 (3 words)"),
+        }
+
+    def test_skips_notes_without_word_id(self, mock_requests):
+        """Notes missing WordId are silently skipped."""
+        mock_requests.json.side_effect = [
+            {"result": [3001], "error": None},
+            {"result": [{
+                "noteId": 3001,
+                "cards": [4001],
+                "fields": {},  # no WordId field
+            }], "error": None},
+            {"result": [
+                {"cardId": 4001, "deckName": "Parent", "note": 3001},
+            ], "error": None},
+        ]
+        ac = AnkiConnect()
+        result = ac.get_word_id_map_with_deck("Parent")
+        assert result == {}
+
+
+class TestFindVocabBookSuffix:
+    """find_vocab_book_suffix() — extract UUID from existing deck."""
+
+    def test_no_matching_deck(self, mock_requests):
+        """Returns (None, None) when no vocab-book deck exists."""
+        _set_result(mock_requests, {"Other Deck": 1})
+        ac = AnkiConnect()
+        deck, suffix = ac.find_vocab_book_suffix("The Little Prince",
+                                                   "Antoine de Saint-Exupery")
+        assert deck is None
+        assert suffix is None
+
+    def test_extracts_suffix_from_cards(self, mock_requests):
+        """Finds the deck and extracts 12-char hex suffix from WordId."""
+        mock_requests.json.side_effect = [
+            # deckNamesAndIds
+            {"result": {
+                "Little Prince (Antoine de Saint-Exupery) - 分级词汇": 1,
+                "Other": 2,
+            }, "error": None},
+            # findNotes
+            {"result": [5001, 5002], "error": None},
+            # notesInfo
+            {"result": [{
+                "noteId": 5001,
+                "fields": {"WordId": {"value": "ponder_VERB_ab12cd34ef56"}},
+            }], "error": None},
+        ]
+        ac = AnkiConnect()
+        deck, suffix = ac.find_vocab_book_suffix(
+            "Little Prince", "Antoine de Saint-Exupery"
+        )
+        assert deck == "Little Prince (Antoine de Saint-Exupery) - 分级词汇"
+        assert suffix == "ab12cd34ef56"
+
+    def test_no_cards_in_deck(self, mock_requests):
+        """Returns (None, None) when deck exists but has no cards."""
+        mock_requests.json.side_effect = [
+            {"result": {"Empty Book (Author) - 分级词汇": 1}, "error": None},
+            {"result": [], "error": None},  # findNotes → empty
+        ]
+        ac = AnkiConnect()
+        deck, suffix = ac.find_vocab_book_suffix("Empty Book", "Author")
+        assert deck is None
+        assert suffix is None
+
+    def test_suffix_not_hex(self, mock_requests):
+        """Returns (None, None) when suffix is not 12 valid hex chars."""
+        mock_requests.json.side_effect = [
+            {"result": {"Weird Book (Author) - 分级词汇": 1}, "error": None},
+            {"result": [6001], "error": None},
+            {"result": [{
+                "noteId": 6001,
+                "fields": {"WordId": {"value": "word_NOUN_short"}},
+            }], "error": None},
+        ]
+        ac = AnkiConnect()
+        deck, suffix = ac.find_vocab_book_suffix("Weird Book", "Author")
+        assert deck is None
+        assert suffix is None
+
+    def test_anki_connect_error(self, mock_requests):
+        """Returns (None, None) on AnkiConnectError (graceful degradation)."""
+        mock_requests.json.return_value = {
+            "result": None, "error": "connection refused"
+        }
+        ac = AnkiConnect()
+        deck, suffix = ac.find_vocab_book_suffix("Any Book", "Author")
+        assert deck is None
+        assert suffix is None

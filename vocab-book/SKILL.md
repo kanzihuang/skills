@@ -25,7 +25,7 @@ description: >
 | 范围 | 已划线词汇 | 全量词汇 |
 | 频次分级 | 单层牌组 | 自动 COCA 分级层级牌组 |
 | 章节选择 | 可选（extract_chapter.py） | 无 |
-| Anki 去重 | 同书去重 | 无跨次去重（UUID 后缀隔离）；批内词族去重（sync_anki.py seen_word_ids） |
+| Anki 去重 | 同书去重 | 父牌组级别去重（UUID 复用 + 跨子牌组查询） |
 
 ## 前置条件
 
@@ -40,23 +40,42 @@ description: >
 
 ## 工作流
 
-### Step 0: 确认需求
+### Step 0: 确认需求 + 检测已有 UUID
 
-仅确认 BNC/COCA 词族等级范围（用户未指定时提问）。
+1. 确认 BNC/COCA 词族等级范围（用户未指定时提问）。
+2. 检测 Anki 中是否已有该书的牌组，如有则提取 UUID suffix 供复用：
+
+```bash
+python3 -c "
+from lib.ankiconnect import AnkiConnect
+ac = AnkiConnect()
+deck, suffix = ac.find_vocab_book_suffix('Title', 'Author')
+if suffix:
+    print(f'SUFFIX={suffix}')
+    print(f'DECK={deck}')
+else:
+    print('SUFFIX=')
+"
+```
+
+若 Anki 未运行则跳过（降级为生成新 UUID）。
 
 COCA 范围意图解析：
 
 | 用户表达 | 解析结果 | `--basic-range` |
 |----------|---------|-----------------|
-| "等级 3-10" | Level 3-10 | `3-10` |
-| "排除前3级" | 排除 Level 1-3 | `4-25` |
-| "5级以上" | Level 5-25 | `5-25` |
-| "COCA 3000+" | 排除 Level 1-3（前 3000 词） | `4-25` |
-| "COCA 2000+" | 排除 Level 1-2（前 2000 词） | `3-25` |
+| "等级 3-10" | Level 3-10，一个牌组 COCA 3-10 | `3-10`（双边） |
+| "等级 3-5,6-8,9-12" | 三个牌组 | `3-5,6-8,9-12`（多组双边） |
+| "排除前3级" | 排除 Level 1-3 | `4`（仅下限，默认分组） |
+| "5级以上" | Level 5-25 | `5`（仅下限，默认分组） |
+| "COCA 3000+" | 排除 Level 1-3（前 3000 词） | `4`（仅下限） |
 | "中频词" / "中等难度" | 大致 Level 4-10 | **提问确认具体范围** |
-| 未提及 | 无范围限制 | 省略 `--basic-range` |
+| 未提及 | 无范围限制，默认分组 | 省略 `--basic-range` |
 
 > 1-based level: level 1 = 最高频。两端均 inclusive。
+> **双边规则**：指定 lo 和 hi（如 `3-10`）→ 牌组名 = `COCA 3-10`。
+> **单边/未指定**：默认分组 COCA 1-3 / 4-6 / 7-9 / 10。
+> 逗号分隔多组双边时，每组独立为一个子牌组。
 
 全文模式**默认全书统一处理**。用户指定章节时可用 `extract_chapter.py` 裁剪文本。`match_sentences.py` 自动检测并跳过序言和尾页（前言/作者简介/书目列表/版权声明/献词/生产者信息等非正文内容）——检测的是文本结构边界，不依赖逐词章节归属。
 Anki 去重**不做**——每次运行独立，UUID 后缀确保不与其他牌组冲突。
@@ -136,9 +155,15 @@ if [ ! -d <skill_dir>/.venv ]; then
 fi
 
 # 提取 + 过滤全文词汇（缓存文件路径已记录在记忆中，可直接 cat）
+# --basic-range 支持:
+#   - 双边: 3-10 → 一个牌组 "COCA 3-10"
+#   - 多组双边: 3-5,6-8,9-10 → 三个牌组
+#   - 单边/省略: 默认分组 COCA 1-3, 4-6, 7-9, 10
+# --suffix: 复用已有 UUID（Step 0 检测到的）
 cat /tmp/<safe_title>-*-full.txt | \
 <skill_dir>/.venv/bin/python3 <skill_dir>/filter_fulltext.py \
   --basic-range 3-10 \
+  --suffix <reused-uuid> \
   --book-title "Book Title" --book-author "Author Name" \
   --json-out /tmp/vocab-book-filtered.json
 ```
@@ -171,9 +196,10 @@ cat /tmp/<safe_title>-*-full.txt | \
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
 - WordId = `{safe_filename(lemma)}_{pos}_{suffix}`；音频命名 = `{safe_filename(lemma)}_{pos}_{suffix}_word.mp3` / `_sent.mp3`
-- 同步时自动频次分级（`compute_bands()`）
-- **不做 Anki 去重**（filter_fulltext.py 不连接 AnkiConnect）
-- **牌组名由脚本自动生成**：格式 `{book_title} ({book_author}) - 分级词汇`，由 `sync_anki.py` 的 `_derive_deck_name()` 自动推导。Claude 不要设置 `deck_name` 字段，也不要传 `--deck` 参数
+- 同步时按 COCA 分级创建层级子牌组，子牌组名含单词量
+- **父牌组去重**：查询父牌组下全部子牌组，复用 UUID 跨批去重
+- 卡片新增 `CocaLevel` 隐藏字段（不在模板显示），用于自动迁移错位卡片
+- **牌组名由脚本自动生成**：父牌组 `{book_title} ({book_author}) - 分级词汇`，子牌组 `COCA {lo}-{hi} (N words)`。Claude 不要设置 `deck_name` 字段，也不要传 `--deck` 参数
 
 ## 异常处理
 
@@ -196,7 +222,10 @@ cat /tmp/<safe_title>-*-full.txt | \
 ## 设计原则
 
 - **零微信读书依赖**：不调用任何 WeRead API
-- **UUID 后缀隔离**：每次运行生成唯一 UUID，WordId = `{lemma}_{pos}_{suffix}` 确保跨批/跨 POS 不冲突
+- **UUID 复用跨批**：检测已有牌组的 UUID 后缀并在后续运行中复用，实现跨批去重
+- **父牌组去重**：查询父牌组下所有子牌组，仅添加全新的词
+- **卡片迁移**：词频等级变更时，自动将卡片移动到正确子牌组，保留复习进度
+- **计数牌组名**：子牌组名包含卡片数量（如 `COCA 4 (15 words)`），同步后自动更新
 - **per-sentence POS 分析**：spaCy 在具体句子上判定词性，不全局投票。lemma 机械化产出，Claude 不参与
 - **序言自动过滤**：`match_sentences.py` 自动跳过前言
 - **Claude + Python 分离**：Claude 做知识工作（释义、句子审核），Python 做机械工作（POS、lemma、TTS、同步、过滤、IPA、截断、碎片合并）

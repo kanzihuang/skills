@@ -360,9 +360,11 @@ cd <skill_dir> && .venv/bin/python -u -m lib.sync_anki \
 {
   "book_title": "书名",
   "book_author": "作者",
-  "deck_name": "牌组名",
+  "deck_name": "牌组名（Claude 不设置，由脚本自动推导）",
   "book_id": "微信读书 bookId（划线模式；与 suffix 二选一）",
-  "suffix": "UUID 后缀（全文模式；与 book_id 二选一）",
+  "suffix": "UUID 后缀（全文模式；与 book_id 二选一，可复用）",
+  "bands": [{"name": "COCA 3-5", "lo": 3, "hi": 5}],
+  "is_bilateral": true,
   "words": [
     {
       "lemma": "astounded",

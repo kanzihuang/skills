@@ -168,3 +168,94 @@ class TestCOCARangeFiltering:
         assert "SUMMARY:" in result.stdout
         assert "---IN_COCA---" in result.stdout
         assert "---EXCLUDED---" in result.stdout
+
+
+class TestBandsAndSuffix:
+    """Tests for --basic-range band parsing and --suffix reuse."""
+
+    def test_default_bands_when_no_range(self):
+        """JSON includes default bands when no --basic-range specified."""
+        data = _run_filter_json(SAMPLE_TEXT)
+        assert "bands" in data
+        assert data["is_bilateral"] is False
+        bands = data["bands"]
+        assert len(bands) == 4
+        assert bands[0] == {"name": "COCA 1-3", "lo": 1, "hi": 3}
+        assert bands[-1] == {"name": "COCA 10", "lo": 10, "hi": 25}
+
+    def test_single_bilateral_range(self):
+        """--basic-range 3-10 → one COCA 3-10 band, is_bilateral=True."""
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3-10")
+        assert data["is_bilateral"] is True
+        bands = data["bands"]
+        assert len(bands) == 1
+        assert bands[0] == {"name": "COCA 3-10", "lo": 3, "hi": 10}
+
+    def test_multi_bilateral_ranges(self):
+        """--basic-range 3-5,6-8,9-10 → three bands."""
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3-5,6-8,9-10")
+        assert data["is_bilateral"] is True
+        bands = data["bands"]
+        assert len(bands) == 3
+        assert bands[0] == {"name": "COCA 3-5", "lo": 3, "hi": 5}
+        assert bands[1] == {"name": "COCA 6-8", "lo": 6, "hi": 8}
+        assert bands[2] == {"name": "COCA 9-10", "lo": 9, "hi": 10}
+
+    def test_single_sided_lower_bound(self):
+        """--basic-range 3 (仅下限) → default bands, is_bilateral=False."""
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "3")
+        assert data["is_bilateral"] is False
+        bands = data["bands"]
+        assert len(bands) == 4  # default
+
+    def test_single_sided_upper_bound(self):
+        """--basic-range -10 (仅上限) → default bands, is_bilateral=False."""
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "-10")
+        assert data["is_bilateral"] is False
+        bands = data["bands"]
+        assert len(bands) == 4  # default
+
+    def test_overlap_error(self):
+        """Overlapping bands → exit with error."""
+        result = _run_filter(SAMPLE_TEXT, "--basic-range", "4-6,6-8")
+        assert result.returncode != 0
+        assert "overlaps" in result.stderr
+
+    def test_lo_greater_than_hi_error(self):
+        """lo > hi → exit with error."""
+        result = _run_filter(SAMPLE_TEXT, "--basic-range", "6-4")
+        assert result.returncode != 0
+
+    def test_out_of_range_error(self):
+        """Band out of 1-25 range → exit with error."""
+        result = _run_filter(SAMPLE_TEXT, "--basic-range", "3-30")
+        assert result.returncode != 0
+
+    def test_single_level_band(self):
+        """--basic-range 1-1 → single-level band is valid."""
+        data = _run_filter_json(SAMPLE_TEXT, "--basic-range", "1-1")
+        assert data["is_bilateral"] is True
+        bands = data["bands"]
+        assert len(bands) == 1
+        assert bands[0] == {"name": "COCA 1", "lo": 1, "hi": 1}
+
+    def test_suffix_reuse(self):
+        """--suffix provides deterministic UUID."""
+        data1 = _run_filter_json(SAMPLE_TEXT, "--suffix", "ab12cd34ef56")
+        assert data1["suffix"] == "ab12cd34ef56"
+
+    def test_suffix_invalid_length(self):
+        """Invalid --suffix (wrong length) → exit with error."""
+        result = _run_filter(SAMPLE_TEXT, "--suffix", "too_short")
+        assert result.returncode != 0
+
+    def test_suffix_invalid_chars(self):
+        """Invalid --suffix (non-hex chars) → exit with error."""
+        result = _run_filter(SAMPLE_TEXT, "--suffix", "gggggggggggg")
+        assert result.returncode != 0
+
+    def test_comma_single_sided_in_multi(self):
+        """Single-sided bands in comma context → error."""
+        result = _run_filter(SAMPLE_TEXT, "--basic-range", "4-,6-8")
+        assert result.returncode != 0
+        assert "missing boundary" in result.stderr

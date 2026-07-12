@@ -383,3 +383,122 @@ class AnkiConnect:
             return None, 0
         except Exception:
             return None, 0
+
+    # ------------------------------------------------------------------
+    # Deck mutation
+    # ------------------------------------------------------------------
+
+    def change_deck(self, card_ids: list[int], deck: str) -> bool:
+        """Move cards to a different deck (preserves review history).
+
+        Used for:
+          - Migrating cards to correct COCA-level sub-deck
+          - Renaming sub-decks (create new deck, move cards, leave old empty)
+        """
+        return self._call("changeDeck", cards=card_ids, deck=deck)
+
+    # ------------------------------------------------------------------
+    # Vocab-book helpers
+    # ------------------------------------------------------------------
+
+    def get_word_id_map_with_deck(
+        self, parent_deck: str
+    ) -> dict[str, tuple[int, str]]:
+        """Return {WordId: (note_id, current_deck)} for ALL notes under a parent.
+
+        Uses recursive deck search ``deck:"parent"`` which inherently
+        includes all sub-decks.  Returns both the note_id and the
+        *current* deck name for each card, enabling:
+
+          - Parent-level dedup (single lookup covers all sub-decks)
+          - Card migration detection (compare current_deck vs target_deck)
+        """
+        note_ids = self.find_notes(
+            f'deck:"{parent_deck}" note:"Vocabulary Card (WeRead)"'
+        )
+        if not note_ids:
+            return {}
+
+        info = self.notes_info(note_ids)
+
+        # Collect all card IDs then look up deck names in one batch
+        note_to_cards: dict[int, list[int]] = {}
+        all_card_ids: list[int] = []
+        for n in info:
+            cards = n.get("cards", [])
+            note_to_cards[n["noteId"]] = cards
+            all_card_ids.extend(cards)
+
+        if not all_card_ids:
+            return {}
+
+        # Get deck name for every card
+        cards_info = self._call("cardsInfo", cards=all_card_ids)
+        # Build note_id → deck_name (first card's deck for each note)
+        note_deck: dict[int, str] = {}
+        for card in cards_info:
+            nid = card.get("note")
+            if nid not in note_deck:
+                note_deck[nid] = card.get("deckName", parent_deck)
+
+        result: dict[str, tuple[int, str]] = {}
+        for n in info:
+            word_id = (n.get("fields", {})
+                        .get("WordId", {})
+                        .get("value", ""))
+            if not word_id:
+                continue
+            nid = n["noteId"]
+            deck_name = note_deck.get(nid, parent_deck)
+            result[word_id] = (nid, deck_name)
+
+        return result
+
+    def find_vocab_book_suffix(
+        self, title: str, author: str
+    ) -> tuple[str | None, str | None]:
+        """Find existing vocab-book deck and extract UUID suffix.
+
+        Searches for a parent deck matching
+        ``{title} ({author}) - 分级词汇`` and extracts the 12-char hex
+        suffix from any card's WordId field.
+
+        Returns ``(parent_deck_name, suffix)`` or ``(None, None)``.
+        """
+        target = f"{title} ({author}) - 分级词汇"
+        try:
+            all_decks = self.deck_names_and_ids()
+        except AnkiConnectError:
+            return None, None
+
+        # Exact match preferred; also match any deck starting with this prefix
+        matched = None
+        for deck in all_decks:
+            if deck == target or deck.startswith(target):
+                matched = deck
+                break
+        if not matched:
+            return None, None
+
+        try:
+            note_ids = self.find_notes(
+                f'deck:"{matched}" note:"Vocabulary Card (WeRead)"'
+            )
+            if not note_ids:
+                return None, None
+            info = self.notes_info(note_ids[:5])
+            for note in info:
+                word_id = (note.get("fields", {})
+                            .get("WordId", {})
+                            .get("value", ""))
+                # WordId: {lemma}_{pos}_{12-hex-suffix}
+                parts = word_id.rsplit("_", 1)
+                if len(parts) == 2:
+                    candidate = parts[1]
+                    if (len(candidate) == 12
+                            and all(c in "0123456789abcdef" for c in candidate)):
+                        return matched, candidate
+        except AnkiConnectError:
+            return None, None
+
+        return None, None
