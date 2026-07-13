@@ -637,7 +637,7 @@ def sync(
         # Match by WordId (not _idx) because prefetch has empty
         # existing_map so its new_words/index differ from sync.
         for i, note in enumerate(manifest["notes"]):
-            wid = note.get("fields", {}).get("WordId", {}).get("value", "")
+            wid = note.get("fields", {}).get("WordId", "")
             note["deckName"] = word_id_to_target_deck.get(
                 wid,
                 word_target_deck.get(note.get("_idx", i), deck_name),
