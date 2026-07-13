@@ -16,6 +16,7 @@ Usage:
 import base64
 import json
 import logging
+import time
 from typing import Any
 
 import requests
@@ -40,26 +41,45 @@ class AnkiConnect:
         self.url = url
 
     # ------------------------------------------------------------------
+    # Connectivity
+    # ------------------------------------------------------------------
+
+    def version(self) -> str:
+        """Return AnkiConnect API version. Lightweight connectivity check."""
+        return self._call("version")
+
+    # ------------------------------------------------------------------
     # Low-level
     # ------------------------------------------------------------------
 
     def _call(self, action: str, **params: Any) -> Any:
-        """Make a single AnkiConnect call. Raises AnkiConnectError on failure."""
+        """Make an AnkiConnect call with one retry on connection failure.
+
+        Raises AnkiConnectError if both the initial attempt and the retry fail.
+        """
         payload = {
             "action": action,
             "version": ANKICONNECT_VERSION,
             "params": params,
         }
-        try:
-            resp = requests.post(self.url, json=payload, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-        except requests.ConnectionError:
-            raise AnkiConnectError(
-                "Cannot reach AnkiConnect. Is Anki running with the "
-                "AnkiConnect plugin installed? (http://localhost:8765)"
-            )
-        except requests.RequestException as e:
-            raise AnkiConnectError(f"AnkiConnect request failed: {e}")
+        last_error = None
+        for attempt in (1, 2):
+            try:
+                resp = requests.post(self.url, json=payload, timeout=REQUEST_TIMEOUT)
+                resp.raise_for_status()
+            except requests.ConnectionError:
+                last_error = AnkiConnectError(
+                    "Cannot reach AnkiConnect after retry. "
+                    "Is Anki running with the AnkiConnect plugin installed? (http://localhost:8765)"
+                )
+                if attempt == 2:
+                    raise last_error
+                time.sleep(2)
+                continue
+            except requests.RequestException as e:
+                raise AnkiConnectError(f"AnkiConnect request failed: {e}")
+            # Success — break out of retry loop
+            break
 
         data = resp.json()
         error = data.get("error")

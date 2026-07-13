@@ -1276,26 +1276,6 @@ def process_words(
                     if not verbal_children:
                         pos = "ADJ"
                         lemma = token_lower
-                # NOUN+compound→ADJ: spaCy mis-tags some adjectives as noun
-                # compounds (e.g. "primeval forests").  Adjective suffixes
-                # help distinguish from genuine noun compounds ("stone wall").
-                # Also covers PROPN (e.g. "Astronomical" in "International
-                # Astronomical Congress") that survived PROPN→NOUN conversion.
-                _ADJ_SUFFIXES = ("al", "ic", "ous", "ive", "ful", "less", "able", "ible")
-                if (pos == "NOUN" and token.dep_ == "compound"
-                        and token.text.lower().endswith(_ADJ_SUFFIXES)):
-                    pos = "ADJ"
-                # ADJ+compound→NOUN: compound dep is for noun-noun compounds.
-                # When spaCy tags a word as ADJ with compound dep and the word
-                # doesn't end in an adjectival suffix, it's likely a noun used
-                # attributively (e.g. "sheath knife" → sheath ADJ/compound →
-                # should be NOUN).  True adjectives in compound position nearly
-                # always have recognisable adjective suffixes (same set as the
-                # NOUN→ADJ rule above — "dorsal" ends in "al" → stays ADJ ✓).
-                if (pos == "ADJ" and token.dep_ == "compound"
-                        and not token.text.lower().endswith(_ADJ_SUFFIXES)):
-                    pos = "NOUN"
-
                 # PROPN→NOUN revert: genuine proper nouns (Jupiter, Mars,
                 # Venus) were converted to NOUN by form_index membership.
                 # They never appear in lowercase in the text and have no
@@ -1421,78 +1401,6 @@ def process_words(
         if _is_fragment(sent_text):
             entry['is_fragment'] = True
         results.append(entry)
-
-    def _resolve_dup(new: dict, existing: dict, best: dict) -> None:
-        """Keep the better of two same-(lemma,pos) entries; mark loser for removal."""
-        new_frag = new.get('is_fragment', False)
-        old_frag = existing.get('is_fragment', False)
-        keep_new = False
-        if old_frag and not new_frag:
-            keep_new = True
-        elif not old_frag and new_frag:
-            keep_new = False
-        elif len(new['sentence']) < len(existing['sentence']):
-            keep_new = True
-        if keep_new:
-            existing['_remove'] = True
-            best[(new['lemma'], new['pos'])] = new
-        else:
-            new['_remove'] = True
-
-    # ── Step 5b: bidirectional POS correction using same-batch evidence ──
-    # Words appearing as both ADJ and NOUN in the same batch provide
-    # mutual correction signals: ADJ+amod/compound → NOUN (noun used
-    # attributively), and NOUN+dobj → ADJ (predicate adjective mis-tagged).
-    def _rebuild_indexes(rs):
-        """Rebuild best and lemma sets from current results state."""
-        b: dict[tuple[str, str], dict] = {}
-        n_lemmas: set[str] = set()
-        a_lemmas: set[str] = set()
-        for r in rs:
-            if r.get('_remove'):
-                continue
-            key = (r['lemma'], r['pos'])
-            b[key] = r
-            if r['pos'] == 'NOUN':
-                n_lemmas.add(r['lemma'])
-            elif r['pos'] == 'ADJ':
-                a_lemmas.add(r['lemma'])
-        return b, n_lemmas, a_lemmas
-
-    # A: ADJ+amod → NOUN when word has NOUN counterpart in batch
-    # (e.g. "oar handle" → oar ADJ/amod → should be NOUN).
-    # Re-index after each pass so the bidirectional rules don't
-    # undo each other.
-    best, noun_lemmas, adj_lemmas = _rebuild_indexes(results)
-    for r in results:
-        if r.get('_remove'):
-            continue
-        if r['pos'] == 'ADJ' and r['dep'] == 'amod' and r['lemma'] in noun_lemmas:
-            r['pos'] = 'NOUN'
-            noun_key = (r['lemma'], 'NOUN')
-            existing = best.get(noun_key)
-            if existing is not None and existing is not r:
-                _resolve_dup(r, existing, best)
-
-    # B: NOUN→ADJ when word has ADJ counterpart in batch.
-    # (e.g. "came taut" → taut NOUN/dobj → should be ADJ;
-    # "blue dorsal fin" → dorsal NOUN/conj → spaCy misparse).
-    # Re-index so words converted in pass A are excluded from adj_lemmas.
-    best, noun_lemmas, adj_lemmas = _rebuild_indexes(results)
-    for r in results:
-        if r.get('_remove'):
-            continue
-        if (r['pos'] == 'NOUN'
-                and r['dep'] in ('dobj', 'conj')
-                and r['lemma'] in adj_lemmas):
-            r['pos'] = 'ADJ'
-            adj_key = (r['lemma'], 'ADJ')
-            existing = best.get(adj_key)
-            if existing is not None and existing is not r:
-                _resolve_dup(r, existing, best)
-
-    # Filter out entries marked for removal
-    results = [r for r in results if not r.pop('_remove', False)]
 
     # Sort results for deterministic output (by lemma, then pos)
     results.sort(key=lambda r: (r['lemma'], r['pos']))

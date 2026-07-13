@@ -93,6 +93,10 @@ class MockAnkiConnect:
         self.deck_changes: list[tuple[list[int], str]] = []  # (card_ids, new_deck)
         self.ankiweb_synced = False
 
+    def version(self) -> str:
+        """Return mock API version."""
+        return "6"
+
     # -- deck ops --
     def deck_names_and_ids(self):
         return {d: i + 1 for i, d in enumerate(self.decks)}

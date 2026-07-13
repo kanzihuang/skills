@@ -467,6 +467,12 @@ def sync(
     if not prefetch:
         print('Connecting to AnkiConnect...')
         ac = AnkiConnect()
+        # Pre-flight: fail fast before any heavy work (audio, deck creation)
+        try:
+            ac.version()
+        except AnkiConnectError as e:
+            print(f"FATAL: {e}", file=sys.stderr)
+            sys.exit(1)
 
         # Auto-correct deck name by bookId
         if namespace_id:
