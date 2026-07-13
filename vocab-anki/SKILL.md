@@ -223,7 +223,7 @@ JSON 输出中 `in_coca[]` 每项含 `chapters` 和 `coca_level` 字段：
 共享步骤中关键脚本（`<skill_dir>/lib/` 前缀）：
 - `lib/scripts/match_sentences.py` — 句子匹配 + per-sentence spaCy POS 分析 + (lemma,pos) 分组 + cmudict IPA + 碎片自动合并 + `smart_truncate()` 自动截断
 - `lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C）
-- `lib/sync_anki.py` — 音频预下载 + 同步脚本。此脚本使用相对导入，仅能以模块方式运行：`cd <skill_dir> && .venv/bin/python -m lib.sync_anki <args>`。同步时根据 `target_offset` 拼接 `<b>` 标签。去重时打印丢弃条目详情
+- `lib/sync_anki.py` — 音频预下载 + 同步脚本。此脚本使用相对导入，仅能以模块方式运行：`cd <skill_dir> && .venv/bin/python -m lib.sync_anki <args>`。同步时根据 `target_offset` 拼接 `<b>` 标签。prefetch 模式（Step 2G）跳过 `_already_in_anki` 标记的已知词汇。去重时打印丢弃条目详情
 - `lib/scripts/audit_deck.py` — 同步后审计
 - `lib/scripts/check_step_completed.py` — 步骤完成检查点（支持 `--step 2B`, `--step 2B-verify`, `--step 2E`, `--step 2F`, `--step 2F-dup`, `--step all`）
 

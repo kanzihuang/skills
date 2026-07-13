@@ -86,7 +86,8 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 | `ipa.py` | cmudict ARPAbet→IPA conversion with suffix-stripping fallback |
 | `utils.py` | Shared utilities: TTS, lemmatize_word, safe_filename, print_progress |
 | `sync_anki.py` | Main sync orchestrator (uses relative imports from lib package) |
-| `scripts/` | Shared entry-point scripts (match_sentences, translate_deepl, audit_deck, extract_chapter) |
+| `scripts/dedup_anki.py` | Step 2A-post: mechanical Anki dedup by (sentence, word) — marks `_already_in_anki` |
+| `scripts/` | Shared entry-point scripts (match_sentences, translate_deepl, audit_deck, extract_chapter, dedup_anki) |
 | `data/bnc_coca/` | Nation (2017) word family lists (25 levels × ~1000 families) |
 | `data/cmudict.dict` | CMU Pronouncing Dictionary (135K entries) |
 | `tests/` | Shared pytest suite (285 tests) for lib modules |
@@ -1122,10 +1123,57 @@ Symptom: prefetch progress shows ``word (old_lemma)`` where ``old_lemma``
 contradicts the actual audio filename.  Check: compare progress label
 against ``ls /tmp/vocab_audio_*/`` filenames.
 
+### spaCy directly tags attributive nouns as ADJ (not NOUN+amod→ADJ rule)
+
+Modern spaCy (en_core_web_sm) directly tags common attributive nouns as
+ADJ (JJ) with dep=amod: "oar handle" → oar=ADJ/amod, "sheath knife" →
+sheath=ADJ/amod, "slant change" → slant=ADJ/amod.  The NOUN+amod→ADJ
+dep-override rule (L1214) does NOT fire for these — the POS comes from
+spaCy directly.
+
+This means the dep-override rule's NOUN→ADJ path is rarely exercised
+in practice.  Attributive-noun ADJ tags cannot be mechanically reverted
+without hard-coded word lists (violating design principles).  Step 2F
+Claude review MUST catch and correct these.
+
+Symptom: nouns like "oar", "sheath" tagged ADJ with dep=amod in
+match_sentences output.  Check: ``grep '"pos": "ADJ"'`` for entries
+whose word is lexically a noun used attributively.
+
+### dedup_anki.py 与 sync_anki.py 使用不同的去重键
+
+| 脚本 | 去重键 | 依赖项 | 稳定条件 |
+|------|--------|--------|---------|
+| `dedup_anki.py` | `(sentence, word)` | 无 POS/lemma | 始终稳定 |
+| `sync_anki.py` | `WordId = {lemma}_{pos}_{suffix}` | POS + lemma | 受 POS 修正影响 |
+
+当 Step 2F 修正 POS 时（如 `dorsal NOUN→ADJ`），WordId 随之变化。
+如果 `dedup_anki.py` 以旧 POS 标记了 `_already_in_anki=True`，但
+sync_anki.py 以新 WordId 查询时未发现匹配 → 该词被当作新词添加。
+这是**正确的行为**——两个不同 POS 的同一单词确实应产生不同的卡片。
+
+但在 prefetch 模式中，`_already_in_anki` 是唯一的过滤器（无 Anki 查询），
+跳过已标记词意味着不会为 POS 变更后的旧词生成新音频。只有在 sync 模式
+（有 Anki 查询）中，WordId 变更才会被检测到。
+
+Symptom: `_already_in_anki=True` 的词在 sync_anki.py 中被标记为"already in deck"
+（prefetch 不会生成其音频），但之后 sync 模式（有 Anki 查询）发现其 WordId 不在
+existing_map 中，将其加入 new_words。检查：sync 输出中某个标记了 _already_in_anki
+的词既不在 SKIP 列表中也不在 Added 列表中 → 音频缺失。
+
+### prefetch 模式过滤 _already_in_anki（2026-07-13 修复）
+
+prefetch 模式（`--prefetch`）设置 `existing_map = {}` 跳过 Anki 查询，
+现在通过 `_already_in_anki` 标记过滤已知词汇。标记由 Step 2A-post 的
+`dedup_anki.py` 以 `(sentence, word)` 键设置。prefetch 和 sync 模式均
+跳过这些词——避免为已有卡片重复生成和上传音频。
+
+Sync 模式仍同时执行 Anki 查询作为二次验证（defense-in-depth）。
+
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
-- **Shared tests** live in `lib/tests/` (pytest, 566 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter, ankiconnect.
+- **Shared tests** live in `lib/tests/` (pytest, 611 tests) — covers coca, lemmatize, utils, sync_anki, validation, auto_band, match_sentences, extract_chapter, ankiconnect.
 - **Skill-specific tests**: `vocab-anki/tests/` (filter_pipeline, 33 tests), `vocab-book/tests/` (filter_fulltext, 12 tests).
 - **LLM output quality issues** are tested via `test_validation.py` — the validator catches intentional bad data, not LLM output.
 - **Python code bugs** are tested directly with parametrized input/output assertions.

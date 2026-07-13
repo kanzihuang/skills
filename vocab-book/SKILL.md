@@ -37,6 +37,9 @@ description: >
 > ```bash
 > ssh -R 8765:localhost:8765 user@remote-host
 > ```
+>
+> **确认策略**：整个流程仅在 Step 2H（音频已预下载、同步/导出前）进行一次用户确认。其他步骤（含 Step 2G 音频预下载）仅输出进度，不询问。Step 2G 必须在等待用户确认前完成——用户确认后 Step 2H 直接从缓存加载音频，秒级同步。
+> **推迟同步**：用户说"暂不同步"时，仅跳过 Step 2H（同步到 Anki）。Step 2A-post（Anki 去重）仍正常执行——去重是过滤已有卡片，不属于同步。
 
 ## 工作流
 
@@ -197,7 +200,7 @@ cat /tmp/<safe_title>-*-full.txt | \
 - **Step 2E**: 生成释义 + 补 cmudict 未覆盖 IPA + 异读词投票（Claude，N agents 并行，≤25 词/agent，**不碰 lemma**）
 - **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent，**不可绕过**）
 - **Step 2A-post**: Anki 去重 — `match_sentences.py` 产出后立即以 `(sentence, word)` 键机械去重，标记 `_already_in_anki`（见 `SHARED_WORKFLOW.md` Step 2A-post）
-- `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步脚本（Step 2G + Step 2H）。此脚本使用相对导入，仅能以模块方式运行：`cd <skill_dir> && .venv/bin/python -m lib.sync_anki <args>`。同步时根据 `target_offset` 拼接 `<b>` 标签
+- `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步脚本（Step 2G + Step 2H）。此脚本使用相对导入，仅能以模块方式运行：`cd <skill_dir> && .venv/bin/python -m lib.sync_anki <args>`。同步时根据 `target_offset` 拼接 `<b>` 标签。prefetch 模式（Step 2G）会跳过 `_already_in_anki` 标记的已知词汇，仅生成新词音频
 
 **全文模式特有**：
 - `<tmp_id>` 使用 JSON 中的 `suffix` 字段（而非 bookId）
