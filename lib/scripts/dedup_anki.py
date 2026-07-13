@@ -21,12 +21,11 @@ import re
 import sys
 
 # ── path setup ──────────────────────────────────────────────────────────────
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_LIB_DIR = os.path.dirname(_SCRIPT_DIR)
-if _LIB_DIR not in sys.path:
-    sys.path.insert(0, _LIB_DIR)
+_SKILL_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _SKILL_DIR not in sys.path:
+    sys.path.insert(0, _SKILL_DIR)
 
-from ankiconnect import AnkiConnect, AnkiConnectError  # noqa: E402
+from lib.ankiconnect import AnkiConnect, AnkiConnectError  # noqa: E402
 
 # ── regex ────────────────────────────────────────────────────────────────────
 _TAG_RE = re.compile(r'</?b>')

@@ -1211,6 +1211,10 @@ def process_words(
                 # NOUN/VERB→ADJ: adjectival dependency overrides POS tag.
                 # attr is excluded — it applies to both nouns ("a teacher")
                 # and adjectives ("tall") in predicate position.
+                # NOUN+amod/acomp/oprd covers rare spaCy errors where a true
+                # adjective is mis-tagged as NOUN.  Common attributive nouns
+                # ("oar handle", "slant change") are typically tagged ADJ by
+                # spaCy directly (this rule does not fire for them).
                 if pos in ("NOUN", "VERB") and token.dep_ in ("amod", "acomp", "oprd"):
                     pos = "ADJ"
                 # NOUN+dobj→ADJ when a coordinated ADJ child signals that the

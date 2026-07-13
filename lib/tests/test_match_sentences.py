@@ -469,7 +469,7 @@ class TestPOSCorrections:
         """
         # 'ineffectual movements' — but spaCy may tag this ADJ/amod directly.
         # Use a word that spaCy genuinely mis-tags: 'slant change' gives
-        # NOUN/amod in some spaCy versions.
+        # NOUN/amod in some spaCy versions, but ADJ/amod in current spaCy.
         result = _run_pipeline(
             [{"lemma": "slant", "rep": "slant",
               "forms": ["slant"], "coca_level": 7}],
@@ -479,7 +479,8 @@ class TestPOSCorrections:
         # Note: spaCy may assign amod or compound depending on context.
         # If it's amod and POS is NOUN, the dep-override fires → ADJ.
         # If it's compound, POS stays NOUN (compound rule removed).
-        # Either outcome is mechanically valid post-rule-removal.
+        # If spaCy directly tags as ADJ, POS is ADJ from the start.
+        # All outcomes are mechanically valid post-rule-removal.
         assert w["pos"] in ("ADJ", "NOUN"), f"got {w['pos']}"
 
     def test_propn_sentence_initial_becomes_noun(self):
