@@ -1033,6 +1033,54 @@ class TestPOSCorrections:
         assert w["lemma"] == "tempered", \
             f"tempered lemma should be surface form 'tempered', got '{w['lemma']}'"
 
+    def test_adj_compound_no_suffix_becomes_noun(self):
+        """'sheath knife' → sheath ADJ/compound → NOUN (noun-noun compound).
+
+        compound dep is for noun-noun compounds only.  When spaCy tags a
+        word as ADJ with compound dep and the word doesn't end in an
+        adjectival suffix, it's a noun used attributively — not a true
+        adjective.  Longer sentences trigger the compound dep from spaCy
+        (short sentences sometimes produce amod instead).
+        """
+        result = _run_pipeline(
+            [{"lemma": "sheath", "rep": "sheath",
+              "forms": ["sheath"], "coca_level": 9}],
+            "In the darkness he loosened his sheath knife and taking all "
+            "the strain of the fish on his left shoulder he leaned back.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "NOUN", \
+            f"sheath in 'sheath knife' should be NOUN, got {w['pos']}"
+
+    def test_adj_compound_with_adj_suffix_stays_adj(self):
+        """'dorsal fin' → dorsal ADJ/compound → stays ADJ (adjective suffix)."""
+        result = _run_pipeline(
+            [{"lemma": "dorsal", "rep": "dorsal",
+              "forms": ["dorsal"], "coca_level": 9}],
+            "His dorsal fin was down.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", \
+            f"dorsal in 'dorsal fin' should stay ADJ (ends in 'al'), got {w['pos']}"
+
+    def test_noun_dobj_with_adj_conj_child_becomes_adj(self):
+        """'rest there slimy and purple' → slimy NOUN/dobj with ADJ conj child → ADJ.
+
+        When a NOUN/dobj has a child with dep=conj and pos=ADJ, both should
+        be adjectives — coordinated items share POS.  Gated on -y suffix.
+        The sentence uses a complex coordination structure ("catch on a line
+        and rest there slimy and purple") to trigger the dobj parse.
+        """
+        result = _run_pipeline(
+            [{"lemma": "slimy", "rep": "slimy",
+              "forms": ["slimy"], "coca_level": 7}],
+            "The filaments would catch on a line and rest there slimy and purple "
+            "while the old man was working.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "ADJ", \
+            f"slimy in 'slimy and purple' should be ADJ, got {w['pos']}"
+
 
 # ── char_offset word-boundary matching ──
 
@@ -2250,6 +2298,20 @@ class TestCmuIpaSuffixStripping:
         assert ipa, "education should get IPA via -tion suffix stripping"
         assert "ʃən" in ipa
 
+    def test_ly_ble_to_bly_perceptibly(self):
+        """perceptibly → strip ly → perceptib → +le → perceptible + /li/."""
+        ipa = _cmu_ipa("perceptibly")
+        assert ipa, "perceptibly should get IPA via -bly→-ble fallback"
+        assert ipa.startswith("/") and ipa.endswith("/"), (
+            f"IPA should have / delimiters, got: {ipa!r}")
+        assert "li" in ipa, f"Expected /li/ in IPA, got: {ipa!r}"
+
+    def test_tion_to_te_undulation(self):
+        """undulation → strip tion → undula → +te → undulate + /ʃən/."""
+        ipa = _cmu_ipa("undulation")
+        assert ipa, "undulation should get IPA via -tion→-te fallback"
+        assert "ʃən" in ipa, f"Expected /ʃən/ in IPA, got: {ipa!r}"
+
     def test_ly_still_works(self):
         """Existing -ly suffix should still work (regression check)."""
         ipa = _cmu_ipa("indulgently")
@@ -2422,6 +2484,27 @@ class TestCmuIpaNoNestedSlashes:
         assert result.count("/") == 2, (
             f"Expected 2 slashes for happiness, got: {result}"
         )
+
+
+class TestCmuIpaBritishSpelling:
+    """British -our → -or fallback for IPA lookup."""
+
+    def test_discolour_falls_back_to_discolor(self):
+        """discolour (Br) → discolor (US) → IPA."""
+        result = _cmu_ipa("discolour")
+        assert result, "discolour should get IPA via -our→-or fallback"
+        assert "/" in result
+
+    def test_colour_still_works_directly(self):
+        """colour is already in cmudict; exact match should still work."""
+        result = _cmu_ipa("colour")
+        assert result, "colour should be in cmudict directly"
+        assert "/" in result
+
+    def test_honour_falls_back_to_honor(self):
+        """honour → honor → IPA."""
+        result = _cmu_ipa("honour")
+        assert result, "honour should get IPA via -our→-or fallback"
 
 
 # ── E: fragment merge with quote + lowercase start ───────────────────────
