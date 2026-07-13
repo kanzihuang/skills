@@ -146,7 +146,8 @@ def load_freq_ranked(top_n: int | None = None) -> list[str]:
     return list(_nation_headwords_cache)  # type: ignore[arg-type]
 
 
-def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
+def in_coca(word: str, coca_lemmas: set[str] | None = None,
+            is_propn: bool = False) -> tuple[bool, str]:
     """Check whether *word* (or its lemma form) is in the Nation lists.
 
     Three-tier lookup strategy (unchanged from coca_freq.txt era,
@@ -159,6 +160,9 @@ def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
     Args:
         word: The word to check (any inflected or derived form).
         coca_lemmas: Pre-loaded set.  Loaded automatically if None.
+        is_propn: If True, skip the VERB channel in Tier 2 — proper nouns
+            are not verb inflections (e.g. "Jota" the Spanish letter name
+            is not a form of "jot").
 
     Returns:
         ``(in_list, detail)`` — *detail* explains the match or reason.
@@ -179,6 +183,18 @@ def in_coca(word: str, coca_lemmas: set[str] | None = None) -> tuple[bool, str]:
         import lemminflect  # type: ignore
 
         for pos in ("VERB", "NOUN", "ADJ", "ADV"):
+            # PROPN guard: proper nouns are not verb inflections.
+            if is_propn and pos == "VERB":
+                continue
+            # VERB channel gate (defence-in-depth): when the word is not
+            # itself in COCA, only trust reductions from words ending in
+            # -ed or -ing (uniquely verbal suffixes).  All genuine -s/-es
+            # verb forms are already COCA family members (Tier 1).  Words
+            # like "jota" (Spanish letter name) ending in -a are not
+            # plausible English verb inflections.
+            if pos == "VERB" and w not in coca_lemmas:
+                if not (w.endswith("ed") or w.endswith("ing")):
+                    continue
             lemmas = lemminflect.getLemma(w, upos=pos)
             for lemma in lemmas:
                 l = lemma.lower()

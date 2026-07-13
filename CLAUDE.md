@@ -141,6 +141,42 @@ as-is — no manual truncation needed.  See `lib/SHARED_WORKFLOW.md` Step 2B.
 
 `lemmatize_word()` uses lemminflect's VERB → NOUN → ADJ → ADV channels. The ADV channel produces false positives for non-adverb words: "absurd"→"absur" (treats 'd' as comparative suffix), "reflective"→"reflect" (treats 'ive' as adverb suffix). **Fix (2026-07-05)**: ADV channel now gated to words ending in -ly only.
 
+### Lemmatizer false positives (VERB channel → in_coca Tier 2)
+
+`in_coca()` Tier 2 uses lemminflect's VERB channel to reduce unknown words.  The
+VERB channel produces false positives for non-English words: "jota"→"jot"
+(Spanish letter name, lemminflect treats -a as an inflectional suffix).  Two
+layers of defence (2026-07-13):
+
+1. **PROPN guard**: `in_coca()` accepts ``is_propn`` parameter.  When True, the
+   VERB channel is skipped — proper nouns are not verb inflections.
+   `filter_fulltext.py` tracks per-form PROPN status from spaCy (sentence-initial
+   tokens excluded — capitalisation may be positional).  Forms that appear ONLY
+   as PROPN pass ``is_propn=True``.
+
+2. **-ed/-ing gate**: When the word is not itself in COCA, the VERB channel
+   only trusts reductions from words ending in ``-ed`` or ``-ing`` (uniquely
+   verbal suffixes).  All genuine ``-s``/``-es`` third-person verb forms are
+   already COCA family members (Tier 1 catches them), so ``-s``/``-es`` gate
+   is unnecessary.
+
+Symptom: "jota" in filter output with ``coca_level`` despite not being a real
+English word.  Check: ``in_coca('jota')`` returns True.
+
+### Hyphen-only compound fragments in filter_fulltext
+
+**Change (2026-07-13)**: `filter_fulltext.py` now filters out words that only
+appear adjacent to hyphens in the source text (e.g. "garland" in "half-garland",
+"stricken" in "panic-stricken").  Uses ``(?<!-)\b<form>\b(?!-)`` regex to verify
+at least one standalone occurrence.  Words appearing both standalone AND in
+compounds (e.g. "mast" in "mast-head" + "put the mast down") are kept.
+
+Before this fix, compound fragments extracted by spaCy tokenization passed the
+COCA check and appeared in match_sentences as "No suitable sentence."
+
+Symptom: "garland", "stricken" in filter output but no sentence found.
+Check: ``grep -c 'hyphen-only'`` in filter stderr output.
+
 ### Lemmatizer false positives (suffix rules, -est/-er)
 
 `lemmatize()` Step 3 (suffix rules) reduces words by stripping -est/-er/-ier/-iest suffixes. Before the fix (2026-07-06), Step 3 returned immediately (`return cand`), bypassing Step 4 (spaCy map) and Step 6 (Nation cross-validation). This caused:

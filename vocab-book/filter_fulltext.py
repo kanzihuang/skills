@@ -244,6 +244,11 @@ def run_filter(
     # ── tokenize & COCA filter ────────────────────────────────────────────
     surface_forms: set[str] = set()
     raw_token_count = 0
+    # Track whether each surface form appears at least once as a non-PROPN
+    # token (excluding sentence-initial tokens which may be mis-tagged).
+    # PROPN-only words like "Jota" (Spanish letter) should not go through
+    # VERB-channel lemmatisation — they are genuine proper nouns.
+    _form_is_propn_only: dict[str, bool] = {}  # True until proven otherwise
 
     chunk_size = 100_000
     for i in range(0, len(text), chunk_size):
@@ -252,7 +257,31 @@ def run_filter(
             if not token.is_alpha or len(token.text) < 2:
                 continue
             raw_token_count += 1
-            surface_forms.add(token.text.lower())
+            form = token.text.lower()
+            surface_forms.add(form)
+            # A form is PROPN-only if EVERY occurrence is PROPN and not
+            # sentence-initial (sentence-initial capitalisation is
+            # positional, not a reliable PROPN signal).
+            is_propn = (token.pos_ == "PROPN" and token.i != 0)
+            if form not in _form_is_propn_only:
+                _form_is_propn_only[form] = is_propn
+            elif not is_propn:
+                _form_is_propn_only[form] = False
+
+    # ── post-filter: exclude words that only appear as hyphenated compound
+    #    fragments (e.g. "garland" in "half-garland", "stricken" in
+    #    "panic-stricken").  Words with ≥1 standalone occurrence are kept.
+    hyphen_only: set[str] = set()
+    for form in surface_forms:
+        if not re.search(r'(?<!-)\b' + re.escape(form) + r'\b(?!-)',
+                         text, re.IGNORECASE):
+            hyphen_only.add(form)
+    if hyphen_only:
+        print(f"[info] Excluding {len(hyphen_only)} hyphen-only word(s): "
+              f"{', '.join(sorted(hyphen_only))}", file=sys.stderr)
+        surface_forms -= hyphen_only
+        for form in hyphen_only:
+            _form_is_propn_only.pop(form, None)
 
     total_raw_words = raw_token_count
     total_unique = len(surface_forms)
@@ -271,8 +300,10 @@ def run_filter(
     for surface in sorted(surface_forms):
         rep = surface
 
-        # COCA membership: check surface form directly against word families
-        ok, detail = in_coca(surface, coca_set)
+        # COCA membership: check surface form directly against word families.
+        # Pass is_propn flag so genuine proper nouns skip the VERB channel.
+        ok, detail = in_coca(surface, coca_set,
+                             is_propn=_form_is_propn_only.get(surface, False))
         if not ok:
             rejected.append((surface, rep, "不在 BNC/COCA 25000 词族中"))
             continue

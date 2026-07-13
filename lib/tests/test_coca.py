@@ -171,6 +171,38 @@ def test_in_coca_empty(coca_set):
     assert not ok
 
 
+# ── in_coca: PROPN guard and VERB channel gate ────────────────────────────
+
+def test_jota_not_in_coca(coca_set):
+    """'jota' (Spanish letter name) should not pass via VERB→jot reduction."""
+    ok, detail = in_coca("jota", coca_set)
+    assert not ok, f"jota should not be in COCA, got: {detail}"
+
+
+def test_jota_is_propn_not_in_coca(coca_set):
+    """'jota' with is_propn=True skips VERB channel entirely."""
+    ok, detail = in_coca("jota", coca_set, is_propn=True)
+    assert not ok, f"jota (PROPN) should not be in COCA, got: {detail}"
+
+
+def test_propn_guard_does_not_block_real_words(coca_set):
+    """Real English words still pass even with is_propn=True."""
+    ok, detail = in_coca("walked", coca_set, is_propn=True)
+    assert ok, f"walked should still pass with is_propn=True, got: {detail}"
+
+
+def test_legitimate_ed_verb_reduction(coca_set):
+    """Non-COCA -ed word gets reduced via VERB channel."""
+    ok, detail = in_coca("mushed", coca_set)
+    assert ok, f"mushed should reduce to mush, got: {detail}"
+
+
+def test_legitimate_ing_verb_reduction(coca_set):
+    """Non-COCA -ing word gets reduced via VERB channel."""
+    ok, detail = in_coca("wallowing", coca_set)
+    assert ok, f"wallowing should reduce to wallow, got: {detail}"
+
+
 # ── Three-layer protection verification ───────────────────────────────────
 
 def test_twined_twin_different_families():

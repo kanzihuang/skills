@@ -300,3 +300,48 @@ class TestBandsAndSuffix:
         from filter_fulltext import FilterError
         with pytest.raises(FilterError, match="missing boundary"):
             _run_filter_json(SAMPLE_TEXT, "--basic-range", "4-,6-8", nlp=nlp)
+
+    # ── hyphen-only word exclusion ──────────────────────────────────────
+
+    def test_hyphen_only_word_excluded(self, nlp):
+        """Words only appearing in hyphenated compounds are excluded."""
+        text = "He wore a half-garland on his head."
+        data = _run_filter_json(text, nlp=nlp)
+        in_coca_words = {e["lemma"] for e in data["in_coca"]}
+        assert "garland" not in in_coca_words, \
+            f"'garland' only appears in 'half-garland', should be excluded"
+
+    def test_standalone_word_kept_when_also_hyphenated(self, nlp):
+        """Word appearing both standalone and in compound is kept."""
+        text = "He put the mast down. The mast-head was broken."
+        data = _run_filter_json(text, nlp=nlp)
+        in_coca_words = {e["lemma"] for e in data["in_coca"]}
+        assert "mast" in in_coca_words, \
+            f"'mast' appears standalone, should be kept"
+
+    def test_hyphen_only_stricken_excluded(self, nlp):
+        """'stricken' only in 'panic-stricken' → excluded."""
+        text = "She made a panic-stricken dash for the door."
+        data = _run_filter_json(text, nlp=nlp)
+        in_coca_words = {e["lemma"] for e in data["in_coca"]}
+        assert "stricken" not in in_coca_words, \
+            f"'stricken' only in 'panic-stricken', should be excluded"
+
+    # ── PROPN-only exclusion ────────────────────────────────────────────
+
+    def test_propn_only_jota_excluded(self, nlp):
+        """Proper noun 'Jota' (Spanish letter, mid-sentence capital) excluded."""
+        text = 'He said Jota for the letter J.'
+        data = _run_filter_json(text, nlp=nlp)
+        in_coca_words = {e["lemma"] for e in data["in_coca"]}
+        assert "jota" not in in_coca_words, \
+            f"'Jota' is PROPN-only, should be excluded (not reduced to 'jot')"
+
+    def test_propn_but_also_common_noun_kept(self, nlp):
+        """Word that appears as both PROPN and common noun is kept."""
+        text = "Boa constrictors are snakes. The boa swallowed a rat."
+        data = _run_filter_json(text, nlp=nlp)
+        in_coca_words = {e["lemma"] for e in data["in_coca"]}
+        # "boa" appears as PROPN and also lowercase → not PROPN-only
+        assert "boa" in in_coca_words, \
+            f"'boa' appears in both cases, should be kept"
