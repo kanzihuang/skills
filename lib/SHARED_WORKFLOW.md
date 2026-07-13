@@ -321,6 +321,8 @@ drops at sync time.
 
 ## Step 2G: 预下载音频
 
+**在等待用户确认之前执行** — 音频生成耗时较长，提前完成可让用户确认后秒级同步。
+
 ```bash
 cd <skill_dir> && .venv/bin/python -u -m lib.sync_anki \
   /tmp/vocab-anki-input-<tmp_id>.json \
@@ -333,7 +335,7 @@ cd <skill_dir> && .venv/bin/python -u -m lib.sync_anki \
 
 ## Step 2H: 最终确认 + 同步
 
-展示汇总 → 用户确认 → 上传音频 → 添加卡片 → 触发 AnkiWeb 同步。
+Step 2G 完成后 → 展示汇总 → **等待用户确认** → 确认后执行同步（音频已缓存，秒级完成）。
 
 ```bash
 cd <skill_dir> && .venv/bin/python -u -m lib.sync_anki \
