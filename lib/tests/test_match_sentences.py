@@ -628,6 +628,43 @@ class TestPOSCorrections:
         assert w["pos"] == "VERB", \
             f"teetered should stay VERB (separate clause with own nsubj), got {w['pos']}"
 
+    def test_conj_of_aux_with_det_child_stays_noun(self):
+        """'lavender' conj of 'was' with det child 'a' stays NOUN.
+
+        In 'It was higher than a big scythe blade and a very pale
+        lavender above the dark blue water', spaCy attaches 'lavender'
+        as conj of AUX 'was'.  The AUX copula fallback must NOT promote
+        it to ADJ because it has a determiner child ('a'), which is an
+        unambiguous noun signal.
+        """
+        result = _run_pipeline(
+            [{"lemma": "lavender", "rep": "lavender",
+              "forms": ["lavender"], "coca_level": 7}],
+            "It was higher than a big scythe blade and a very pale "
+            "lavender above the dark blue water.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "NOUN", \
+            f"lavender should be NOUN (has det child 'a'), got {w['pos']}"
+
+    def test_conj_of_adj_head_with_det_child_stays_noun(self):
+        """NOUN conj of ADJ head with det child stays NOUN.
+
+        E.g. 'He was pale and a good friend' — 'friend' is NOUN with
+        det child 'a', conj of 'pale' (ADJ, acomp).  The general conj
+        POS inheritance must NOT promote it to ADJ.
+        """
+        result = _run_pipeline(
+            [{"lemma": "friend", "rep": "friend",
+              "forms": ["friend"], "coca_level": 3}],
+            "He was pale and a good friend.",
+        )
+        words = result.get("words", [])
+        friend_entries = [w for w in words if w["lemma"] == "friend"]
+        if friend_entries:
+            assert friend_entries[0]["pos"] != "ADJ", \
+                f"friend should not be ADJ (has det child 'a'), got {friend_entries[0]['pos']}"
+
     def test_be_to_vbn_pos_becomes_adj(self):
         """be-to VBN pattern sets POS=ADJ."""
         result = _run_pipeline(

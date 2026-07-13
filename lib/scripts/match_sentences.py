@@ -1181,6 +1181,14 @@ def process_words(
                         # POS tag (NOUN) is more trustworthy than the chain root.
                         if head_pos == "VERB" and token.pos_ == "NOUN":
                             pass
+                        elif head_pos == "ADJ" and any(
+                            c.dep_ == "det" for c in token.children
+                        ):
+                            # Token has a determiner child ("a", "the") →
+                            # unambiguously a noun head.  Do not promote
+                            # NOUN → ADJ via conj inheritance from an
+                            # adjectival chain root.
+                            pass
                         else:
                             pos = head_pos
                         # When inheriting ADJ via conj chain, ensure lemma is
@@ -1224,11 +1232,17 @@ def process_words(
                             for c in token.children
                         )
                         if not has_own_subject:
-                            for child in head_token.children:
-                                if child.dep_ in ("acomp", "amod") and child.pos_ == "ADJ":
-                                    pos = "ADJ"
-                                    lemma = token_lower
-                                    break
+                            # Only nouns can have determiner children ("a",
+                            # "the", "my").  If the token has a det child, it
+                            # heads a noun phrase — do NOT promote it to ADJ
+                            # even when conjoined to a copula whose complement
+                            # is an adjective.
+                            if not any(c.dep_ == "det" for c in token.children):
+                                for child in head_token.children:
+                                    if child.dep_ in ("acomp", "amod") and child.pos_ == "ADJ":
+                                        pos = "ADJ"
+                                        lemma = token_lower
+                                        break
                 # Sentence-initial inverted ADJ: "Absurd as it might seem"
                 # (= "As absurd as ...").  spaCy often tags these as PROPN
                 # (capitalized at sentence start); PROPN→NOUN then converts
