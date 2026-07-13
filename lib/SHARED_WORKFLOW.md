@@ -3,6 +3,10 @@
 > 本文档供 `vocab-anki`（划线模式）和 `vocab-book`（全文模式）共用。
 > `<skill_dir>` 为当前技能目录（`vocab-anki/` 或 `vocab-book/`）。
 > `<tmp_id>` 为临时文件标识（划线模式用 `bookId`，全文模式用 `suffix`）。
+>
+> ⚠️ **vocab-book 必须先执行 SKILL.md Step 0**（检测已有 UUID suffix）再进入
+> 本文档的 Step 2A。使用新 suffix 会导致 `dedup_anki.py` 的 Anki 去重完全失效
+> —— WordId = `{lemma}_{pos}_{suffix}`，suffix 不匹配则无法识别已有卡片。
 
 ## Step 2A: 获取源文本 + 句子匹配 + POS 分析 + lemma + IPA
 

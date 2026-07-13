@@ -45,6 +45,10 @@ description: >
 
 ### Step 0: 确认需求 + 检测已有 UUID
 
+> ⚠️ **不可绕过（MUST）**。不执行此步骤会导致 Anki 去重完全失效——
+> 新生成的 UUID 与已有卡片不匹配，`dedup_anki.py` 始终返回 "0 in deck"，
+> 所有卡片被当作新词重新生成。参见 [[vocab-book-step-0-mandatory]]。
+
 1. 确认 BNC/COCA 词族等级范围（用户未指定时提问）。
 2. 检测 Anki 中是否已有该书的牌组，如有则提取 UUID suffix 供复用：
 
@@ -153,6 +157,10 @@ EOF
 
 ### Step 2: 运行 filter_fulltext.py
 
+> ⚠️ **必须先完成 Step 0**：若 Step 0 检测到已有 suffix，必须通过
+> `--suffix` 传入。使用新 suffix 会导致 Anki 去重完全失效——
+> WordId = `{lemma}_{pos}_{suffix}`，suffix 不同则无法匹配已有卡片。
+
 ```bash
 # 确保 venv 存在
 if [ ! -d <skill_dir>/.venv ]; then
@@ -167,7 +175,7 @@ fi
 #   - 独立等级: 8,9 → 两个单级牌组 "COCA 8" + "COCA 9"
 #   - 多个独立等级: 7,8,9 → 三个单级牌组 "COCA 7" + "COCA 8" + "COCA 9"
 #   - 单边/省略: 默认分组 COCA 1-3, 4-6, 7-9, 10
-# --suffix: 复用已有 UUID（Step 0 检测到的）
+# --suffix: ⚠️ 必须传入 Step 0 检测到的 UUID！不传则生成新 UUID，Anki 去重失效
 cat /tmp/<safe_title>-*-full.txt | \
 <skill_dir>/.venv/bin/python3 <skill_dir>/filter_fulltext.py \
   --basic-range 3-10 \
