@@ -950,7 +950,7 @@ _NON_BODY_PATTERNS = [
     (re.compile(r'(?i)\b(?:COPYRIGHT|DISTRIBUTE|PROOFREADER|REDISTRIBUTE)\b'), "copyright"),
     # Producer / transcriber credit lines that appear at the start or end
     # of Project Gutenberg / Distributed Proofreaders texts.
-    (re.compile(r'(?i)^(?:Produced by|Distributed Proofreaders|A Distributed Proofreaders)'), "producer_credit"),
+    (re.compile(r'(?i)(?:^(?:Produced by|Distributed Proofreaders|A Distributed Proofreaders)|\bproduced\s+by\b)'), "producer_credit"),
     # Dedication: "TO …" with ≤6 words (short lines, no body-text content).
     (re.compile(r'^TO\s+(?:\w+\s*){1,6}$'), "dedication"),
     # End-of-text markers: "[End of …]", "End of the Project …", etc.

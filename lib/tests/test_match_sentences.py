@@ -1915,6 +1915,13 @@ class TestIsNonBodyText:
             "Produced by Al Haines"
         ) is True
 
+    def test_producer_credit_embedded(self):
+        """'produced by' embedded in a line (not at start) — FadedPage ebook metadata."""
+        from lib.scripts.match_sentences import _is_non_body_text
+        assert _is_non_body_text(
+            "This ebook was produced by Al Haines"
+        ) is True
+
     def test_distributed_proofreaders(self):
         from lib.scripts.match_sentences import _is_non_body_text
         assert _is_non_body_text(
