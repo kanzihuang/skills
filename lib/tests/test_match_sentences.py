@@ -2778,3 +2778,98 @@ class TestConjPosInheritanceVbnAclGuard:
             else:
                 assert w["pos"] != "VERB", \
                     f"testword should not be VERB if spaCy tagged it as non-VERB, got {w['pos']}"
+
+    def test_verb_conj_of_noun_with_verbal_dependents_stays_verb(self):
+        """VERB conj of NOUN stays VERB when it has verbal dependents.
+
+        When spaCy mis-tags a gerund as NOUN (e.g. "swimming") and a true
+        VERB with verbal dependents (dobj) is conjunct of it, the VERB
+        should NOT be demoted to NOUN.  The verbal dependents (dobj) are
+        a reliable signal that the conjunct is genuinely verbal.
+
+        E.g. "paralyzed"(VBD,conj,dobj="leg") whose head is
+        "swimming"(NOUN, mis-tagged gerund) — the conjunct should stay VERB.
+        """
+        result = _run_pipeline(
+            [{"lemma": "hit", "rep": "hit",
+              "forms": ["hit"], "coca_level": 6}],
+            "He was running late and hit the wall hard.",
+        )
+        words = result.get("words", [])
+        hit_entries = [w for w in words if w["lemma"] == "hit"]
+        for w in hit_entries:
+            # If spaCy tagged "hit" as VERB and it has conj dep to a
+            # potentially nominal coordination root, the guard should
+            # keep it as VERB (hit has dobj "wall").
+            assert w["pos"] != "NOUN", \
+                f"hit should not be NOUN (VERB with dobj, conj of potential NOUN root), got {w['pos']}"
+
+    def test_vbg_conj_of_noun_stays_verb(self):
+        """VBG (present participle) conj of NOUN stays VERB.
+
+        When a present participle (VBG) has dep=conj to a noun head,
+        it should not be demoted to NOUN.  spaCy only tags VBG when
+        the word is genuinely verbal; nominal gerunds are tagged NN.
+
+        E.g. "crouching"(VBG,conj) whose head is "stern"(NOUN) —
+        the present participle should stay VERB even without its own
+        verbal dependents (they may be shared across conjuncts, e.g.
+        "crouching and holding the line" — dobj on last conjunct only).
+        """
+        result = _run_pipeline(
+            [{"lemma": "crouch", "rep": "crouching",
+              "forms": ["crouching"], "coca_level": 5}],
+            "He worked his way back to the stern and crouching and holding "
+            "the line, he pulled the dolphin in.",
+        )
+        words = result.get("words", [])
+        crouch_entries = [w for w in words if w["lemma"] == "crouch"]
+        assert len(crouch_entries) > 0, "crouch entry should exist"
+        for w in crouch_entries:
+            assert w["pos"] == "VERB", \
+                f"crouching should stay VERB (VBG, conj of NOUN), got {w['pos']}"
+
+    def test_vbg_with_det_child_allows_noun_inheritance(self):
+        """VBG with determiner child allows NOUN inheritance.
+
+        A VBG present participle with a determiner child (e.g. "the
+        hissing") is functionally a nominal gerund — the det is a
+        strong signal of nominal status.  The VBG guard should NOT
+        fire, allowing the conj chain to demote it to NOUN.
+
+        E.g. "the hissing that their wings made" — "hissing"(VBG,conj,
+        det="the") → should be NOUN (nominal gerund).
+        """
+        result = _run_pipeline(
+            [{"lemma": "hiss", "rep": "hissing",
+              "forms": ["hissing"], "coca_level": 5}],
+            "He heard the trembling sound and the hissing that their "
+            "wings made as they flew.",
+        )
+        words = result.get("words", [])
+        hiss_entries = [w for w in words if w["lemma"] == "hiss"]
+        assert len(hiss_entries) > 0, "hiss entry should exist"
+        for w in hiss_entries:
+            # With det child "the", this is a nominal gerund → NOUN
+            assert w["pos"] == "NOUN", \
+                f"hissing with det child should be NOUN (nominal gerund), got {w['pos']}"
+
+    def test_plural_noun_nn_tag_lemmatizes_to_singular(self):
+        """NOUN with tag=NN (singular) ending in -s lemmatizes to singular.
+
+        When spaCy inconsistently tags a plural noun as NN (singular,
+        e.g. "claws" in "gripped claws of an eagle"), the lemma equals
+        the word form instead of the singular base.  The fix tries
+        lemminflect NOUN channel when tag_==NN and word ends in -s.
+        """
+        result = _run_pipeline(
+            [{"lemma": "claw", "rep": "claws",
+              "forms": ["claws"], "coca_level": 5}],
+            "His left hand was still as tight as the gripped claws of an eagle.",
+        )
+        words = result.get("words", [])
+        claw_entries = [w for w in words if w["lemma"] == "claw"]
+        assert len(claw_entries) > 0, "claw entry should exist with lemma=claw"
+        for w in claw_entries:
+            assert w["lemma"] == "claw", \
+                f"claws should lemma to 'claw', got '{w['lemma']}'"

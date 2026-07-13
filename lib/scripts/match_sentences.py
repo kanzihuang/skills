@@ -662,8 +662,18 @@ def _determine_lemma(token, word: str) -> str:
                 return lemma
         return word
 
-    # Signal 5: spaCy lemma == surface form — refuses to reduce
+    # Signal 5: spaCy lemma == surface form — refuses to reduce.
+    # When spaCy tags a plural noun as NN (singular, e.g. "claws" in
+    # "gripped claws of an eagle") the lemma equals the surface form.
+    # The contradiction between plural-looking form (-s) and singular
+    # tag (NN) is a reliable signal of a spaCy lemmatization error.
+    # Try lemminflect NOUN channel — for genuine singular -s words
+    # (news, means, campus) lemmas[0] returns the word itself.
     if token.lemma_.lower() == wl:
+        if token.pos_ == "NOUN" and token.tag_ == "NN" and wl.endswith("s"):
+            lemmas = lemminflect.getLemma(wl, 'NOUN')
+            if lemmas and lemmas[0] != wl:
+                return lemmas[0]
         return wl
 
     # Signal 6: ADV ending in -ly — don't reduce
@@ -1180,6 +1190,25 @@ def process_words(
                         # is a coordinated argument, not a verb.  spaCy's own
                         # POS tag (NOUN) is more trustworthy than the chain root.
                         if head_pos == "VERB" and token.pos_ == "NOUN":
+                            pass
+                        elif (head_pos == "NOUN" and pos == "VERB"
+                              and (any(c.dep_ in _VERBAL_DEPS
+                                       for c in token.children)
+                                   or (token.tag_ == "VBG"
+                                       and not any(c.dep_ == "det"
+                                                   for c in token.children)))):
+                            # Don't demote a spaCy-tagged VERB to NOUN via
+                            # conj inheritance when the token has verbal
+                            # dependents (dobj, nsubj, etc.) or is a
+                            # present participle (VBG) without a determiner.
+                            # E.g. "paralyzed"(VBD,conj,dobj="leg") → verb.
+                            # "crouching"(VBG,conj,no-det) → verb.
+                            # VBG guard: spaCy tags present participles
+                            # as VBG when they are verbal; nominal gerunds
+                            # are tagged NN.  A VBG without a determiner
+                            # child should not be demoted to NOUN.
+                            # det-child gate: "the hissing"(VBG,det="the")
+                            # IS a nominal gerund → allow NOUN inheritance.
                             pass
                         elif head_pos == "ADJ" and any(
                             c.dep_ == "det" for c in token.children

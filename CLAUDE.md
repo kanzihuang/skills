@@ -1142,6 +1142,54 @@ objects of a verb.
 Check: ``grep '"pos": "VERB"'`` in match_sentences output for words ending
 in -s that look like plural nouns.
 
+### conj POS inheritance: VERB with verbal dependents does NOT inherit NOUN
+
+**Change (2026-07-13)**: The conj POS inheritance chain no longer demotes a
+VERB to NOUN when the VERB conjunct has verbal dependents (children in
+``_VERBAL_DEPS``: nsubj, dobj, iobj, etc.) or is a present participle
+(``tag_ == "VBG"``) without a determiner child.  When spaCy mis-tags a gerund as
+NOUN and a true VERB with a direct object is conjunct of it, the verbal
+dependents are a reliable signal that the conjunct is genuinely verbal.
+Guard: ``head_pos == "NOUN" and pos == "VERB" and (any(c.dep_ in _VERBAL_DEPS
+for c in token.children) or (token.tag_ == "VBG" and not any(c.dep_ == "det"
+for c in token.children)))`` → skip inheritance.
+
+**Two sub-guards:**
+1. **Verbal dependents**: "paralyzed"(VBD,conj,dobj="leg") → verb
+2. **VBG without determiner**: "crouching"(VBG,conj,no-det) → verb.
+   spaCy tags present participles as VBG only when they are verbal;
+   nominal gerunds are tagged NN.  A VBG without a determiner child is
+   overwhelmingly likely to be a true present participle, not a noun.
+
+**det-child gate**: A VBG with a determiner child ("the hissing") is a
+nominal gerund → the VBG guard does NOT fire, allowing NOUN inheritance.
+The determiner is a strong signal of nominal status.
+
+Symptom: finite verbs like "paralyzed" or present participles like
+"crouching" tagged NOUN when coordinated with a gerund that spaCy
+mis-tagged as a noun.
+Check: ``grep '"pos": "NOUN"'`` in match_sentences output for words with
+``dep=conj`` that take direct objects in context or are present participles.
+
+### Plural -s lemmatization fallback for NN-tagged nouns
+
+**Change (2026-07-13)**: ``_determine_lemma()`` Signal 5 (spacy_lemma==word)
+now tries lemminflect NOUN channel when ``pos_ == "NOUN"``, ``tag_ == "NN"``
+(singular), and the word ends in ``-s``.  When spaCy inconsistently tags a
+plural noun as NN (e.g. "claws" in "gripped claws of an eagle" → NN instead
+of NNS), the lemma equals the word form, preventing intra-batch dedup with
+the correct singular entry.
+
+The contradiction between a plural-looking form (-s) and a singular tag
+(NN) is a reliable signal of a spaCy lemmatization error.  For genuine
+singular -s words (news, means, campus, compass), lemminflect's first
+candidate is the word itself → no change.
+
+Symptom: "claw" and "claws" appear as separate entries in the deck despite
+both being NOUN with the same lemma.
+Check: grep for duplicate (word, pos) pairs where one entry has lemma==word
+and the other has lemma==singular form.
+
 ### hyphenated compound token skip (dep=compound + adjacent "-")
 
 **Change (2026-07-11)**: Tokens with ``dep=compound`` that are adjacent to
