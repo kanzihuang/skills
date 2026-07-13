@@ -301,6 +301,45 @@ If duplicates are found, merge the entries or adjust POS to avoid the
 collision.  ``sync_anki.py`` will also print details of any entries it
 drops at sync time.
 
+### Step 2F-post: Anki 去重（词性确认后，音频生成前）
+
+Step 2F 确认词性后，立即连接 Anki 查询已有卡片。已存在的词标记
+``_already_in_anki``，后续音频生成和同步跳过。避免为已在牌组中的卡片重复
+生成音频。
+
+```bash
+PYTHONPATH=<skill_dir>/lib <skill_dir>/.venv/bin/python3 -c "
+import json, sys
+sys.path.insert(0, '<skill_dir>/lib')
+from ankiconnect import AnkiConnect, AnkiConnectError
+
+data = json.load(open('/tmp/vocab-anki-input-<tmp_id>.json'))
+suffix = data.get('suffix') or data.get('book_id', '')
+
+try:
+    ac = AnkiConnect()
+    existing = ac.find_notes_by_field('WordId', f'*_{suffix}')
+except AnkiConnectError as e:
+    print(f'FATAL: {e}', file=sys.stderr)
+    sys.exit(1)
+
+n_existing = 0
+for w in data['words']:
+    wid = f\"{w['lemma']}_{w['pos']}_{suffix}\"
+    if wid in existing:
+        w['_already_in_anki'] = True
+        n_existing += 1
+
+json.dump(data, open('/tmp/vocab-anki-input-<tmp_id>.json', 'w'),
+          indent=2, ensure_ascii=False)
+print(f'Anki dedup: {n_existing} already in deck, '
+      f'{len(data[\"words\"]) - n_existing} new')
+"
+```
+
+> 如果 AnkiConnect 不可达（重试后仍失败），流程在此终止——避免为可能重复的卡片
+> 白费音频生成时间。
+
 ---
 
 ## Step 2G: 预下载音频
@@ -394,7 +433,7 @@ cd <skill_dir> && .venv/bin/python -u -m lib.sync_anki \
 |------|------|
 | 源文本不可用 | 该批次所有单词跳过 |
 | 音频生成失败 | Edge TTS 重试 3 次后抛 RuntimeError |
-| AnkiConnect 不可达 | 提示启动 Anki |
+| AnkiConnect 不可达 | 自动重试一次（2s 延迟），仍失败则终止流程并打印排查指引 |
 | 同步超时 | 提示重试 |
 | 没有新生词 | 直接告知用户 |
 
@@ -402,9 +441,10 @@ cd <skill_dir> && .venv/bin/python -u -m lib.sync_anki \
 
 - **职责分离**：Claude 做知识工作（句子审核、释义、IPA 补漏），DeepL 做机械翻译，Python 做机械工作（POS 分析、lemma、TTS、同步、cmudict IPA）
 - **例句来自源文本机械匹配**：不依赖 Claude 记忆
-- **per-sentence POS 分析**：spaCy 在具体句子上判定词性，不全局投票。lemma 由机械流程产出，Claude 不参与
+- **per-sentence POS 独立**：每句话的词性仅根据该句内信号独立判定。禁止跨句词性推断——同一个词可以在不同语境中有不同词性。`compound` 依存无可靠句内信号区分形容词修饰语与定语名词（后缀启发式经 TLP 实测不可靠），compound 相关词性歧义交由 Claude Step 2B/2F 审查
 - **表面词形严格匹配**：目标词形必须实际出现在句中
 - **增量安全**：只添加不修改
 - **批内词族去重**：同批内同 lemma+pos 合并
 - **确认前置音频**：确认前预下载，确认后秒级同步
 - **WordId 含 POS**：`{lemma}_{pos}_{suffix}` 防止同 lemma 不同 POS 碰撞
+- **AnkiConnect 快速失败**：所有 AnkiConnect 调用自动重试一次（2s 延迟）。`sync_anki.py` 在音频生成前执行预检（`version` ping），不可达则立即终止

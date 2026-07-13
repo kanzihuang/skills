@@ -196,6 +196,7 @@ cat /tmp/<safe_title>-*-full.txt | \
 - `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C）
 - **Step 2E**: 生成释义 + 补 cmudict 未覆盖 IPA + 异读词投票（Claude，N agents 并行，≤25 词/agent，**不碰 lemma**）
 - **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent，**不可绕过**）
+- **Step 2F-post**: Anki 去重 — 词性确认后立即连接 Anki 查询已有卡片，标记 `_already_in_anki`（见 `SHARED_WORKFLOW.md` Step 2F-post）
 - `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步脚本（Step 2G + Step 2H）。此脚本使用相对导入，仅能以模块方式运行：`cd <skill_dir> && .venv/bin/python -m lib.sync_anki <args>`。同步时根据 `target_offset` 拼接 `<b>` 标签
 
 **全文模式特有**：
@@ -215,7 +216,7 @@ cat /tmp/<safe_title>-*-full.txt | \
 | spaCy 不可用 | 自动修复（安装依赖+下载模型），修复失败则终止任务 |
 | 脚本运行失败 | 检查依赖安装、网络连接 |
 | 音频生成失败 | Edge TTS 重试 3 次后仍失败 → 抛 RuntimeError 阻塞同步 |
-| AnkiConnect 不可达 | 提示启动 Anki 并安装插件 |
+| AnkiConnect 不可达 | 自动重试一次（2s 延迟），仍失败则终止流程并打印排查指引（启动 Anki + 安装插件 + SSH 隧道） |
 | 同步脚本超时 | 提示原因，建议重试 |
 | 没有通过 COCA 的单词 | 提示用户放宽范围或换书 |
 
@@ -229,12 +230,14 @@ cat /tmp/<safe_title>-*-full.txt | \
 - **零微信读书依赖**：不调用任何 WeRead API
 - **UUID 复用跨批**：检测已有牌组的 UUID 后缀并在后续运行中复用，实现跨批去重
 - **父牌组去重**：查询父牌组下所有子牌组，仅添加全新的词
+- **词性确认后 Anki 去重**：Step 2F 确认词性后立即连接 Anki 查询已有卡片，标记 `_already_in_anki`，避免为已存在的卡片重复生成音频
 - **卡片迁移**：词频等级变更时，自动将卡片移动到正确子牌组，保留复习进度
 - **稳定子牌组名**：子牌组名不含单词数量（如 `COCA 4`）。Anki 原生在牌组列表中显示卡片数，牌组名保持稳定
-- **per-sentence POS 分析**：spaCy 在具体句子上判定词性，不全局投票。lemma 机械化产出，Claude 不参与
+- **per-sentence POS 独立**：每句话的词性仅根据该句内信号独立判定。禁止跨句词性推断——同一个词可以在不同语境中有不同词性。`compound` 依存无可靠句内信号区分形容词修饰语与定语名词，compound 相关词性歧义交由 Claude Step 2B/2F 审查
 - **序言自动过滤**：`match_sentences.py` 自动跳过前言
 - **Claude + Python 分离**：Claude 做知识工作（释义、句子审核），Python 做机械工作（POS、lemma、TTS、同步、过滤、IPA、截断、碎片合并）
 - **例句来自源文本机械匹配**：不依赖 Claude 记忆
 - **质量门禁不可绕过**：Step 2B（Claude 审核）和 Step 2F（内容验证）无 SKIP 条件。`smart_truncate()` 已在 Step 2A（match_sentences.py）中自动完成
 - **碎片自动合并**：`split_sentences()` 自动检测并合并被源文本空行切分的相邻碎片句
 - **截断后验证**：`check_step_completed.py --step 2B-verify` 验证 target_offset 正确；`--step 2F-dup` 检测 POS 修复产生的重复
+- **AnkiConnect 快速失败**：所有 AnkiConnect 调用自动重试一次（2s 延迟）。`sync_anki.py` 在音频生成前执行预检（`version` ping），不可达则立即终止
