@@ -91,9 +91,25 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 ---
 
+### Step 2A-post: Anki 去重（机械，词性产出后立即执行）
+
+match_sentences.py 产出后立即连接 Anki，按 `(sentence, word)` 键与已有卡片
+比对。已存在的词标记 ``_already_in_anki``，Step 2B–2F 跳过。
+
+```bash
+<skill_dir>/.venv/bin/python3 \
+  <skill_dir>/lib/scripts/dedup_anki.py \
+  /tmp/vocab-<tmp_id>-matched.json
+```
+
+> AnkiConnect 不可达 → 重试一次 → 仍失败则 ``FATAL`` + ``sys.exit(1)``。
+> 去重键 ``(sentence, word)`` 不依赖 POS/lemma，跨次运行稳定。
+
+---
+
 ## Step 2B: 句子审核 + 完整性校验（Claude，1 agent）
 
-> ⚠️ **不可绕过（MUST）**。
+> ⚠️ **不可绕过（MUST）**。**跳过 `_already_in_anki` 标记的条目**——已在牌组中，无需重审。
 
 ### 2B. 手动审核（Claude）
 
@@ -300,45 +316,6 @@ cd <skill_dir> && .venv/bin/python3 \
 If duplicates are found, merge the entries or adjust POS to avoid the
 collision.  ``sync_anki.py`` will also print details of any entries it
 drops at sync time.
-
-### Step 2F-post: Anki 去重（词性确认后，音频生成前）
-
-Step 2F 确认词性后，立即连接 Anki 查询已有卡片。已存在的词标记
-``_already_in_anki``，后续音频生成和同步跳过。避免为已在牌组中的卡片重复
-生成音频。
-
-```bash
-PYTHONPATH=<skill_dir>/lib <skill_dir>/.venv/bin/python3 -c "
-import json, sys
-sys.path.insert(0, '<skill_dir>/lib')
-from ankiconnect import AnkiConnect, AnkiConnectError
-
-data = json.load(open('/tmp/vocab-anki-input-<tmp_id>.json'))
-suffix = data.get('suffix') or data.get('book_id', '')
-
-try:
-    ac = AnkiConnect()
-    existing = ac.find_notes_by_field('WordId', f'*_{suffix}')
-except AnkiConnectError as e:
-    print(f'FATAL: {e}', file=sys.stderr)
-    sys.exit(1)
-
-n_existing = 0
-for w in data['words']:
-    wid = f\"{w['lemma']}_{w['pos']}_{suffix}\"
-    if wid in existing:
-        w['_already_in_anki'] = True
-        n_existing += 1
-
-json.dump(data, open('/tmp/vocab-anki-input-<tmp_id>.json', 'w'),
-          indent=2, ensure_ascii=False)
-print(f'Anki dedup: {n_existing} already in deck, '
-      f'{len(data[\"words\"]) - n_existing} new')
-"
-```
-
-> 如果 AnkiConnect 不可达（重试后仍失败），流程在此终止——避免为可能重复的卡片
-> 白费音频生成时间。
 
 ---
 

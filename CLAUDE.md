@@ -109,12 +109,18 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 - **IPA from cmudict**: IPA is generated mechanically by `match_sentences.py` from the CMU Pronouncing Dictionary. Claude only provides IPA for cmudict misses and heteronym disambiguation.
 - **No hard-coded semantic word lists in Python**: Python code handles mechanical/formal work (tokenization, regex, IPA lookup, COCA level mapping). Semantic classification — distinguishing emotional adjectives from true passives, heteronym disambiguation, identifying non-body-text sentences — is Claude's responsibility in the mandatory review gates (Step 2B, Step 2F). Hard-coded word sets create unbounded maintenance burden and violate separation of concerns.
 - **Per-sentence POS independence**: Each sentence's POS is determined independently using only within-sentence signals. Cross-sentence POS inference is forbidden — a word can genuinely have different POS in different contexts (e.g. "slant" as NOUN in "the slant of the line" vs. attributive use in "the slant change"). The `compound` dep — while defined by UD for noun-noun compounds — has no reliable within-sentence signal to distinguish adjective modifiers from attributive nouns (suffix-based heuristics were tested and found unreliable on TLP data). POS disambiguation for compound-dep tokens is Claude's responsibility in Step 2B/2F.
-- **AnkiConnect fail-fast with retry**: Every AnkiConnect call automatically retries once on ConnectionError (2-second delay). If the retry also fails, the workflow aborts immediately — never proceed with unverified Anki connectivity. `sync_anki.py` also performs a pre-flight `version` check before any heavy work (audio generation, deck creation).
-- **Post-POS-confirmation Anki dedup**: After Step 2F confirms POS, immediately query Anki for existing cards before generating audio. Words already in the deck (`_already_in_anki`) skip audio generation and sync.
+- **AnkiConnect fail-fast with retry**: Every AnkiConnect call automatically retries once on ConnectionError (2-second delay). If the retry also fails, the workflow aborts immediately. `sync_anki.py` also performs a pre-flight `version` check before audio generation and deck creation.
+- **Mechanical Anki dedup before Claude work**: Step 2A-post (`dedup_anki.py`) queries Anki immediately after `match_sentences.py`, before any Claude work (Step 2B–2F). Dedup key is `(sentence, word)` — sentence text without `<b>` tags + surface form of the target word. Does NOT depend on POS or lemma, so POS corrections and lemma changes do not invalidate dedup results. Words already in the deck are marked `_already_in_anki` and skipped by all subsequent steps.
 
 ## Known Pitfalls & Troubleshooting
 
 Common failure modes discovered through production use. Reference when debugging deck quality issues.
+
+### Anki 去重键 = (sentence, word)，不依赖 POS/lemma
+
+`dedup_anki.py`（Step 2A-post）使用 `(sentence, word)` 作为去重键——sentence 为去 `<b>` 标签后的纯文本，word 为句中的 surface form。此键不依赖 POS 或 lemma，跨次运行稳定。
+
+与 WordId（`{lemma}_{pos}_{suffix}`）的区别：WordId 随 POS 修正变化（如 sheath ADJ→NOUN），会导致去重失效。`(sentence, word)` 始终稳定。
 
 ### Step 2B/2F 不可绕过
 

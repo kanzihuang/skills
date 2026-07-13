@@ -196,7 +196,7 @@ cat /tmp/<safe_title>-*-full.txt | \
 - `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C）
 - **Step 2E**: 生成释义 + 补 cmudict 未覆盖 IPA + 异读词投票（Claude，N agents 并行，≤25 词/agent，**不碰 lemma**）
 - **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent，**不可绕过**）
-- **Step 2F-post**: Anki 去重 — 词性确认后立即连接 Anki 查询已有卡片，标记 `_already_in_anki`（见 `SHARED_WORKFLOW.md` Step 2F-post）
+- **Step 2A-post**: Anki 去重 — `match_sentences.py` 产出后立即以 `(sentence, word)` 键机械去重，标记 `_already_in_anki`（见 `SHARED_WORKFLOW.md` Step 2A-post）
 - `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步脚本（Step 2G + Step 2H）。此脚本使用相对导入，仅能以模块方式运行：`cd <skill_dir> && .venv/bin/python -m lib.sync_anki <args>`。同步时根据 `target_offset` 拼接 `<b>` 标签
 
 **全文模式特有**：
@@ -230,7 +230,7 @@ cat /tmp/<safe_title>-*-full.txt | \
 - **零微信读书依赖**：不调用任何 WeRead API
 - **UUID 复用跨批**：检测已有牌组的 UUID 后缀并在后续运行中复用，实现跨批去重
 - **父牌组去重**：查询父牌组下所有子牌组，仅添加全新的词
-- **词性确认后 Anki 去重**：Step 2F 确认词性后立即连接 Anki 查询已有卡片，标记 `_already_in_anki`，避免为已存在的卡片重复生成音频
+- **机械去重前置**：Step 2A 产出后立即以 `(sentence, word)` 键连接 Anki 机械去重（`dedup_anki.py`），标记 `_already_in_anki`。不依赖 POS/lemma，跨次运行稳定。Claude 工作和音频生成均跳过已存在卡片
 - **卡片迁移**：词频等级变更时，自动将卡片移动到正确子牌组，保留复习进度
 - **稳定子牌组名**：子牌组名不含单词数量（如 `COCA 4`）。Anki 原生在牌组列表中显示卡片数，牌组名保持稳定
 - **per-sentence POS 独立**：每句话的词性仅根据该句内信号独立判定。禁止跨句词性推断——同一个词可以在不同语境中有不同词性。`compound` 依存无可靠句内信号区分形容词修饰语与定语名词，compound 相关词性歧义交由 Claude Step 2B/2F 审查
