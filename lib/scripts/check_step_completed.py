@@ -239,6 +239,10 @@ def _main() -> None:
         data = json.load(f)
 
     words = data.get("words", [])
+    # Content checks (2E/2F) only apply to entries that will be processed —
+    # _already_in_anki entries were generated in previous runs and their
+    # definition_cn/ipa fields are not re-generated.
+    active_words = [w for w in words if not w.get("_already_in_anki")]
     all_warnings: list[str] = []
 
     if args.step in ("2B", "all"):
@@ -258,7 +262,7 @@ def _main() -> None:
             all_warnings.extend(f"  {w}" for w in w2bv)
 
     if args.step in ("2E", "all"):
-        w2e = _check_2e(words)
+        w2e = _check_2e(active_words)
         if w2e:
             all_warnings.append(
                 f"Step 2E may have been SKIPPED ({len(w2e)} issue(s)):"
@@ -266,7 +270,7 @@ def _main() -> None:
             all_warnings.extend(f"  {w}" for w in w2e)
 
     if args.step in ("2E-verify", "all"):
-        w2ev = _check_2e_verify(words)
+        w2ev = _check_2e_verify(active_words)
         if w2ev:
             all_warnings.append(
                 f"Step 2E output contains curly/smart quotes "
@@ -275,7 +279,7 @@ def _main() -> None:
             all_warnings.extend(f"  {w}" for w in w2ev)
 
     if args.step in ("2F", "all"):
-        w2f = _check_2f(words)
+        w2f = _check_2f(active_words)
         if w2f:
             all_warnings.append(
                 f"Step 2F may have been SKIPPED ({len(w2f)} issue(s)):"
@@ -283,7 +287,10 @@ def _main() -> None:
             all_warnings.extend(f"  {w}" for w in w2f)
 
     if args.step in ("2F-dup", "all"):
-        w2fd = _check_duplicates(words)
+        # Only check active entries for duplicates — _already_in_anki entries
+        # from previous batches will naturally collide with POS-fixed entries;
+        # sync_anki.py handles those correctly at sync time.
+        w2fd = _check_duplicates(active_words)
         if w2fd:
             all_warnings.append(
                 f"Duplicate (lemma, pos) entries detected ({len(w2fd)}):"

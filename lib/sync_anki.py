@@ -1031,8 +1031,10 @@ def main() -> None:
             if cmu_ipa:
                 w["ipa"] = cmu_ipa
 
-    # Validate quality rules before sync
-    errors = validate_word_entries(data["words"])
+    # Validate quality rules before sync — only entries that will be
+    # processed (skip _already_in_anki entries whose fields were not re-generated)
+    active_words = [w for w in data["words"] if not w.get("_already_in_anki")]
+    errors = validate_word_entries(active_words)
     if errors:
         print(f"Quality check FAILED ({len(errors)} error(s)):", file=sys.stderr)
         for e in errors:

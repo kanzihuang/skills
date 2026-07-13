@@ -317,6 +317,71 @@ def test_missing_terminal_punctuation_no_hard_error():
         f"Missing period should be soft warning only, not hard error\nErrors: {errors}"
 
 
+# ── _already_in_anki filtering (caller-side concern) ──
+
+
+def test_already_in_anki_entries_excluded_from_validation():
+    """Entries with _already_in_anki=True should be excluded by the caller
+    before validate_word_entries() is invoked.  The validator itself still
+    flags missing fields — the caller is responsible for pre-filtering.
+
+    This mirrors the fix in sync_anki.py main() where active_words is built
+    as [w for w in data["words"] if not w.get("_already_in_anki")].
+    """
+    active = make_word(word="test", sentence="This is a test word in a proper sentence for validation testing.")
+    skipped = make_word(
+        word="cove",
+        sentence="This cove appears in a proper sentence for validation testing.",
+        _already_in_anki=True,
+    )
+    # Remove definition_cn and ipa from the skipped entry — these are
+    # NOT re-generated for already-in-anki entries.
+    skipped.pop("definition_cn", None)
+    skipped.pop("ipa", None)
+
+    # Without caller-side filtering: validator flags the skipped entry
+    all_entries = [active, skipped]
+    all_errors = validate_word_entries(all_entries)
+    assert any("cove" in e and "definition_cn" in e.lower() for e in all_errors), \
+        f"Validator should flag missing definition_cn on _already_in_anki entry\nErrors: {all_errors}"
+
+    # With caller-side filtering: only active entries are validated
+    active_only = [w for w in all_entries if not w.get("_already_in_anki")]
+    active_errors = validate_word_entries(active_only)
+    assert not active_errors, \
+        f"Filtered validation should pass\nErrors: {active_errors}"
+
+
+def test_already_in_anki_entries_excluded_from_duplicate_check():
+    """_already_in_anki entries should not cause false duplicate warnings
+    when a POS-fixed active entry happens to share (lemma, pos) with an
+    existing card.  sync_anki.py drops the new entry correctly at sync time;
+    the duplicate check (check_step_completed.py --step 2F-dup) should only
+    check among active entries.
+    """
+    active = make_word(
+        word="oar",
+        lemma="oar",
+        sentence="It was an oar handle from a broken oar.",
+        pos="NOUN",
+    )
+    skipped = make_word(
+        word="oar",
+        lemma="oar",
+        sentence="Then he took up the oar with the knife lashed to it.",
+        pos="NOUN",
+        _already_in_anki=True,
+    )
+    # Simulate what check_step_completed does: only check active entries
+    active_only = [w for w in [active, skipped] if not w.get("_already_in_anki")]
+    from collections import Counter
+    keys = [(w["lemma"].strip().lower(), w.get("pos", "").strip().upper())
+            for w in active_only]
+    dupes = {k: v for k, v in Counter(keys).items() if v > 1}
+    assert not dupes, \
+        f"Should not report duplicates when only active entries are checked\nDupes: {dupes}"
+
+
 def test_has_terminal_punctuation_no_warning():
     """A correctly punctuated sentence should produce no warnings."""
     w = make_word(
