@@ -79,6 +79,17 @@ def split_sentences(text: str, source_text: str | None = None) -> list[str]:
     return sentences
 
 
+def _form_found_in_text(form: str, text: str) -> bool:
+    """Check if *form* appears as a standalone word in *text*.
+
+    Underscores are replaced with spaces before checking because plain-text
+    files often use ``_word_`` for italics (e.g. ``_Jota_`` in Gutenberg texts).
+    Without this, ``_`` (a ``\\w`` character) blocks the ``\\b`` word boundary.
+    """
+    cleaned = text.replace('_', ' ')
+    return bool(re.search(r'\b' + re.escape(form) + r'\b', cleaned, re.IGNORECASE))
+
+
 def _strip_non_alpha(text: str) -> str:
     """Strip all non-letter characters for source-text verification."""
     return re.sub(r'[^a-zA-Z]', '', text.lower())
@@ -1420,18 +1431,40 @@ def process_words(
     # Sort results for deterministic output (by lemma, then pos)
     results.sort(key=lambda r: (r['lemma'], r['pos']))
 
-    # no_sentence: word entries without any match
-    no_sentence = []
+    # Report unmatched filter entries, categorized by reason:
+    #   1. "covered by" — lemma already matched via another surface form
+    #   2. "not in source" — none of the word's forms appear in the source text
+    #   3. "no suitable sentence" — forms exist in text but no sentence selected
+    matched_lemmas: set[str] = {lemma.lower() for (lemma, _pos) in groups}
+    no_sentence: list[tuple[str, list[str], str]] = []  # (lemma, forms, reason)
     for idx, entry in enumerate(words):
-        if idx not in matched_indices:
-            surface = entry.get('lemma', '')
-            forms = entry.get('forms', [])
-            no_sentence.append((surface, forms))
+        if idx in matched_indices:
+            continue
+        lemma = entry.get('lemma', '')
+        forms = entry.get('forms', [])
+        # Check if lemma already covered by another surface form
+        if lemma.lower() in matched_lemmas:
+            no_sentence.append((lemma, forms, 'covered_by_lemma'))
+        # Check if any form appears anywhere in the source text
+        elif not any(_form_found_in_text(f, text) for f in forms):
+            no_sentence.append((lemma, forms, 'not_in_source'))
+        else:
+            no_sentence.append((lemma, forms, 'no_sentence'))
 
     if no_sentence:
-        print(f"\nNo sentence found ({len(no_sentence)}):", file=sys.stderr)
-        for surface, forms in no_sentence:
-            print(f"  [{surface}] forms={forms}", file=sys.stderr)
+        covered = [(l, f) for l, f, r in no_sentence if r == 'covered_by_lemma']
+        not_in_src = [(l, f) for l, f, r in no_sentence if r == 'not_in_source']
+        no_sent = [(l, f) for l, f, r in no_sentence if r == 'no_sentence']
+        print(f"\nUnmatched entries ({len(no_sentence)}):", file=sys.stderr)
+        for label, items in [
+            ("Covered by alternative form", covered),
+            ("Not found in source text", not_in_src),
+            ("No suitable sentence", no_sent),
+        ]:
+            if items:
+                print(f"  {label} ({len(items)}):", file=sys.stderr)
+                for surface, forms in items:
+                    print(f"    [{surface}] forms={forms}", file=sys.stderr)
 
     print(f"  Words matched: {len(matched_indices)}/{total} → {len(results)} (lemma,pos) groups",
           file=sys.stderr)
