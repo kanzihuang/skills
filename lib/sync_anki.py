@@ -508,7 +508,7 @@ def sync(
             }
             print(f"  Found {len(existing_map)} existing cards")
     else:
-        existing_map = {}  # prefetch: no Anki connection
+        existing_map = {}  # prefetch: skip live Anki query; _already_in_anki markers handle filtering
 
     # 4. Compute new word counts per level and build target deck mapping
     level_new_counts = _compute_level_word_counts(words)
@@ -535,6 +535,16 @@ def sync(
             skipped_words.append(w)
             continue
         seen_word_ids.add(word_id)
+
+        # Pre-dedup: Step 2A-post marks words already known to be in Anki.
+        # (sentence, word) key is stable across POS/lemma changes.
+        # Applies in both prefetch and sync modes — in prefetch mode this
+        # avoids generating audio for words that already have cards.
+        if w.get('_already_in_anki'):
+            if verbose:
+                print(f"  SKIP {w['word']} (already in Anki, from Step 2A-post dedup)")
+            skipped_words.append(w)
+            continue
 
         # Parent-level dedup: check across all sub-decks
         if word_id in existing_map:
@@ -636,8 +646,14 @@ def sync(
         # Restore notes (without deckName — fill in below).
         # Match by WordId (not _idx) because prefetch has empty
         # existing_map so its new_words/index differ from sync.
+        # Only load notes for words in the current new_words set —
+        # the manifest may contain stale entries from a previous
+        # prefetch run that included already-known words.
+        new_word_ids = {_make_word_id(w, namespace_id) for w in new_words}
         for i, note in enumerate(manifest["notes"]):
             wid = note.get("fields", {}).get("WordId", "")
+            if wid and wid not in new_word_ids:
+                continue  # stale entry from a different prefetch batch
             note["deckName"] = word_id_to_target_deck.get(
                 wid,
                 word_target_deck.get(note.get("_idx", i), deck_name),
