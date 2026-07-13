@@ -1115,6 +1115,33 @@ Symptom: VBN/VBD entries with ``pos=ADJ`` but ``lemma`` reduced to verb
 base (e.g. "tempered" ADJ with lemma="temper").
 Check: ``grep '"pos": "ADJ"'`` for entries where lemma ≠ word.
 
+### conj POS inheritance: VBN+acl/amod chain root does NOT promote to VERB
+
+**Change (2026-07-13)**: The conj POS inheritance chain now skips inheritance when
+the chain root is a VERB with ``dep_ in ("acl", "amod")``.  A VBN in acl/amod
+position is an adjectival participle modifier — not a true verbal coordination
+root.  E.g. "the formalized, iridescent, gelatinous bladder" →
+"formalized"(VBN,acl) → "iridescent"(NOUN,conj) → "bladder"(NOUN,conj).
+Without this guard, "bladder" was incorrectly promoted NOUN→VERB.
+
+Symptom: common nouns like "bladder" tagged VERB in match_sentences output
+when the sentence contains adjectival participles in the same NP.
+Check: ``grep '"lemma": "bladder".*"pos": "VERB"'`` in match_sentences output.
+
+### conj POS inheritance: spaCy-tagged NOUN does NOT inherit VERB
+
+**Change (2026-07-13)**: The conj POS inheritance chain no longer promotes a
+spaCy-tagged NOUN to VERB.  When a NOUN has ``dep=conj`` directly to a VERB
+head (e.g. "fins" conj of "see" in "see...heads and...fins"), the NOUN is a
+coordinated argument, not a verb.  spaCy's own POS tag (NOUN) is more
+trustworthy than the chain root for this case.  Guard: ``head_pos == "VERB"
+and token.pos_ == "NOUN"`` → skip inheritance.
+
+Symptom: plural nouns like "fins" tagged VERB when they are coordinated
+objects of a verb.
+Check: ``grep '"pos": "VERB"'`` in match_sentences output for words ending
+in -s that look like plural nouns.
+
 ### hyphenated compound token skip (dep=compound + adjacent "-")
 
 **Change (2026-07-11)**: Tokens with ``dep=compound`` that are adjacent to

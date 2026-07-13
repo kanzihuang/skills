@@ -1163,8 +1163,26 @@ def process_words(
                             walked_past_content = True
                         head_token = head_token.head
                     head_pos = head_token.pos_
-                    if head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos:
-                        pos = head_pos
+                    # When the chain root is a VERB in acl/amod position,
+                    # it is an adjectival participle modifier — not a true
+                    # verbal coordination root.  E.g. "the formalized,
+                    # iridescent, gelatinous bladder" → "formalized"(VBN,acl)
+                    # chains to "bladder"(NOUN,conj).  Inheriting VERB from
+                    # an adjectival modifier would incorrectly convert the
+                    # noun to a verb.  Skip the inheritance.
+                    if (head_pos == "VERB"
+                            and head_token.dep_ in ("acl", "amod")):
+                        pass
+                    elif head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos:
+                        # Don't promote a spaCy-tagged NOUN to VERB via conj
+                        # inheritance.  A NOUN directly conjoined to a VERB
+                        # (e.g. "fins" conj of "see" in "see...heads and...fins")
+                        # is a coordinated argument, not a verb.  spaCy's own
+                        # POS tag (NOUN) is more trustworthy than the chain root.
+                        if head_pos == "VERB" and token.pos_ == "NOUN":
+                            pass
+                        else:
+                            pos = head_pos
                         # When inheriting ADJ via conj chain, ensure lemma is
                         # the surface form — _determine_lemma may have reduced
                         # a VBN/VBD token via the VERB channel (e.g. "tempered"
