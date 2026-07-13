@@ -24,6 +24,7 @@ import pysbd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lib.chapter_detect import detect_story_start
+from lib.coca import in_coca
 from lib.config import HARD_CUTOFF, MIN_SENTENCE_LENGTH, MAX_SENTENCE_LENGTH, SENTENCE_END_FUNCTION_WORDS
 from lib.utils import build_sentence_regex, normalize_quotes
 
@@ -637,7 +638,17 @@ def _determine_lemma(token, word: str) -> str:
         if word[0].islower() or token.i == 0:
             lemmas = lemminflect.getLemma(wl, 'NOUN')
             if lemmas:
-                return lemmas[0]
+                lemma = lemmas[0]
+                # COCA cross-check: if lemminflect produced a lemma that is
+                # not in COCA but the surface form is, the lemmatizer likely
+                # mis-parsed a loanword (e.g. "bonita" → "bonitum" — Spanish
+                # fish name treated as Latin neuter).  Reject and keep the
+                # surface form.
+                in_coca_surface, _ = in_coca(wl)
+                in_coca_lemma, _ = in_coca(lemma)
+                if in_coca_surface and not in_coca_lemma:
+                    return wl
+                return lemma
         return word
 
     # Signal 5: spaCy lemma == surface form — refuses to reduce

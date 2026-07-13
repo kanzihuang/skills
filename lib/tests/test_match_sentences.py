@@ -895,6 +895,26 @@ class TestPOSCorrections:
         assert w["pos"] == "NOUN", \
             f"lowercase 'gulf' should stay NOUN, got {w['pos']}"
 
+    def test_propn_loanword_lemma_coca_cross_check(self):
+        """PROPN→NOUN lemmatizer false positive for loanwords: COCA cross-check.
+
+        lemminflect incorrectly reduces "bonita" (Spanish loanword for a fish)
+        to "bonitum" (Latin neuter pseudo-singular).  Since "bonita" is in
+        COCA but "bonitum" is not, _determine_lemma should reject the
+        lemmatizer output and keep the surface form.
+        """
+        result = _run_pipeline(
+            [{"lemma": "bonita", "rep": "bonita",
+              "forms": ["bonita"], "coca_level": 8}],
+            "Today I'll work out where the schools of bonita and albacore are.",
+        )
+        words = result["words"]
+        assert len(words) == 1, f"expected 1 entry, got {len(words)}"
+        assert words[0]["lemma"] == "bonita", \
+            f"expected lemma 'bonita', got '{words[0]['lemma']}'"
+        assert words[0]["pos"] == "NOUN", \
+            f"expected NOUN, got {words[0]['pos']}"
+
 
     def test_vbd_advcl_no_children_becomes_adj(self):
         """VBD + advcl + no verbal children → ADJ (depictive predicate)."""
