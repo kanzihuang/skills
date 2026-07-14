@@ -1458,6 +1458,36 @@ narrative part before a long quoted dialogue passage, and the sentence
 exceeds `MAX_SENTENCE_LENGTH`.  Check: `grep '"is_fragment": true'` for
 entries whose sentence contains `,"` (comma-quote dialogue attribution).
 
+## Sync Performance
+
+### AnkiConnect API calls — what takes time
+
+`sync_anki.py` 同步时的主要耗时操作（按耗时排序）：
+
+| 操作 | API 调用 | 典型耗时 | 说明 |
+|------|---------|---------|------|
+| `get_word_id_map_with_deck()` | 1 findNotes + N/50 notesInfo + N/50 cardsInfo | 30-60s (N=400) | 查询全部已有卡片，Anki SQLite 读取为瓶颈 |
+| Edge TTS 音频生成 | 0 (外部网络) | 20-50s (10 个文件) | Microsoft TTS 网络延迟 |
+| AnkiWeb sync | 1 × sync | 3-5s | 增量同步（旧卡片已同步过） |
+
+### 减少 API 调用的优化（2026-07-14）
+
+已实施 4 项优化，从每次同步中消除 ~19 次冗余 API 调用：
+
+1. **`get_word_id_map_with_deck` 同时返回 CocaLevel**：返回值从 `{WordId: (note_id, deck)}` 扩展为 `{WordId: (note_id, deck, coca_level)}`，消除 `_migrate_misplaced_cards` 中的重复 `notesInfo` 查询（省 8 次）。
+
+2. **迁移循环用内存中的 card IDs**：`_migrate_misplaced_cards` 从 `notesInfo` 响应中直接取 `cards` 字段，不再对每个 misplaced card 调 `get_cards_of_notes`。
+
+3. **子牌组创建跳过重复 model 检查**：`ensure_deck_and_model` 新增 `skip_model_check=True`，父牌组验证后子牌组只调 `createDeck`（省 8 次）。
+
+4. **已知 deck name 跳过 `find_deck_for_book_id`**：`--deck` CLI 或 JSON `deck_name` 明确指定时跳过 3 次 API 调用。
+
+### 不应该做的事
+
+- **不要跳过 AnkiWeb sync**：增量同步很快（~3s），无需跳过
+- **不要在 sync_anki.py 中做 Anki SQLite 优化**：`notesInfo`/`cardsInfo` 的 SQLite 开销是 Anki 层面的，无法在本仓库中优化
+- **不要硬编码跳过已有卡片查询**：`get_word_id_map_with_deck` 的 WordId 去重是必要的防御层——`_already_in_anki` 标记使用 `(sentence, word)` 键，与 `WordId = {lemma}_{pos}_{suffix}` 不同
+
 ## License
 
 Apache License 2.0 — all contributions are under this license.
