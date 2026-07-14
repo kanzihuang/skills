@@ -335,6 +335,11 @@ cd <skill_dir> && .venv/bin/python -u -m lib.sync_anki \
 
 音频命名：`{lemma}_{pos}_{<tmp_id>}_word.mp3` / `{lemma}_{pos}_{<tmp_id>}_sent.mp3`
 
+> **音频缓存路径传递**：Step 2G 完成后最后一行输出 `AUDIO_DIR=<临时目录路径>`。
+> Claude 必须**记录此路径**并在 Step 2H 中以 `--audio-dir <路径>` 传入。
+> 若路径丢失则无法复用缓存音频，Step 2H 将重新生成所有音频（耗时较长）。
+> 缓存目录位于系统临时目录，重启后可能被清理。
+
 ---
 
 ## Step 2H: 最终确认 + 同步
@@ -347,6 +352,9 @@ cd <skill_dir> && .venv/bin/python -u -m lib.sync_anki \
   --audio-dir <AUDIO_DIR_FROM_STEP_2G> \
   -v
 ```
+
+> 若未传入 `--audio-dir`（跳过 Step 2G 或路径丢失），Step 2H 将在用户确认后
+> 现场生成音频。此时用户需等待音频生成完成——通常每词 2-3 秒。
 
 `<b>` 标签在 `build_note_entry()` 中根据 `target_offset` 拼接。
 

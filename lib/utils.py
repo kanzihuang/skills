@@ -167,13 +167,20 @@ def _build_ssml(text: str, ipa: str | None = None, voice: str = "en-US-JennyNeur
     return escaped
 
 
-async def _edge_tts_gen(text_or_ssml: str, voice: str) -> bytes:
+async def _edge_tts_gen(
+    text_or_ssml: str, voice: str,
+    connect_timeout: int = 10, receive_timeout: int = 60,
+) -> bytes:
     import edge_tts
 
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp_path = tmp.name
     try:
-        communicate = edge_tts.Communicate(text_or_ssml, voice)
+        communicate = edge_tts.Communicate(
+            text_or_ssml, voice,
+            connect_timeout=connect_timeout,
+            receive_timeout=receive_timeout,
+        )
         await communicate.save(tmp_path)
         with open(tmp_path, "rb") as f:
             return f.read()
@@ -182,7 +189,8 @@ async def _edge_tts_gen(text_or_ssml: str, voice: str) -> bytes:
 
 
 def edge_tts_bytes(
-    text: str, ipa: str | None = None, voice: str = "en-US-JennyNeural"
+    text: str, ipa: str | None = None, voice: str = "en-US-JennyNeural",
+    timeout: int = 60,
 ) -> bytes | None:
     """Generate TTS audio bytes using Edge TTS.
 
@@ -191,6 +199,8 @@ def edge_tts_bytes(
     see _build_ssml docstring for details).
     Retries on transient failure (up to EDGE_TTS_MAX_RETRIES extra attempts).
     Returns None on persistent failure.
+
+    *timeout* is passed as receive_timeout to edge_tts.Communicate.
     """
     import asyncio
     import threading
@@ -205,7 +215,9 @@ def edge_tts_bytes(
     ssml = _build_ssml(text, ipa, voice)
     for attempt in range(EDGE_TTS_MAX_RETRIES + 1):
         try:
-            result = _tl.loop.run_until_complete(_edge_tts_gen(ssml, voice))
+            result = _tl.loop.run_until_complete(
+                _edge_tts_gen(ssml, voice, receive_timeout=timeout),
+            )
             if result:
                 return result
         except Exception:

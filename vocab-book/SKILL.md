@@ -203,11 +203,12 @@ cat /tmp/<safe_title>-*-full.txt | \
 
 关键路径（`<skill_dir>` 内 `lib/` 前缀）：
 - `<skill_dir>/lib/scripts/match_sentences.py` — 句子匹配 + per-sentence spaCy POS 分析 + (lemma,pos) 分组 + cmudict IPA + 碎片自动合并 + `smart_truncate()` 自动截断（Step 2A，一站式机械分析）
+- **Step 2A-post**: Anki 去重 — `match_sentences.py` 产出后立即以 `(sentence, word)` 键机械去重，标记 `_already_in_anki`（见 `SHARED_WORKFLOW.md` Step 2A-post）
 - **Step 2B**: Claude 审核截断结果 + 拒绝碎片句 + OCR 标点修正（1 agent，**不可绕过**，`smart_truncate()` 已在 Step 2A 中完成，目标词由 `target_offset` 定位）
 - `<skill_dir>/lib/scripts/translate_deepl.py` — DeepL 翻译（Step 2C）
 - **Step 2E**: 生成释义 + 补 cmudict 未覆盖 IPA + 异读词投票（Claude，N agents 并行，≤25 词/agent，**不碰 lemma**）
 - **Step 2F**: 内容验证 — POS 对齐 + 释义准确 + 翻译一致性（Claude，1 agent，**不可绕过**）
-- **Step 2A-post**: Anki 去重 — `match_sentences.py` 产出后立即以 `(sentence, word)` 键机械去重，标记 `_already_in_anki`（见 `SHARED_WORKFLOW.md` Step 2A-post）
+- **Step 2F.5**: 重复检测 — Step 2F 的 POS 修正可能产生 `(lemma, pos)` 碰撞，在进入 Step 2G 前运行检查（见 `SHARED_WORKFLOW.md` Step 2F.5）
 - `<skill_dir>/lib/sync_anki.py` — 音频预下载 + 同步脚本（Step 2G + Step 2H）。此脚本使用相对导入，仅能以模块方式运行：`cd <skill_dir> && .venv/bin/python -m lib.sync_anki <args>`。同步时根据 `target_offset` 拼接 `<b>` 标签。prefetch 模式（Step 2G）会跳过 `_already_in_anki` 标记的已知词汇，仅生成新词音频
 
 **全文模式特有**：

@@ -562,7 +562,7 @@ class TestAudioFailureBlocks:
         word_audio_bytes = [b"fake audio"]  # always succeed
         sentence_audio_bytes = [None]  # fail
 
-        def fake_edge_tts_bytes(text, ipa=None):
+        def fake_edge_tts_bytes(text, ipa=None, **kwargs):
             if ipa:
                 return word_audio_bytes.pop(0)
             return sentence_audio_bytes.pop(0)

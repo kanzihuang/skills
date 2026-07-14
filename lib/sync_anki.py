@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
         "--word-timeout",
         type=int,
         default=WORD_TIMEOUT,
-        help=f"Deprecated. API calls have built-in timeouts. (default: {WORD_TIMEOUT})",
+        help=f"Max seconds per word for TTS audio generation (default: {WORD_TIMEOUT})",
     )
     parser.add_argument(
         "--prefetch",
@@ -227,6 +227,7 @@ def _migrate_misplaced_cards(
     ac: "AnkiConnect",
     parent_deck: str,
     bands: list[dict],
+    existing_map: dict | None = None,
 ) -> int:
     """Migrate ALL cards under parent to correct COCA sub-deck.
 
@@ -234,7 +235,10 @@ def _migrate_misplaced_cards(
     and moves cards that are in the wrong deck.  Returns count of
     migrated cards.
     """
-    existing = ac.get_word_id_map_with_deck(parent_deck)
+    if existing_map is not None:
+        existing = existing_map
+    else:
+        existing = ac.get_word_id_map_with_deck(parent_deck)
     if not existing:
         return 0
 
@@ -267,8 +271,8 @@ def _migrate_misplaced_cards(
         target_prefix = level_to_target.get(coca_str)
         if not target_prefix:
             continue
-        # Check if current deck starts with target prefix
-        if current_deck.startswith(target_prefix):
+        # Check if current deck exactly matches target deck
+        if current_deck == target_prefix:
             continue  # Already in correct deck
 
         # Migrate: move cards to correct sub-deck
@@ -309,6 +313,7 @@ def _process_one_word(
     w: dict,
     book_id: str,
     no_audio: bool,
+    word_timeout: int = WORD_TIMEOUT,
 ) -> tuple[dict, list[tuple[str, bytes]], str]:
     """Generate audio and build a note for a single word.
 
@@ -336,8 +341,9 @@ def _process_one_word(
         # Word audio: Edge TTS on lemma (with IPA if available).
         #   Include book_id + POS — same lemma different POS (e.g.
         #   astray ADJ vs ADV) must not share audio filenames.
+        tts_timeout = max(word_timeout // 2, 10)
         if ipa:
-            tts = edge_tts_bytes(lemma, ipa=ipa)
+            tts = edge_tts_bytes(lemma, ipa=ipa, timeout=tts_timeout)
             if tts:
                 audio_uploads.append((f"{safe}{pos_part}_{book_id}_word.mp3", tts))
             else:
@@ -350,7 +356,7 @@ def _process_one_word(
         #   Include book_id + POS in filename — different POS have
         #   different sentences and must not collide.
         clean = re.sub(r"<[^>]+>", "", w["sentence"])
-        sent_tts = edge_tts_bytes(clean)
+        sent_tts = edge_tts_bytes(clean, timeout=tts_timeout)
         if sent_tts:
             audio_uploads.append((f"{safe}{pos_part}_{book_id}_sent.mp3", sent_tts))
         else:
@@ -596,7 +602,7 @@ def sync(
     migration_count = 0
     if bands and not prefetch and not dry_run:
         print(f"\nChecking for misplaced cards...")
-        migration_count = _migrate_misplaced_cards(ac, deck_name, bands)
+        migration_count = _migrate_misplaced_cards(ac, deck_name, bands, existing_map)
         if migration_count:
             print(f"  Migrated {migration_count} card(s) to correct sub-decks")
 
@@ -659,8 +665,20 @@ def sync(
                 word_target_deck.get(note.get("_idx", i), deck_name),
             )
             notes_to_add.append(note)
-        # Load audio files from disk
+        # Load audio files from disk — filter against new_word_ids.
+        # Audio filenames: {safe_lemma}_{POS}_{book_id}_word.mp3 or _sent.mp3
+        # WordId = {safe_filename(lemma)}_{POS}_{book_id}, same as filename prefix.
         for filename, filepath in manifest["audio_files"].items():
+            if filename.endswith("_word.mp3"):
+                wid = filename[:-len("_word.mp3")]
+            elif filename.endswith("_sent.mp3"):
+                wid = filename[:-len("_sent.mp3")]
+            else:
+                continue  # unknown pattern, skip
+            if wid not in new_word_ids:
+                if verbose:
+                    print(f"  SKIP audio {filename} (stale — WordId not in new_words)")
+                continue
             if os.path.isfile(filepath):
                 with open(filepath, "rb") as af:
                     audio_uploads.append((filename, af.read()))
@@ -680,7 +698,7 @@ def sync(
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {
-                executor.submit(_process_one_word, w, namespace_id, no_audio): (idx, w)
+                executor.submit(_process_one_word, w, namespace_id, no_audio, word_timeout): (idx, w)
                 for idx, w in enumerate(new_words)
             }
 
@@ -692,7 +710,7 @@ def sync(
                 completed += 1
 
                 try:
-                    note, word_audio, final_ipa = future.result()
+                    note, word_audio, final_ipa = future.result(timeout=word_timeout)
                     note["deckName"] = word_target_deck.get(idx, deck_name)
                     notes_to_add.append(note)
                     audio_uploads.extend(word_audio)
