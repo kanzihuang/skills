@@ -196,19 +196,21 @@ class MockAnkiConnect:
         return result
 
     def get_word_id_map_with_deck(self, parent_deck: str):
-        """Return {WordId: (note_id, deck_name)} across all sub-decks."""
+        """Return {WordId: (note_id, deck_name, coca_level)} across all sub-decks."""
         result = {}
         for deck_name, note_ids in self.decks.items():
             if deck_name == parent_deck or deck_name.startswith(parent_deck + "::"):
                 for nid in note_ids:
                     if nid in self.notes:
-                        wid = (self.notes[nid].get("fields", {})
-                               .get("WordId", {}).get("value", ""))
+                        fields = self.notes[nid].get("fields", {})
+                        wid = fields.get("WordId", {}).get("value", "")
                         if wid:
-                            result[wid] = (nid, deck_name)
+                            coca = fields.get("CocaLevel", {}).get("value", "")
+                            result[wid] = (nid, deck_name, coca)
         return result
 
-    def ensure_deck_and_model(self, deck_name: str, model_name: str = ""):
+    def ensure_deck_and_model(self, deck_name: str, model_name: str = "",
+                               skip_model_check: bool = False):
         if deck_name not in self.decks:
             self.decks[deck_name] = []
         return True

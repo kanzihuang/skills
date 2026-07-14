@@ -167,7 +167,7 @@ def _get_target_level_for_word(w: dict) -> int | None:
 
 def _compute_final_level_counts(
     words: list[dict],
-    existing_map: dict[str, tuple[int, str]],
+    existing_map: dict[str, tuple[int, str, str]],
     namespace_id: str,
     bands: list[dict],
 ) -> dict[int, int]:
@@ -231,9 +231,12 @@ def _migrate_misplaced_cards(
 ) -> int:
     """Migrate ALL cards under parent to correct COCA sub-deck.
 
-    Reads CocaLevel field from each card, determines target sub-deck,
-    and moves cards that are in the wrong deck.  Returns count of
-    migrated cards.
+    When ``existing_map`` is provided (from ``get_word_id_map_with_deck``),
+    CocaLevel is read from the in-memory tuple — no extra API calls needed.
+    When called standalone, fetches notesInfo once and captures both
+    CocaLevel and card IDs in a single pass.
+
+    Returns count of migrated cards.
     """
     if existing_map is not None:
         existing = existing_map
@@ -249,22 +252,36 @@ def _migrate_misplaced_cards(
             prefix = f"{parent_deck}::{band['name']}"
             level_to_target[str(lvl)] = prefix
 
-    # Get full note info to read CocaLevel
-    all_note_ids = list({nid for nid, _deck in existing.values()})
-    if not all_note_ids:
-        return 0
-
-    # Fetch CocaLevel from notesInfo
-    info = ac.notes_info(all_note_ids)
+    # Extract CocaLevel and card IDs from existing_map when available
+    # (get_word_id_map_with_deck now returns (note_id, deck, coca_level)).
+    # Check whether the tuple has 3 elements (new format) or 2 (legacy).
     note_coca: dict[int, str] = {}
-    for n in info:
-        coca = (n.get("fields", {})
-                 .get("CocaLevel", {})
-                 .get("value", ""))
-        note_coca[n["noteId"]] = coca
+    note_cards: dict[int, list[int]] = {}
+    coca_from_map = False
+    for _wid, tup in existing.items():
+        nid = tup[0]
+        if len(tup) >= 3 and tup[2]:
+            note_coca[nid] = tup[2]
+            coca_from_map = True
+
+    if not coca_from_map:
+        # Standalone call — fetch notesInfo once to read CocaLevel + card IDs.
+        # Batch to avoid oversized responses (same 50-per-batch as get_word_id_map_with_deck).
+        all_note_ids = list({tup[0] for tup in existing.values()})
+        BATCH = 50
+        for i in range(0, len(all_note_ids), BATCH):
+            for n in ac.notes_info(all_note_ids[i:i + BATCH]):
+                nid = n["noteId"]
+                coca = (n.get("fields", {})
+                         .get("CocaLevel", {})
+                         .get("value", ""))
+                note_coca[nid] = coca
+                note_cards[nid] = n.get("cards", [])
 
     migrated = 0
-    for word_id, (note_id, current_deck) in existing.items():
+    for word_id, tup in existing.items():
+        note_id = tup[0]
+        current_deck = tup[1]
         coca_str = note_coca.get(note_id, "")
         if not coca_str:
             continue
@@ -275,9 +292,12 @@ def _migrate_misplaced_cards(
         if current_deck == target_prefix:
             continue  # Already in correct deck
 
-        # Migrate: move cards to correct sub-deck
+        # Migrate: move cards to correct sub-deck.
+        # Use in-memory card IDs when available; fall back to API query.
         try:
-            card_ids = ac.get_cards_of_notes([note_id])
+            card_ids = note_cards.get(note_id) if note_cards else None
+            if not card_ids:
+                card_ids = ac.get_cards_of_notes([note_id])
             if card_ids:
                 ac.change_deck(card_ids, target_prefix)
                 migrated += 1
@@ -453,6 +473,7 @@ def sync(
     audio_dir: str | None = None,
     no_direct_media: bool = False,
     no_ankiweb_sync: bool = False,
+    cli_deck: str | None = None,
 ) -> dict:
     """Run the full sync workflow. Returns a summary dict."""
     words = data["words"]
@@ -468,7 +489,7 @@ def sync(
 
     # 1. Connect to Anki (skip for prefetch — audio-only mode)
     ac = None
-    existing_map: dict[str, tuple[int, str]] = {}
+    existing_map: dict[str, tuple[int, str, str]] = {}
 
     if not prefetch:
         print('Connecting to AnkiConnect...')
@@ -480,8 +501,12 @@ def sync(
             print(f"FATAL: {e}", file=sys.stderr)
             sys.exit(1)
 
-        # Auto-correct deck name by bookId
-        if namespace_id:
+        # Auto-correct deck name by bookId.
+        # Skip when deck name was explicitly provided (--deck CLI or JSON
+        # deck_name field) — the user / prior sync already knows the correct
+        # name; the 3-API-call lookup is unnecessary.
+        deck_name_trusted = bool(cli_deck or data.get("deck_name", "").strip())
+        if namespace_id and not deck_name_trusted:
             found_deck, count = ac.find_deck_for_book_id(namespace_id)
             if found_deck and found_deck != deck_name:
                 resolved = found_deck
@@ -596,7 +621,7 @@ def sync(
     if bands and not prefetch and not dry_run:
         for band in bands:
             sub_deck = _build_subdeck_name(deck_name, band)
-            ac.ensure_deck_and_model(sub_deck, MODEL_NAME)
+            ac.ensure_deck_and_model(sub_deck, MODEL_NAME, skip_model_check=True)
 
     # 8. Migrate misplaced cards
     migration_count = 0
@@ -1081,6 +1106,7 @@ def main() -> None:
             audio_dir=args.audio_dir,
             no_direct_media=args.no_direct_media,
             no_ankiweb_sync=args.no_ankiweb_sync,
+            cli_deck=args.deck,
         )
         if result.get("error"):
             sys.exit(1)

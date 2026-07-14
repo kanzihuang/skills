@@ -242,7 +242,7 @@ class TestGetWordIdMapWithDeck:
         assert result == {}
 
     def test_returns_word_id_to_note_and_deck(self, mock_requests):
-        """Returns {WordId: (note_id, deck_name)} across sub-decks."""
+        """Returns {WordId: (note_id, deck_name, coca_level)} across sub-decks."""
         mock_requests.json.side_effect = [
             # findNotes → 2 notes
             {"result": [1001, 1002], "error": None},
@@ -251,12 +251,18 @@ class TestGetWordIdMapWithDeck:
                 {
                     "noteId": 1001,
                     "cards": [2001, 2002],
-                    "fields": {"WordId": {"value": "ponder_VERB_a1b2c3d4e5f6"}},
+                    "fields": {
+                        "WordId": {"value": "ponder_VERB_a1b2c3d4e5f6"},
+                        "CocaLevel": {"value": "4"},
+                    },
                 },
                 {
                     "noteId": 1002,
                     "cards": [2003],
-                    "fields": {"WordId": {"value": "astray_ADJ_a1b2c3d4e5f6"}},
+                    "fields": {
+                        "WordId": {"value": "astray_ADJ_a1b2c3d4e5f6"},
+                        "CocaLevel": {"value": "5"},
+                    },
                 },
             ], "error": None},
             # cardsInfo → deck names for each card
@@ -269,8 +275,8 @@ class TestGetWordIdMapWithDeck:
         ac = AnkiConnect()
         result = ac.get_word_id_map_with_deck("Parent")
         assert result == {
-            "ponder_VERB_a1b2c3d4e5f6": (1001, "Parent::COCA 4 (12 words)"),
-            "astray_ADJ_a1b2c3d4e5f6": (1002, "Parent::COCA 5 (3 words)"),
+            "ponder_VERB_a1b2c3d4e5f6": (1001, "Parent::COCA 4 (12 words)", "4"),
+            "astray_ADJ_a1b2c3d4e5f6": (1002, "Parent::COCA 5 (3 words)", "5"),
         }
 
     def test_skips_notes_without_word_id(self, mock_requests):

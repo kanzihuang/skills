@@ -329,15 +329,24 @@ class AnkiConnect:
         """
         return self._call("sync")
 
-    def ensure_deck_and_model(self, deck_name: str, model_name: str) -> bool:
+    def ensure_deck_and_model(self, deck_name: str, model_name: str,
+                               skip_model_check: bool = False) -> bool:
         """Verify that the deck exists and the model is available.
 
         Creates the deck if missing. Ensures CocaLevel field exists
         on the model for card migration support. Returns True if
         model is available.
+
+        When *skip_model_check* is True (e.g. for sub-decks after the
+        parent deck has already been validated), only ``createDeck`` is
+        called — the model/field checks are skipped to avoid redundant
+        global queries.
         """
         # Create deck (idempotent)
         self.create_deck(deck_name)
+
+        if skip_model_check:
+            return True
 
         # Check model exists
         models = self.list_models()
@@ -432,15 +441,16 @@ class AnkiConnect:
 
     def get_word_id_map_with_deck(
         self, parent_deck: str
-    ) -> dict[str, tuple[int, str]]:
-        """Return {WordId: (note_id, current_deck)} for ALL notes under a parent.
+    ) -> dict[str, tuple[int, str, str]]:
+        """Return {WordId: (note_id, current_deck, coca_level)} for ALL notes under a parent.
 
         Uses recursive deck search ``deck:"parent"`` which inherently
-        includes all sub-decks.  Returns both the note_id and the
-        *current* deck name for each card, enabling:
+        includes all sub-decks.  Returns (note_id, current_deck, coca_level)
+        for each card, enabling:
 
           - Parent-level dedup (single lookup covers all sub-decks)
           - Card migration detection (compare current_deck vs target_deck)
+          - In-memory CocaLevel lookup (avoids re-fetching notesInfo)
 
         Batches notesInfo calls (50 notes per batch) to avoid exceeding
         AnkiConnect's response buffer (~11MB for 300+ cards).
@@ -457,13 +467,21 @@ class AnkiConnect:
         for i in range(0, len(note_ids), BATCH):
             info.extend(self.notes_info(note_ids[i:i + BATCH]))
 
-        # Collect all card IDs then look up deck names in one batch
+        # Collect all card IDs then look up deck names in one batch.
+        # Also capture note metadata needed by callers:
+        #   - cards: card IDs per note (for migration)
+        #   - coca_level: CocaLevel field (avoids re-fetching notesInfo)
         note_to_cards: dict[int, list[int]] = {}
+        note_coca: dict[int, str] = {}
         all_card_ids: list[int] = []
         for n in info:
             cards = n.get("cards", [])
             note_to_cards[n["noteId"]] = cards
             all_card_ids.extend(cards)
+            coca = (n.get("fields", {})
+                     .get("CocaLevel", {})
+                     .get("value", ""))
+            note_coca[n["noteId"]] = coca
 
         if not all_card_ids:
             return {}
@@ -477,7 +495,7 @@ class AnkiConnect:
                 if nid not in note_deck:
                     note_deck[nid] = card.get("deckName", parent_deck)
 
-        result: dict[str, tuple[int, str]] = {}
+        result: dict[str, tuple[int, str, str]] = {}
         for n in info:
             word_id = (n.get("fields", {})
                         .get("WordId", {})
@@ -486,7 +504,8 @@ class AnkiConnect:
                 continue
             nid = n["noteId"]
             deck_name = note_deck.get(nid, parent_deck)
-            result[word_id] = (nid, deck_name)
+            coca_level = note_coca.get(nid, "")
+            result[word_id] = (nid, deck_name, coca_level)
 
         return result
 
