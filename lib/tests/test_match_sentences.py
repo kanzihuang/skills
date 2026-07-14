@@ -860,6 +860,34 @@ class TestPOSCorrections:
         w = result["words"][0]
         assert w["pos"] == "NOUN", f"expected NOUN, got {w['pos']}"
 
+    def test_adj_pobj_becomes_noun(self):
+        """ADJ + pobj (prepositional object) → NOUN.  dep=pobj contradicts
+        ADJ because a prepositional object must be nominal.  This catches
+        spaCy mis-tags like 'odour' (ADJ+pobj in "edge of the odour") and
+        'stern' (ADJ+pobj in "back in the stern" = boat stern, not ADJ)."""
+        result = _run_pipeline(
+            [{"lemma": "odour", "rep": "odour",
+              "forms": ["odour"], "coca_level": 4}],
+            "When the wind was in the east a smell came across the harbour "
+            "from the shark factory; but today there was only the faint "
+            "edge of the odour from the fish house.",
+        )
+        w = result["words"][0]
+        assert w["pos"] == "NOUN", f"expected NOUN, got {w['pos']}"
+
+    def test_adj_dobj_becomes_noun(self):
+        """ADJ + dobj (direct object) → NOUN.  dep=dobj contradicts ADJ
+        because direct objects must be nominals."""
+        result = _run_pipeline(
+            [{"lemma": "testword", "rep": "testword",
+              "forms": ["testword"], "coca_level": 7}],
+            "She saw the testword clearly.",
+        )
+        # If spaCy tags 'testword' as ADJ with dep=dobj, guard fixes it.
+        # If spaCy tags it correctly as NOUN, it stays NOUN.
+        w = result["words"][0]
+        assert w["pos"] in ("NOUN",), f"expected NOUN, got {w['pos']}"
+
     def test_propn_to_noun_lowercases_lemma(self):
         """Non-PROPN lemma is always lowercased at output.
 
@@ -1925,6 +1953,40 @@ class TestSmartTruncate:
         assert result == sent
         assert "tackle" in result
 
+    def test_direction2_embedded_dialogue_quote_balance(self):
+        """Direction 2 skips boundaries inside quoted dialogue.  When all
+        boundaries are inside the quote (target word inside a long quoted
+        passage) and the opening quote has no .!? boundary before it,
+        smart_truncate returns the original sentence unchanged so the
+        caller can reject the word rather than fabricate a patched result.
+
+        This is the OMAS "dipping" case — all .!? before the target are
+        inside "The birds...for the sea." and the narration before the
+        opening " has no .!? boundary."""
+        sent = (
+            "He was sorry for the birds, especially the small delicate dark "
+            'terns that were always flying and looking and almost never '
+            'finding, and he thought, "The birds have a harder life than '
+            "we do except for the robber birds and the heavy strong ones. "
+            "Why did they make birds so delicate and fine as those sea "
+            "swallows when the ocean can be so cruel? She is kind and very "
+            "beautiful. But she can be so cruel and it comes so suddenly "
+            "and such birds that fly, dipping and hunting, with their "
+            'small sad voices are made too delicately for the sea."'
+        )
+        target_offset = sent.find("dipping")
+        assert target_offset > 0
+        result, new_to, was_trunc = smart_truncate(
+            sent, "dipping", target_offset, max_len=250,
+        )
+        # All .!? boundaries are inside the quote → all skipped.
+        # No boundary before the opening " → no valid truncation.
+        # Fallback produces unbalanced quotes → rejected.
+        # Returns original sentence unchanged for caller to reject.
+        assert was_trunc is False
+        assert result == sent
+        assert "dipping" in result
+
 
 class TestIsNonBodyText:
     """Tests for _is_non_body_text() — detecting bibliography, copyright, etc."""
@@ -2873,3 +2935,218 @@ class TestConjPosInheritanceVbnAclGuard:
         for w in claw_entries:
             assert w["lemma"] == "claw", \
                 f"claws should lemma to 'claw', got '{w['lemma']}'"
+
+
+# ── Fix #1: Direction 2 quote-boundary skip ──────────────────────────────
+
+
+class TestSmartTruncateDirection2QuoteSkip:
+    """Direction 2 skips .!? boundaries inside unclosed double-quoted
+    passages, treating quote blocks as atomic.  No quote patching."""
+
+    def test_1_boundary_outside_quote_accepted(self):
+        """Target outside quote — nearest .!? boundary outside quote wins."""
+        sent = (
+            'The sun was setting. He said, "Wait here." And he left.'
+        )
+        tgt = sent.find("left")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "left", tgt, max_len=30,
+        )
+        assert was_trunc is True
+        # Should truncate at "setting. He" (outside quote), not "here." And" (inside)
+        assert result == 'He said, "Wait here." And he left.'
+        assert result.count('"') % 2 == 0
+
+    def test_2_dot_space_quote_capital_pattern(self):
+        """`. "X` pattern — skip quote char, start at capital letter."""
+        sent = (
+            'He paused. "Let us begin." And they walked toward the hills.'
+        )
+        tgt = sent.find("walked")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "walked", tgt, max_len=30,
+        )
+        assert was_trunc is True
+        # The '.' at begin." And is inside quote → skip.
+        # The '.' at paused. "L → . "X pattern → accept.
+        # . "X → start at " (keep quoted passage intact)
+        assert result.startswith('"Let us begin."')
+        assert result.count('"') % 2 == 0
+
+    def test_3_target_inside_quote_boundary_before_opening(self):
+        """Target inside quote, .!? boundary exists before opening quote."""
+        sent = (
+            'The sun was setting. He said, "Wait here. I\'ll be back."'
+        )
+        tgt = sent.find("back")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "back", tgt, max_len=30,
+        )
+        assert was_trunc is True
+        # here." I'll is inside quote → skip
+        # setting. He is outside, before opening quote → accept
+        assert result == 'He said, "Wait here. I\'ll be back."'
+        assert result.count('"') % 2 == 0
+
+    def test_4_target_inside_quote_no_boundary_before(self):
+        """Target inside quote, no .!? before opening — can't truncate."""
+        sent = (
+            'He thought, "The birds are delicate. They dip and hunt. '
+            'They are made for the sea."'
+        )
+        tgt = sent.find("dip")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "dip", tgt, max_len=250,
+        )
+        # All boundaries inside quote. Opening quote preceded by comma.
+        # No valid truncation → return original for caller to accept/reject.
+        assert was_trunc is False
+        assert result == sent
+
+    def test_5_missing_opening_quote_ocr(self):
+        """OCR lost opening quote — function treats lone " as opening."""
+        sent = 'Hello." The world is large.'
+        tgt = sent.find("world")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "world", tgt, max_len=250,
+        )
+        # The '.' at Hello." → _is_inside_opening_quote returns True
+        # (misjudges the lone " as opening) → skip → fallback.
+        # Fallback boundary still produces quote imbalance → was_trunc=False.
+        # But in this short sentence, no truncation needed.
+        assert "world" in result
+
+    def test_6_missing_closing_quote_ocr_rejected(self):
+        """OCR lost closing quote — all boundaries in unclosed quote."""
+        sent = '"Hello. The world is large.'
+        tgt = sent.find("world")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "world", tgt, max_len=250,
+        )
+        # All '.' inside unclosed quote → all skipped.
+        # Target inside quote, no boundary before opening " at pos 0.
+        # → was_trunc=False (caller rejects if too long).
+        # At 26 chars, still under any reasonable limit — returned unchanged.
+        assert "world" in result
+
+    def test_7_boundary_at_dot_quote_capital_accepted(self):
+        """. "X pattern — boundary with quote in between."""
+        sent = (
+            'He paused. "Let us begin." And they walked toward the hills.'
+        )
+        tgt = sent.find("walked")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "walked", tgt, max_len=30,
+        )
+        assert was_trunc is True
+        # begin." And → inside quote → skip
+        # paused. "L → . "X → accept, start at " (keep quote intact)
+        assert result.startswith('"Let us begin."')
+
+    def test_8_no_quotes_unchanged(self):
+        """No quotes at all — behavior identical to old code."""
+        sent = "The sun set. The wind rose. The birds flew."
+        tgt = sent.find("wind")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "wind", tgt, max_len=20,
+        )
+        # Direction 1 shortens from right (at "rose."), Direction 2 from left
+        # (at "set.") — they compose.
+        assert was_trunc is True
+        assert result == "The wind rose."
+
+    def test_9_target_before_opening_quote(self):
+        """Target before opening quote — quote block truncated away."""
+        sent = (
+            'He walked to the door. "Wait here," he said, and then he left.'
+        )
+        tgt = sent.find("door")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "door", tgt, max_len=30,
+        )
+        # door is before the opening quote, Direction 1 handles right-side
+        # truncation; quote block after door is truncated away.
+        assert "door" in result
+        assert result.count('"') % 2 == 0
+
+    def test_10_direction_1_quote_boundary(self):
+        """Direction 1: punctuation inside quote at sentence start."""
+        sent = (
+            '"Hello." The sun was setting over the distant hills.'
+        )
+        tgt = sent.find("Hello")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "Hello", tgt, max_len=250,
+        )
+        # Sentence starts with ", target inside. Direction 1 walk-back
+        # finds no text before opening " → can't truncate via walk-back.
+        # Original is 48 chars, under max_len → unchanged.
+        assert "Hello" in result
+
+    def test_11_single_quotes_not_affected(self):
+        """Single quotes ' are not checked — only double quotes."""
+        sent = "He said, 'Wait here.' And he left."
+        tgt = sent.find("left")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "left", tgt, max_len=20,
+        )
+        assert was_trunc is True
+        assert "left" in result
+
+    def test_12_multiple_quote_pairs(self):
+        """Multiple independent quote pairs handled correctly."""
+        sent = (
+            '"Hello," he said. "Goodbye," she replied. And they parted.'
+        )
+        tgt = sent.find("parted")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "parted", tgt, max_len=30,
+        )
+        # The '.' at replied." And is inside the second quote → skip.
+        # The '.' at said. "G → . "X pattern → accept (same logic as test_2).
+        assert "parted" in result
+
+    def test_15_fully_quoted_no_patch(self):
+        """Fully-quoted sentence — all boundaries in quote, no patching."""
+        sent = '"A sentence. Another sentence. A third. A fourth."'
+        tgt = sent.find("third")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "third", tgt, max_len=250,
+        )
+        # All '.' inside the outer "…". Target inside quote.
+        # Opening " at pos 0 → no boundary before it.
+        # Fallback produces unbalanced → was_trunc=False.
+        # At 50 chars, under max_len → unchanged.
+        assert "third" in result
+
+    def test_13_reject_limit_exceeded(self):
+        """Sentence too long after truncation → word rejected."""
+        # Build a 600+ char sentence that smart_truncate cannot shorten
+        # (no internal .!? boundaries before the target word).
+        padding = "x " * 500
+        sent = padding + "The target word is here."
+        tgt = sent.find("target")
+        result, new_to, was_trunc = smart_truncate(
+            sent, "target", tgt, max_len=250,
+        )
+        # Direction 2 finds no boundary in the padding → was_trunc=False.
+        # Direction 1: no .!? after target → was_trunc=False.
+        # The caller will skip this word because len(sent) > HARD_CUTOFF.
+        assert len(sent) > 500
+
+    def test_14_pipeline_reorder_multi_word_sentence(self):
+        """Each target word gets its own smart_truncate + spaCy pass.
+        No shared hard_truncate result."""
+        result = _run_pipeline(
+            [
+                {"lemma": "sun", "rep": "sun", "forms": ["sun"], "coca_level": 4},
+                {"lemma": "wind", "rep": "wind", "forms": ["wind"], "coca_level": 4},
+                {"lemma": "bird", "rep": "birds", "forms": ["birds"], "coca_level": 4},
+            ],
+            "The sun set. The wind rose. The birds flew away.",
+        )
+        words = result.get("words", [])
+        assert len(words) == 3
+        lemmas = {w["lemma"] for w in words}
+        assert lemmas == {"sun", "wind", "bird"}

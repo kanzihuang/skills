@@ -356,6 +356,14 @@ Guard is conservative: `dep=dobj` is the strongest nominal dependency signal.  T
 
 Symptom: common nouns tagged ADV in match_sentences output. Check: `grep '"pos": "ADV"'` for words that don't end in -ly and appear as direct objects.
 
+### ADJ→NOUN guard: dep=pobj/dobj contradicts ADJ
+
+**Change (2026-07-14)**: Added `if pos == "ADJ" and token.dep_ in ("pobj", "dobj"): pos = "NOUN"` POS correction.  A prepositional object (pobj) or direct object (dobj) must be nominal — an adjective with these dependencies is always a spaCy mis-tag.  Covers "odour" (ADJ+pobj in "edge of the odour") and "stern" (ADJ+pobj in "back in the stern" = boat stern, not the adjective "strict").
+
+Same logic as ADV→NOUN dobj guard above.  `dep=pobj` and `dep=dobj` are exclusively nominal dependency relations in Universal Dependencies — spaCy never produces legitimate ADJ+pobj or ADJ+dobj combinations.
+
+Symptom: common nouns tagged ADJ with dep=pobj or dep=dobj. Check: `grep '"pos": "ADJ"'` in match_sentences output for entries with `"dep": "pobj"` or `"dep": "dobj"`.
+
 ### --start-offset -1 fix: disable preamble detection without text[-1:] slicing
 
 **Change (2026-07-08)**: The `--start-offset` argument's help text says "pass -1 to disable preamble detection", but the code only had `if start_offset == 0:` for preamble detection.  Passing `-1` caused `text[-1:]` slicing (last character only), producing 0 sentences.  Added `elif start_offset < 0: start_offset = 0` branch.
@@ -897,23 +905,28 @@ Symptom: "Already in deck: 0" even when re-running with existing cards;
 Check: run with ``--dry-run`` on a deck with existing cards → "Already in deck"
 should be non-zero.
 
-### smart_truncate Direction 2 preserves opening quote of quoted speech
+### smart_truncate 流水线顺序调整（2026-07-14）
 
-**Change (2026-07-10)**: When a quoted speech passage spans multiple
-sentences inside one set of ``""``, PySBD correctly preserves it as a single
-sentence.  ``smart_truncate`` Direction 2 (beginning-truncation) truncates
-from the left, but slices off the opening ``"`` along with the preceding
-sentences.  ``_cleanup_unclosed_quote`` detects the odd quote count but its
-last-quote-is-unclosed heuristic finds nothing after the final ``"`` →
-returns unchanged.  The opening quote is silently lost.
+smart_truncate 现在在 spaCy 之前运行。目标词位置通过 ``re.search`` 的
+单词边界匹配确定，不需要 spaCy。spaCy 只处理 smart_truncate
+截短后的文本（通常 ≤250 字符）。
 
-**Fix:** After Direction 2 truncation + ``_cleanup_unclosed_quote``, if the
-original sentence starts with ``"`` and the truncated result does not,
-prefix ``"`` and increment ``target_offset`` by 1.
+截短后仍超过 HARD_CUTOFF（500 字符）的句子直接拒绝收录。
 
-Symptom: sentence has closing quotes and dialogue attribution (``," xxx
-said``) but does not start with ``"``.  Check: ``grep '," '`` in JSON
-output for sentences not starting with ``"``.
+不再需要 ``hard_truncate`` —— ``smart_truncate`` 自己保证截短结果在
+合理范围内，spaCy 不会收到超长输入。
+
+### smart_truncate Direction 2 跳过引号内边界（2026-07-14）
+
+Direction 2 现在在扫描句边界时，调用 ``_is_inside_opening_quote``
+跳过位于未闭合引号内部的 ``.!?`` 边界。引号内容视为原子——截断从不发生在
+引号内部。截断后不补引号。
+
+同时补全了 ``. "X`` 边界模式（句号+空格+引号+大写字母），以及单引号 ``'``
+的处理。之前 ``. "X`` 中空格后的 ``"`` 被当作字母比较 ``.isupper()``，
+导致合法句边界被跳过。
+
+所有边界都在引号内且无法干净截断时，返回原句让调用方根据长度阈值决定是否拒绝。
 
 ### smart_truncate Direction 1 strips closing quote of truncated dialogue
 

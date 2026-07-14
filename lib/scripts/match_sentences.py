@@ -539,17 +539,23 @@ def smart_truncate(
     # the target word.  Scanning left gives the closest boundary = most
     # target-relevant context.
     best_start: int | None = None
+    fallback_start: int | None = None
     for i in range(target_offset - 1, -1, -1):
         if sentence[i] not in '.!?':
             continue
         if i + 1 >= len(sentence):
             continue
         nxt = sentence[i + 1]
-        if nxt == ' ' and i + 2 < len(sentence) and sentence[i + 2].isupper():
-            new_start = i + 2
+        if nxt == ' ' and i + 2 < len(sentence):
+            if sentence[i + 2].isupper():
+                new_start = i + 2
+            elif sentence[i + 2] in ('"', "'") and i + 3 < len(sentence) and sentence[i + 3].isupper():
+                new_start = i + 2   # . "X or . 'X → start at quote, keep passage intact
+            else:
+                continue
         elif nxt.isupper():
             new_start = i + 1
-        elif nxt == '"' and i + 2 < len(sentence):
+        elif nxt in ('"', "'") and i + 2 < len(sentence):
             nxt2 = sentence[i + 2]
             if nxt2 == ' ' and i + 3 < len(sentence) and sentence[i + 3].isupper():
                 new_start = i + 3
@@ -560,20 +566,32 @@ def smart_truncate(
         else:
             continue
         if len(sentence) - new_start < len(sentence):  # actually shortens
+            if fallback_start is None:
+                fallback_start = new_start
+
+            # Skip boundaries inside an unclosed double-quoted passage.
+            # The ".!?" is dialogue-internal punctuation, not a
+            # paragraph-level sentence boundary.
+            if _is_inside_opening_quote(sentence, i):
+                continue
+
             best_start = new_start
-            break  # nearest to target = best context
+            break  # nearest balanced boundary = best context
+
+    if best_start is None:
+        best_start = fallback_start
 
     if best_start is not None:
         new_sentence = sentence[best_start:]
         new_target_offset = target_offset - best_start
         new_sentence, new_target_offset = _cleanup_unclosed_quote(
             new_sentence, target_word, new_target_offset)
-        # Preserve opening quote when truncating quoted speech from the beginning
-        if (sentence and sentence[0] == '"'
-                and new_sentence and new_sentence[0] != '"'
-                and new_target_offset >= 0):
-            new_sentence = '"' + new_sentence
-            new_target_offset += 1
+        # If the result still has unbalanced quotes (e.g. fallback boundary
+        # inside a quoted passage that _cleanup_unclosed_quote couldn't fix),
+        # return the original sentence unchanged.  The caller will reject the
+        # word rather than produce a fabricated or patched sentence.
+        if new_sentence.count('"') % 2 != 0:
+            return _orig_sentence, _orig_tgt, False
         return new_sentence, new_target_offset, True
 
     # Direction 2 found nothing.  If Direction 1 produced a valid result
@@ -1074,343 +1092,365 @@ def process_words(
         if _strip_non_alpha(sentence) not in text_normalized:
             continue
 
-        # --- hard truncate ---
-        truncated, was_truncated = hard_truncate(sentence)
-
-        # --- spaCy analysis (once per sentence) ---
-        doc = nlp(truncated)
-
-        sent_len = len(truncated)
-
-        # --- iterate doc tokens, match against form_index ---
+        # --- regex: find all target word occurrences in the full sentence ---
+        # Replace the old "hard_truncate → spaCy → iterate tokens" pipeline:
+        # smart_truncate runs FIRST on the full sentence, then spaCy only
+        # processes the already-truncated short text.  No hard_truncate needed.
         seen_entries: set[int] = set()  # (idx, token.text.lower()) per sentence
-        for token in doc:
-            if not token.is_alpha or len(token.text) < 2:
-                continue
+        for form_lower, hits in form_index.items():
+            for m in re.finditer(r'\b' + re.escape(form_lower) + r'\b', sentence, re.IGNORECASE):
+                matched_form = m.group()
+                tgt_offset = m.start()
 
-            token_lower = token.text.lower()
-            hits = form_index.get(token_lower)
-            if not hits:
-                continue
-
-            # Skip compound tokens inside hyphenated compounds
-            # (e.g. "mast" in "mast-head").  These are fragments of a
-            # single lexical unit, not independent word occurrences.
-            # The dep=compound relation with an adjacent hyphen in the
-            # sentence text signals this pattern.  amod-dep tokens
-            # (e.g. "fair" in "fair-minded") are true adjectives and
-            # intentionally kept — only compound-dep tokens are skipped.
-            if token.dep_ == "compound":
-                head = token.head
-                if token.i < head.i:
-                    gap = truncated[token.idx + len(token.text):head.idx]
-                else:
-                    gap = truncated[head.idx + len(head.text):token.idx]
-                if gap.startswith("-") or gap.endswith("-"):
-                    continue
-            # Also skip the head (root noun) of a hyphenated compound
-            # (e.g. "garland" in "half-garland", "head" in "mast-head").
-            # The head follows the hyphen character directly in the text.
-            if token.i > 0 and doc[token.i - 1].text == "-":
-                continue
-
-            for idx, entry in hits:
-                # Prevent re-processing the same (entry index, token text)
-                # within the same sentence (e.g. "walked" appearing twice).
-                sent_key = (idx, token_lower)
-                if sent_key in seen_entries:
-                    continue
-                seen_entries.add(sent_key)
-
-                # Determine lemma from this specific token context
-                lemma = _determine_lemma(token, token.text)
-                pos = token.pos_
-
-                # be-to pattern check for VBN tokens.
-                # Run unconditionally — even when _determine_lemma already
-                # returned the surface form (via other ADJ signals), we
-                # need be_to=True in the output.  Only override lemma/POS
-                # when _determine_lemma did NOT already do so.
-                has_be_to = (
-                    token.tag_ in ("VBN", "JJ")
-                    and _has_be_to_pattern(doc, token.i)
+                # --- smart_truncate on full sentence BEFORE spaCy ---
+                short_sent, new_tgt, was_trunc = smart_truncate(
+                    sentence, matched_form, tgt_offset,
                 )
-                if has_be_to and lemma != token_lower:
-                    lemma = token_lower
-                    pos = "ADJ"
 
-                # PROPN→NOUN: convert spaCy PROPN tags for words in our
-                # vocabulary — most are common nouns mis-capitalized
-                # (sentence-initial, mid-sentence like "Boa constrictors").
-                # Genuine proper nouns are protected by the revert block
-                # below: if the word never appears in lowercase anywhere
-                # in the text and has no adjective signals, it stays PROPN.
-                _was_propn = (pos == "PROPN")
-                if pos == "PROPN" and (token.text[0].islower() or token.i == 0
-                                       or token_lower in form_index):
-                    pos = "NOUN"
-                # Shared set: verbal dependents that indicate a genuine
-                # clause structure (subjects, objects, agents).
-                # Hoisted here so both conj-chain and later VBN rules
-                # can use it.  Adverbial modifiers and determiners are
-                # not verbal arguments — a bare VBN with only non-verbal
-                # children is adjectival.
-                _VERBAL_DEPS = frozenset({
-                    "nsubj", "csubj", "dobj", "iobj", "pobj",
-                    "xcomp", "ccomp", "aux", "auxpass", "agent",
-                    "expl", "nsubjpass",
-                })
-                # conj POS inheritance: in coordinated structures
-                # (A, B, C and D), spaCy sometimes mis-tags individual
-                # conjuncts (e.g. "arithmetic" as ADJ in a list of NOUNs).
-                # Walk up the conj chain to the coordination root and
-                # inherit its POS when the root has a reliable POS tag.
-                if token.dep_ == "conj":
-                    head_token = token.head
-                    walked_past_content = False
-                    while head_token.dep_ in ("conj", "cc"):
-                        if head_token.dep_ == "conj":
-                            walked_past_content = True
-                        head_token = head_token.head
-                    head_pos = head_token.pos_
-                    # When the chain root is a VERB in acl/amod position,
-                    # it is an adjectival participle modifier — not a true
-                    # verbal coordination root.  E.g. "the formalized,
-                    # iridescent, gelatinous bladder" → "formalized"(VBN,acl)
-                    # chains to "bladder"(NOUN,conj).  Inheriting VERB from
-                    # an adjectival modifier would incorrectly convert the
-                    # noun to a verb.  Skip the inheritance.
-                    if (head_pos == "VERB"
-                            and head_token.dep_ in ("acl", "amod")):
-                        pass
-                    elif head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos:
-                        # Don't promote a spaCy-tagged NOUN to VERB via conj
-                        # inheritance.  A NOUN directly conjoined to a VERB
-                        # (e.g. "fins" conj of "see" in "see...heads and...fins")
-                        # is a coordinated argument, not a verb.  spaCy's own
-                        # POS tag (NOUN) is more trustworthy than the chain root.
-                        if head_pos == "VERB" and token.pos_ == "NOUN":
-                            pass
-                        elif (head_pos == "NOUN" and pos == "VERB"
-                              and (any(c.dep_ in _VERBAL_DEPS
-                                       for c in token.children)
-                                   or (token.tag_ == "VBG"
-                                       and not any(c.dep_ == "det"
-                                                   for c in token.children)))):
-                            # Don't demote a spaCy-tagged VERB to NOUN via
-                            # conj inheritance when the token has verbal
-                            # dependents (dobj, nsubj, etc.) or is a
-                            # present participle (VBG) without a determiner.
-                            # E.g. "paralyzed"(VBD,conj,dobj="leg") → verb.
-                            # "crouching"(VBG,conj,no-det) → verb.
-                            # VBG guard: spaCy tags present participles
-                            # as VBG when they are verbal; nominal gerunds
-                            # are tagged NN.  A VBG without a determiner
-                            # child should not be demoted to NOUN.
-                            # det-child gate: "the hissing"(VBG,det="the")
-                            # IS a nominal gerund → allow NOUN inheritance.
-                            pass
-                        elif head_pos == "ADJ" and any(
-                            c.dep_ == "det" for c in token.children
-                        ):
-                            # Token has a determiner child ("a", "the") →
-                            # unambiguously a noun head.  Do not promote
-                            # NOUN → ADJ via conj inheritance from an
-                            # adjectival chain root.
-                            pass
-                        else:
-                            pos = head_pos
-                        # When inheriting ADJ via conj chain, ensure lemma is
-                        # the surface form — _determine_lemma may have reduced
-                        # a VBN/VBD token via the VERB channel (e.g. "tempered"
-                        # → "temper"), and the ADJ lemma should be the surface
-                        # form (e.g. "tempered" conj of "sharp" → ADJ).
-                        if pos == "ADJ" and token.tag_ in ("VBD", "VBN"):
-                            lemma = token_lower
-                        # When the coordination root is VBN/VBD in advcl
-                        # position with no verbal dependents, it is a
-                        # depictive predicate adjective — the conjunct
-                        # shares this adjectival role.
-                        # E.g. "Drained of blood and awash he looked..."
-                        # → "awash"(NOUN,conj,head=Drained(VBN,advcl)).
-                        # "Drained" has only prep/cc/conj children → ADJ.
+                # Reject words whose sentence is still too long after truncation
+                if len(short_sent) > HARD_CUTOFF:
+                    continue
+
+                # --- spaCy on the already-truncated short text ---
+                doc = nlp(short_sent)
+
+                # Find the spaCy token at new_tgt position
+                token = None
+                for t in doc:
+                    if t.idx == new_tgt and t.is_alpha and len(t.text) >= 2:
+                        token = t
+                        break
+                if token is None:
+                    continue  # spaCy didn't tokenize this as expected
+
+                token_lower = token.text.lower()
+
+                # The form was already matched by regex — verify via form_index
+                hits = form_index.get(token_lower)
+                if not hits:
+                    continue
+
+                # Skip compound tokens inside hyphenated compounds
+                # (e.g. "mast" in "mast-head").
+                if token.dep_ == "compound":
+                    head = token.head
+                    if token.i < head.i:
+                        gap = short_sent[token.idx + len(token.text):head.idx]
+                    else:
+                        gap = short_sent[head.idx + len(head.text):token.idx]
+                    if gap.startswith("-") or gap.endswith("-"):
+                        continue
+                if token.i > 0 and doc[token.i - 1].text == "-":
+                    continue
+
+                for idx, entry in hits:
+                    # Prevent re-processing the same (entry index, token text)
+                    # within the same sentence (e.g. "walked" appearing twice).
+                    sent_key = (idx, token_lower)
+                    if sent_key in seen_entries:
+                        continue
+                    seen_entries.add(sent_key)
+
+                    # Determine lemma from this specific token context
+                    lemma = _determine_lemma(token, token.text)
+                    pos = token.pos_
+
+                    # be-to pattern check for VBN tokens.
+                    # Run unconditionally — even when _determine_lemma already
+                    # returned the surface form (via other ADJ signals), we
+                    # need be_to=True in the output.  Only override lemma/POS
+                    # when _determine_lemma did NOT already do so.
+                    has_be_to = (
+                        token.tag_ in ("VBN", "JJ")
+                        and _has_be_to_pattern(doc, token.i)
+                    )
+                    if has_be_to and lemma != token_lower:
+                        lemma = token_lower
+                        pos = "ADJ"
+
+                    # PROPN→NOUN: convert spaCy PROPN tags for words in our
+                    # vocabulary — most are common nouns mis-capitalized
+                    # (sentence-initial, mid-sentence like "Boa constrictors").
+                    # Genuine proper nouns are protected by the revert block
+                    # below: if the word never appears in lowercase anywhere
+                    # in the text and has no adjective signals, it stays PROPN.
+                    _was_propn = (pos == "PROPN")
+                    if pos == "PROPN" and (token.text[0].islower() or token.i == 0
+                                           or token_lower in form_index):
+                        pos = "NOUN"
+                    # Shared set: verbal dependents that indicate a genuine
+                    # clause structure (subjects, objects, agents).
+                    # Hoisted here so both conj-chain and later VBN rules
+                    # can use it.  Adverbial modifiers and determiners are
+                    # not verbal arguments — a bare VBN with only non-verbal
+                    # children is adjectival.
+                    _VERBAL_DEPS = frozenset({
+                        "nsubj", "csubj", "dobj", "iobj", "pobj",
+                        "xcomp", "ccomp", "aux", "auxpass", "agent",
+                        "expl", "nsubjpass",
+                    })
+                    # conj POS inheritance: in coordinated structures
+                    # (A, B, C and D), spaCy sometimes mis-tags individual
+                    # conjuncts (e.g. "arithmetic" as ADJ in a list of NOUNs).
+                    # Walk up the conj chain to the coordination root and
+                    # inherit its POS when the root has a reliable POS tag.
+                    if token.dep_ == "conj":
+                        head_token = token.head
+                        walked_past_content = False
+                        while head_token.dep_ in ("conj", "cc"):
+                            if head_token.dep_ == "conj":
+                                walked_past_content = True
+                            head_token = head_token.head
+                        head_pos = head_token.pos_
+                        # When the chain root is a VERB in acl/amod position,
+                        # it is an adjectival participle modifier — not a true
+                        # verbal coordination root.  E.g. "the formalized,
+                        # iridescent, gelatinous bladder" → "formalized"(VBN,acl)
+                        # chains to "bladder"(NOUN,conj).  Inheriting VERB from
+                        # an adjectival modifier would incorrectly convert the
+                        # noun to a verb.  Skip the inheritance.
                         if (head_pos == "VERB"
-                                and head_token.tag_ in ("VBD", "VBN")
-                                and head_token.dep_ == "advcl"):
-                            verbal_children = [
-                                c for c in head_token.children
-                                if c.dep_ in _VERBAL_DEPS
-                            ]
-                            if not verbal_children:
+                                and head_token.dep_ in ("acl", "amod")):
+                            pass
+                        elif head_pos in ("NOUN", "VERB", "ADJ", "ADV") and pos != head_pos:
+                            # Don't promote a spaCy-tagged NOUN to VERB via conj
+                            # inheritance.  A NOUN directly conjoined to a VERB
+                            # (e.g. "fins" conj of "see" in "see...heads and...fins")
+                            # is a coordinated argument, not a verb.  spaCy's own
+                            # POS tag (NOUN) is more trustworthy than the chain root.
+                            if head_pos == "VERB" and token.pos_ == "NOUN":
+                                pass
+                            elif (head_pos == "NOUN" and pos == "VERB"
+                                  and (any(c.dep_ in _VERBAL_DEPS
+                                           for c in token.children)
+                                       or (token.tag_ == "VBG"
+                                           and not any(c.dep_ == "det"
+                                                       for c in token.children)))):
+                                # Don't demote a spaCy-tagged VERB to NOUN via
+                                # conj inheritance when the token has verbal
+                                # dependents (dobj, nsubj, etc.) or is a
+                                # present participle (VBG) without a determiner.
+                                # E.g. "paralyzed"(VBD,conj,dobj="leg") → verb.
+                                # "crouching"(VBG,conj,no-det) → verb.
+                                # VBG guard: spaCy tags present participles
+                                # as VBG when they are verbal; nominal gerunds
+                                # are tagged NN.  A VBG without a determiner
+                                # child should not be demoted to NOUN.
+                                # det-child gate: "the hissing"(VBG,det="the")
+                                # IS a nominal gerund → allow NOUN inheritance.
+                                pass
+                            elif head_pos == "ADJ" and any(
+                                c.dep_ == "det" for c in token.children
+                            ):
+                                # Token has a determiner child ("a", "the") →
+                                # unambiguously a noun head.  Do not promote
+                                # NOUN → ADJ via conj inheritance from an
+                                # adjectival chain root.
+                                pass
+                            else:
+                                pos = head_pos
+                            # When inheriting ADJ via conj chain, ensure lemma is
+                            # the surface form — _determine_lemma may have reduced
+                            # a VBN/VBD token via the VERB channel (e.g. "tempered"
+                            # → "temper"), and the ADJ lemma should be the surface
+                            # form (e.g. "tempered" conj of "sharp" → ADJ).
+                            if pos == "ADJ" and token.tag_ in ("VBD", "VBN"):
+                                lemma = token_lower
+                            # When the coordination root is VBN/VBD in advcl
+                            # position with no verbal dependents, it is a
+                            # depictive predicate adjective — the conjunct
+                            # shares this adjectival role.
+                            # E.g. "Drained of blood and awash he looked..."
+                            # → "awash"(NOUN,conj,head=Drained(VBN,advcl)).
+                            # "Drained" has only prep/cc/conj children → ADJ.
+                            if (head_pos == "VERB"
+                                    and head_token.tag_ in ("VBD", "VBN")
+                                    and head_token.dep_ == "advcl"):
+                                verbal_children = [
+                                    c for c in head_token.children
+                                    if c.dep_ in _VERBAL_DEPS
+                                ]
+                                if not verbal_children:
+                                    pos = "ADJ"
+                                    lemma = token_lower
+                        elif head_pos == "AUX" and not walked_past_content:
+                            # Direct conjunction of copula: "was thin and gaunt".
+                            # Only fires when the token is a direct child of the
+                            # AUX (no intermediate content-word conj nodes walked
+                            # past).  If the chain passed through a VERB/NOUN/etc,
+                            # the token is coordinated with that content word,
+                            # not with the adjective complement.
+                            # Guard: if the token has its own subject (nsubj,
+                            # nsubjpass, csubj), it heads a separate clause —
+                            # NOT a copula complement sharing the copula's
+                            # subject.  E.g. "He was tired and he teetered" →
+                            # "teetered" has nsubj "he" → stays VERB.
+                            has_own_subject = any(
+                                c.dep_ in ("nsubj", "nsubjpass", "csubj")
+                                for c in token.children
+                            )
+                            if not has_own_subject:
+                                # Only nouns can have determiner children ("a",
+                                # "the", "my").  If the token has a det child, it
+                                # heads a noun phrase — do NOT promote it to ADJ
+                                # even when conjoined to a copula whose complement
+                                # is an adjective.
+                                if not any(c.dep_ == "det" for c in token.children):
+                                    for child in head_token.children:
+                                        if child.dep_ in ("acomp", "amod") and child.pos_ == "ADJ":
+                                            pos = "ADJ"
+                                            lemma = token_lower
+                                            break
+                    # Sentence-initial inverted ADJ: "Absurd as it might seem"
+                    # (= "As absurd as ...").  spaCy often tags these as PROPN
+                    # (capitalized at sentence start); PROPN→NOUN then converts
+                    # to NOUN.  Detect the "X as" pattern with dep guard
+                    # (advcl for inverted adjective clauses, not npadvmod for
+                    # noun phrases like "King as he was").
+                    if (pos == "NOUN" and token.i == 0
+                            and token.dep_ in ("advcl", "root", "ROOT")):
+                        if (token.i + 1 < len(doc)
+                                and doc[token.i + 1].text.lower() == "as"):
+                            import lemminflect
+                            adj_lemmas = lemminflect.getLemma(token_lower, 'ADJ')
+                            if adj_lemmas and adj_lemmas[0] == token_lower:
+                                pos = "ADJ"
+                    # ADV→NOUN: dep=dobj contradicts ADV (dobj requires a nominal).
+                    # If spaCy tagged a word as ADV but assigned it a direct-object
+                    # dependency, the token is almost certainly a NOUN.
+                    if pos == "ADV" and token.dep_ == "dobj":
+                        pos = "NOUN"
+                    # ADJ→NOUN: pobj/dobj contradicts ADJ (both require a nominal).
+                    # A prepositional object or direct object must be nominal —
+                    # an adjective with these deps is always a spaCy mis-tag.
+                    # Covers "odour" (ADJ+pobj in "edge of the odour") and
+                    # "stern" (ADJ+pobj in "back in the stern" = boat stern).
+                    if pos == "ADJ" and token.dep_ in ("pobj", "dobj"):
+                        pos = "NOUN"
+                    # NOUN/VERB→ADJ: adjectival dependency overrides POS tag.
+                    # attr is excluded — it applies to both nouns ("a teacher")
+                    # and adjectives ("tall") in predicate position.
+                    # NOUN+amod/acomp/oprd covers rare spaCy errors where a true
+                    # adjective is mis-tagged as NOUN.  Common attributive nouns
+                    # ("oar handle", "slant change") are typically tagged ADJ by
+                    # spaCy directly (this rule does not fire for them).
+                    if pos in ("NOUN", "VERB") and token.dep_ in ("amod", "acomp", "oprd"):
+                        pos = "ADJ"
+                    # NOUN+dobj→ADJ when a coordinated ADJ child signals that the
+                    # head is also adjectival (e.g. "rest there slimy and purple"
+                    # → slimy NOUN/dobj but purple ADJ/conj — both should be ADJ).
+                    # Gated on -y suffix (common adjective marker) and the
+                    # presence of an ADJ/conj child (coordinated adjective).
+                    if (pos == "NOUN" and token.dep_ == "dobj"
+                            and token_lower.endswith("y")):
+                        for child in token.children:
+                            if child.dep_ == "conj" and child.pos_ == "ADJ":
                                 pos = "ADJ"
                                 lemma = token_lower
-                    elif head_pos == "AUX" and not walked_past_content:
-                        # Direct conjunction of copula: "was thin and gaunt".
-                        # Only fires when the token is a direct child of the
-                        # AUX (no intermediate content-word conj nodes walked
-                        # past).  If the chain passed through a VERB/NOUN/etc,
-                        # the token is coordinated with that content word,
-                        # not with the adjective complement.
-                        # Guard: if the token has its own subject (nsubj,
-                        # nsubjpass, csubj), it heads a separate clause —
-                        # NOT a copula complement sharing the copula's
-                        # subject.  E.g. "He was tired and he teetered" →
-                        # "teetered" has nsubj "he" → stays VERB.
-                        has_own_subject = any(
-                            c.dep_ in ("nsubj", "nsubjpass", "csubj")
-                            for c in token.children
-                        )
-                        if not has_own_subject:
-                            # Only nouns can have determiner children ("a",
-                            # "the", "my").  If the token has a det child, it
-                            # heads a noun phrase — do NOT promote it to ADJ
-                            # even when conjoined to a copula whose complement
-                            # is an adjective.
-                            if not any(c.dep_ == "det" for c in token.children):
-                                for child in head_token.children:
-                                    if child.dep_ in ("acomp", "amod") and child.pos_ == "ADJ":
-                                        pos = "ADJ"
-                                        lemma = token_lower
-                                        break
-                # Sentence-initial inverted ADJ: "Absurd as it might seem"
-                # (= "As absurd as ...").  spaCy often tags these as PROPN
-                # (capitalized at sentence start); PROPN→NOUN then converts
-                # to NOUN.  Detect the "X as" pattern with dep guard
-                # (advcl for inverted adjective clauses, not npadvmod for
-                # noun phrases like "King as he was").
-                if (pos == "NOUN" and token.i == 0
-                        and token.dep_ in ("advcl", "root", "ROOT")):
-                    if (token.i + 1 < len(doc)
-                            and doc[token.i + 1].text.lower() == "as"):
-                        import lemminflect
-                        adj_lemmas = lemminflect.getLemma(token_lower, 'ADJ')
-                        if adj_lemmas and adj_lemmas[0] == token_lower:
-                            pos = "ADJ"
-                # ADV→NOUN: dep=dobj contradicts ADV (dobj requires a nominal).
-                # If spaCy tagged a word as ADV but assigned it a direct-object
-                # dependency, the token is almost certainly a NOUN.
-                if pos == "ADV" and token.dep_ == "dobj":
-                    pos = "NOUN"
-                # NOUN/VERB→ADJ: adjectival dependency overrides POS tag.
-                # attr is excluded — it applies to both nouns ("a teacher")
-                # and adjectives ("tall") in predicate position.
-                # NOUN+amod/acomp/oprd covers rare spaCy errors where a true
-                # adjective is mis-tagged as NOUN.  Common attributive nouns
-                # ("oar handle", "slant change") are typically tagged ADJ by
-                # spaCy directly (this rule does not fire for them).
-                if pos in ("NOUN", "VERB") and token.dep_ in ("amod", "acomp", "oprd"):
-                    pos = "ADJ"
-                # NOUN+dobj→ADJ when a coordinated ADJ child signals that the
-                # head is also adjectival (e.g. "rest there slimy and purple"
-                # → slimy NOUN/dobj but purple ADJ/conj — both should be ADJ).
-                # Gated on -y suffix (common adjective marker) and the
-                # presence of an ADJ/conj child (coordinated adjective).
-                if (pos == "NOUN" and token.dep_ == "dobj"
-                        and token_lower.endswith("y")):
-                    for child in token.children:
-                        if child.dep_ == "conj" and child.pos_ == "ADJ":
+                                break
+                    # VBN + preceding ADV advmod child → ADJ: a preposed true adverb
+                    # directly modifying a past participle is a strong signal of
+                    # adjectival usage (e.g. "completely abashed", "very surprised").
+                    # Non-ADV advmods (subordinators like "When", particles like
+                    # "along") and postposed adverbs do NOT trigger this rule.
+                    # In UD, manner adverbs modifying genuine passive verbs
+                    # attach to the auxiliary, not the participle.
+                    if pos == "VERB" and token.tag_ == "VBN":
+                        for child in token.children:
+                            if (child.dep_ == "advmod"
+                                    and child.pos_ == "ADV"
+                                    and child.i < token.i):
+                                pos = "ADJ"
+                                lemma = token_lower
+                                break
+                    # VBD/VBN + advcl + no verbal dependents → ADJ.
+                    # A lone past participle in advcl position with no
+                    # verbal children (subjects, objects, agents) is a
+                    # depictive predicate adjective, not a true adverbial
+                    # clause.  E.g. "went away, puzzled." or
+                    # "Clad in royal purple, he was seated..."
+                    # Prepositional-phrase modifiers (in+N, on+N) are
+                    # typical of adjectives, not verbal clauses.
+                    # Exclude VBG (present participles like "smiling") —
+                    # more often verbal.
+                    if (pos == "VERB" and token.dep_ == "advcl"
+                            and token.tag_ in ("VBD", "VBN")):
+                        verbal_children = [
+                            c for c in token.children
+                            if c.dep_ in _VERBAL_DEPS
+                        ]
+                        if not verbal_children:
                             pos = "ADJ"
                             lemma = token_lower
-                            break
-                # VBN + preceding ADV advmod child → ADJ: a preposed true adverb
-                # directly modifying a past participle is a strong signal of
-                # adjectival usage (e.g. "completely abashed", "very surprised").
-                # Non-ADV advmods (subordinators like "When", particles like
-                # "along") and postposed adverbs do NOT trigger this rule.
-                # In UD, manner adverbs modifying genuine passive verbs
-                # attach to the auxiliary, not the participle.
-                if pos == "VERB" and token.tag_ == "VBN":
-                    for child in token.children:
-                        if (child.dep_ == "advmod"
-                                and child.pos_ == "ADV"
-                                and child.i < token.i):
+                    # VBD/VBN + advmod + no verbal dependents → ADJ.
+                    # A lone past participle as an adverbial modifier (no comma)
+                    # with only non-verbal children is a depictive predicate
+                    # adjective.  E.g. "stood there all bewildered."
+                    # Exclude VBG — present participles are more often genuinely
+                    # verbal.  Exclude tokens with verbal children — true
+                    # adverbial clauses have structure; a bare participle is
+                    # adjectival.
+                    if (pos == "VERB" and token.dep_ == "advmod"
+                            and token.tag_ in ("VBD", "VBN")):
+                        verbal_children = [
+                            c for c in token.children
+                            if c.dep_ in _VERBAL_DEPS
+                        ]
+                        if not verbal_children:
                             pos = "ADJ"
                             lemma = token_lower
-                            break
-                # VBD/VBN + advcl + no verbal dependents → ADJ.
-                # A lone past participle in advcl position with no
-                # verbal children (subjects, objects, agents) is a
-                # depictive predicate adjective, not a true adverbial
-                # clause.  E.g. "went away, puzzled." or
-                # "Clad in royal purple, he was seated..."
-                # Prepositional-phrase modifiers (in+N, on+N) are
-                # typical of adjectives, not verbal clauses.
-                # Exclude VBG (present participles like "smiling") —
-                # more often verbal.
-                if (pos == "VERB" and token.dep_ == "advcl"
-                        and token.tag_ in ("VBD", "VBN")):
-                    verbal_children = [
-                        c for c in token.children
-                        if c.dep_ in _VERBAL_DEPS
-                    ]
-                    if not verbal_children:
-                        pos = "ADJ"
-                        lemma = token_lower
-                # VBD/VBN + advmod + no verbal dependents → ADJ.
-                # A lone past participle as an adverbial modifier (no comma)
-                # with only non-verbal children is a depictive predicate
-                # adjective.  E.g. "stood there all bewildered."
-                # Exclude VBG — present participles are more often genuinely
-                # verbal.  Exclude tokens with verbal children — true
-                # adverbial clauses have structure; a bare participle is
-                # adjectival.
-                if (pos == "VERB" and token.dep_ == "advmod"
-                        and token.tag_ in ("VBD", "VBN")):
-                    verbal_children = [
-                        c for c in token.children
-                        if c.dep_ in _VERBAL_DEPS
-                    ]
-                    if not verbal_children:
-                        pos = "ADJ"
-                        lemma = token_lower
-                # PROPN→NOUN revert: genuine proper nouns (Jupiter, Mars,
-                # Venus) were converted to NOUN by form_index membership.
-                # They never appear in lowercase in the text and have no
-                # adjective signals — revert them to PROPN.
-                # Sentence-initial tokens are exempt: capitalization may be
-                # positional, not a genuine proper-noun signal.
-                if (_was_propn and pos == "NOUN" and token.i != 0
-                        and token_lower not in _all_lowercase_words):
-                    pos = "PROPN"
+                    # PROPN→NOUN revert: genuine proper nouns (Jupiter, Mars,
+                    # Venus) were converted to NOUN by form_index membership.
+                    # They never appear in lowercase in the text and have no
+                    # adjective signals — revert them to PROPN.
+                    # Sentence-initial tokens are exempt: capitalization may be
+                    # positional, not a genuine proper-noun signal.
+                    if (_was_propn and pos == "NOUN" and token.i != 0
+                            and token_lower not in _all_lowercase_words):
+                        pos = "PROPN"
 
-                # Mid-sentence capitalized NOUN → PROPN.  In English, a
-                # common noun capitalised mid-sentence is almost always a
-                # proper noun (e.g. "the Terrace", "Gulf Stream").  Only
-                # fires when spaCy originally tagged the token as NOUN
-                # (not PROPN→NOUN conversions — those were intentional).
-                # Guard: if the lowercase form is in form_index (our target
-                # vocabulary), it's a common noun capitalised by position
-                # (quote-initial, emphasis) — not a proper noun.
-                if (not _was_propn and pos == "NOUN" and token.i != 0
-                        and token.text and token.text[0].isupper()
-                        and token_lower not in form_index):
-                    pos = "PROPN"
+                    # Mid-sentence capitalized NOUN → PROPN.  In English, a
+                    # common noun capitalised mid-sentence is almost always a
+                    # proper noun (e.g. "the Terrace", "Gulf Stream").  Only
+                    # fires when spaCy originally tagged the token as NOUN
+                    # (not PROPN→NOUN conversions — those were intentional).
+                    # Guard: if the lowercase form is in form_index (our target
+                    # vocabulary), it's a common noun capitalised by position
+                    # (quote-initial, emphasis) — not a proper noun.
+                    if (not _was_propn and pos == "NOUN" and token.i != 0
+                            and token.text and token.text[0].isupper()
+                            and token_lower not in form_index):
+                        pos = "PROPN"
 
-                key = (lemma.lower(), pos)
+                    key = (lemma.lower(), pos)
 
-                cand = {
-                    'text': truncated,
-                    'len': sent_len,
-                    'target_offset': token.idx,
-                    'matched_form': token.text,
-                    'lemma': lemma,
-                    'pos': pos,
-                    'dep': token.dep_,
-                    'spacy_lemma': token.lemma_,
-                    'be_to': has_be_to,
-                    'truncated': was_truncated,
-                    'is_fragment': _is_fragment(truncated),
-                }
+                    # Preserve the original sentence text when hard_truncate
+                    # shortened it.  smart_truncate needs the full text for
+                    # proper sentence-boundary scanning — hard_truncate at
+                    # 500 chars can cut off terminal punctuation, making
+                    # complete sentences look like fragments.
+                    cand = {
+                        'text': short_sent,
+                        'len': len(short_sent),
+                        'target_offset': new_tgt,
+                        'matched_form': token.text,
+                        'lemma': lemma,
+                        'pos': pos,
+                        'dep': token.dep_,
+                        'spacy_lemma': token.lemma_,
+                        'be_to': has_be_to,
+                        'is_fragment': _is_fragment(short_sent),
+                    }
 
-                if key not in groups or _better(groups[key], cand):
-                    groups[key] = cand
+                    if key not in groups or _better(groups[key], cand):
+                        groups[key] = cand
 
-                if key not in group_sources:
-                    group_sources[key] = set()
-                group_sources[key].add(idx)
-                matched_indices.add(idx)
+                    if key not in group_sources:
+                        group_sources[key] = set()
+                    group_sources[key].add(idx)
+                    matched_indices.add(idx)
 
-        print(f"\r  {si+1}/{TOTAL_SENTS}", end='', file=sys.stderr, flush=True)
+    print(f"\r  {si+1}/{TOTAL_SENTS}", end='', file=sys.stderr, flush=True)
 
     print(file=sys.stderr)
 
@@ -1454,14 +1494,9 @@ def process_words(
         if _is_non_body_text(cand['text']):
             continue
 
-        # Auto-truncate sentence at nearest .!? boundary if it exceeds
-        # MAX_SENTENCE_LENGTH.  Runs here (post _better selection) so
-        # truncation targets the best sentence for each (lemma,pos).
+        # Sentence already truncated by smart_truncate in Step 4.
         sent_text = cand['text']
         tgt_offset = cand['target_offset']
-        sent_text, tgt_offset, was_trunc = smart_truncate(
-            sent_text, cand['matched_form'], tgt_offset,
-        )
 
         # IPA: try lemma first, fall back to matched surface form
         ipa = _cmu_ipa(lemma) or _cmu_ipa(cand['matched_form'])
@@ -1480,11 +1515,6 @@ def process_words(
             'char_offset': char_offset,
             'ipa': ipa,
         }
-        if was_trunc:
-            entry['_auto_truncated'] = True
-        # Re-check fragment status on the (possibly truncated) sentence.
-        # The original is_fragment was computed on the hard_truncate result;
-        # smart_truncate may have shortened it at proper sentence boundaries.
         if _is_fragment(sent_text):
             entry['is_fragment'] = True
         results.append(entry)
