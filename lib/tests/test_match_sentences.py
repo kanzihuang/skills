@@ -11,7 +11,6 @@ import sys
 import pytest
 from lib.scripts.match_sentences import (
     split_sentences,
-    hard_truncate,
     smart_truncate,
     _cleanup_unclosed_quote,
     _is_inside_opening_quote,
@@ -120,23 +119,6 @@ def test_hyphen_space_preserved():
     sents = split_sentences("fair-to- middling quality.")
     assert len(sents) == 1
     assert "to- middling" in sents[0]
-
-
-# ── Hard truncation ──
-
-
-def test_hard_truncate_short_sentence_unchanged():
-    text, was_truncated = hard_truncate("Short sentence.", max_len=500)
-    assert text == "Short sentence."
-    assert was_truncated is False
-
-
-def test_hard_truncate_long_sentence_cut_at_word_boundary():
-    long_text = "word " * 200
-    result, was_truncated = hard_truncate(long_text, max_len=50)
-    assert len(result) <= 50
-    assert was_truncated is True
-    assert not result.endswith(" ") or result[-1] != " "
 
 
 # ── _clean_quote_artifact ──
@@ -1721,10 +1703,10 @@ class TestSmartTruncate:
         assert result == sent
 
     def test_under_max_len_but_poorly_terminated_still_truncates(self):
-        """Sentence under max_len that ends mid-thought (hard_truncate
-        artifact) — Direction 1 still finds a proper sentence boundary."""
-        # Simulates a hard_truncate output: 280 chars, under max_len=500,
-        # but ends with a comma (no proper .!? termination).
+        """Sentence under max_len that ends mid-thought — Direction 1
+        still finds a proper sentence boundary."""
+        # 280 chars, under max_len=500, but ends with a comma
+        # (no proper .!? termination).
         sent = (
             "During the fifty-four years that I have inhabited this planet, "
             "I have been disturbed only three times. The first time was "
@@ -3136,8 +3118,7 @@ class TestSmartTruncateDirection2QuoteSkip:
         assert len(sent) > 500
 
     def test_14_pipeline_reorder_multi_word_sentence(self):
-        """Each target word gets its own smart_truncate + spaCy pass.
-        No shared hard_truncate result."""
+        """Each target word gets its own smart_truncate + spaCy pass."""
         result = _run_pipeline(
             [
                 {"lemma": "sun", "rep": "sun", "forms": ["sun"], "coca_level": 4},

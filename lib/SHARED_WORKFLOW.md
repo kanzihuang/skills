@@ -52,8 +52,8 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 2. 建 `form_index`：`form_lower → [(idx, entry), ...]`
 3. 遍历每个句子：
    a. 快速 pre-filter（简单 token 查 form_index）
-   b. hard_truncate（>500 字符硬截断）
-   c. `nlp(sentence)` — 每句只跑一次
+   b. `smart_truncate()` 先于 spaCy 对完整句子执行：通过 regex 定位目标词，扫描句边界截断。截断后仍 > ``HARD_CUTOFF``（500）的句子直接拒绝该词
+   c. `nlp(short_sent)` — spaCy 仅处理已截短的文本（通常 ≤250 字符）
    d. 遍历 doc tokens，查 form_index → `(idx, entry, token)`
       - 跳过连字符复合词片段：`dep=compound` 且与 head 间有 `-` 的 token（如 "mast-head" 中的 "mast"）被自动跳过，避免产生 POS 错误的重复卡片
    e. `_determine_lemma(token)` → lemma，PROPN→NOUN 覆盖
@@ -118,11 +118,11 @@ match_sentences.py 产出后立即连接 Anki，按 `(sentence, word)` 键与已
 ### 2B. 手动审核（Claude）
 
 审核重点：
-- ``_auto_truncated`` 标记的条目 — 确认截断位置语义合理
+- **截断质量** — ``smart_truncate()`` 已在 Step 2A 中先于 spaCy 执行，所有输出句子均已经过机械截断。审核截断边界是否在语义合理的位置（句号/感叹号/问号）
 - 序言/非正文句子（`char_offset` 靠前、内容为作者简介/编辑导语）
 - **语法不完整的句子片段** — ``is_fragment=True``、不以 ``. ! ?`` 结尾、小写开头 → **直接丢弃该词**（不修复）。碎片修复已被移除——空行碎片合并已在 ``match_sentences.py`` 中机械处理，无法自动合并的碎片不可靠，不应制成卡片
 - **OCR 标点错误**：句尾 `:` 或 `,` 在语法完整的句子中实为 OCR 对句号的误识别
-- 完整长句（``_auto_truncated`` 未标记但 > ``MAX_SENTENCE_LENGTH``）— 确认无法机械截断后接受
+- 完整长句（> ``MAX_SENTENCE_LENGTH`` 但无法机械截断）— 确认无内部句边界后接受
 
 > **连字符复合词片段**（如 "mast-head" 中的 "mast"）已由 match_sentences.py
 > Step 2A-3d 机械跳过，不再出现在输出中。此检查不再需要 Claude 人工处理。

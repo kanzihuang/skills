@@ -217,17 +217,6 @@ def _merge_adjacent_fragments(
     return merged
 
 
-def hard_truncate(sentence: str, max_len: int = HARD_CUTOFF) -> tuple[str, bool]:
-    """Truncate at the last word boundary within max_len chars."""
-    if len(sentence) <= max_len:
-        return sentence, False
-    truncated = sentence[:max_len].rstrip()
-    last_space = truncated.rfind(' ')
-    if last_space > 0:
-        truncated = truncated[:last_space]
-    return truncated.rstrip(), True
-
-
 def _is_inside_opening_quote(text: str, pos: int) -> bool:
     """Return True if *pos* is inside an unclosed double-quoted passage.
 
@@ -402,9 +391,8 @@ def smart_truncate(
     if len(sentence) <= max_len:
         # Only return immediately if the sentence already ends with proper
         # sentence-ending punctuation.  Sentences under max_len that end
-        # mid-thought (without .!?) are likely hard_truncate artifacts —
-        # fall through to Direction 1 / Direction 2 to find a genuine
-        # sentence boundary.
+        # mid-thought (without .!?) — fall through to Direction 1 /
+        # Direction 2 to find a genuine sentence boundary.
         stripped = sentence.rstrip()
         if stripped and stripped[-1] in '.!?':
             return sentence, target_offset, False
@@ -1093,9 +1081,8 @@ def process_words(
             continue
 
         # --- regex: find all target word occurrences in the full sentence ---
-        # Replace the old "hard_truncate → spaCy → iterate tokens" pipeline:
-        # smart_truncate runs FIRST on the full sentence, then spaCy only
-        # processes the already-truncated short text.  No hard_truncate needed.
+        # Pipeline: smart_truncate runs FIRST on the full sentence, then spaCy
+        # only processes the already-truncated short text.
         seen_entries: set[int] = set()  # (idx, token.text.lower()) per sentence
         for form_lower, hits in form_index.items():
             for m in re.finditer(r'\b' + re.escape(form_lower) + r'\b', sentence, re.IGNORECASE):
@@ -1424,11 +1411,8 @@ def process_words(
 
                     key = (lemma.lower(), pos)
 
-                    # Preserve the original sentence text when hard_truncate
-                    # shortened it.  smart_truncate needs the full text for
-                    # proper sentence-boundary scanning — hard_truncate at
-                    # 500 chars can cut off terminal punctuation, making
-                    # complete sentences look like fragments.
+                    # smart_truncate already ran on the full sentence before
+                    # spaCy — the sentence IS the truncated version.
                     cand = {
                         'text': short_sent,
                         'len': len(short_sent),
