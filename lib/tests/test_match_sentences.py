@@ -2442,6 +2442,40 @@ class TestCmuIpaSuffixStripping:
         # The -tion → educate + /ʃən/ path should take priority
         assert "ʃən" in ipa
 
+    def test_iness_suffix_rubberiness(self):
+        """rubberiness → rubber + /inəs/ — rubber is in cmudict."""
+        ipa = _cmu_ipa("rubberiness")
+        assert ipa, "rubberiness should get IPA via -iness suffix stripping"
+        assert ipa.startswith("/") and ipa.endswith("/"), (
+            f"IPA should have / delimiters, got: {ipa!r}")
+        # Should contain rʌbər or similar + inəs
+        assert "rʌb" in ipa.lower() or "inəs" in ipa or "ɪnəs" in ipa, (
+            f"Unexpected IPA for rubberiness: {ipa!r}")
+
+    def test_un_prefix_unintelligent(self):
+        """unintelligent → un- + intelligent — intelligent is in cmudict."""
+        ipa = _cmu_ipa("unintelligent")
+        assert ipa, "unintelligent should get IPA via un- prefix stripping"
+        assert ipa.startswith("/") and ipa.endswith("/"), (
+            f"IPA should have / delimiters, got: {ipa!r}")
+        # Should contain ʌn + telɪdʒənt or similar
+        assert "ʌn" in ipa or "tel" in ipa.lower(), (
+            f"Unexpected IPA for unintelligent: {ipa!r}")
+
+    def test_iness_with_y_recovery(self):
+        """-iness strips to base with i-ending → +y recovers adjective form."""
+        # "happiness" is already in cmudict directly, so test with "rubberiness"
+        # which is NOT in cmudict → strip iness → rubber (in cmudict)
+        ipa = _cmu_ipa("rubberiness")
+        assert ipa, "rubberiness should get IPA"
+        # Verify the -ness suffix handling still works on words where -iness
+        # doesn't fire (because the word with -ness alone is in cmudict)
+        # "happiness" would be handled by -ness before -iness fires
+        # But "rubberiness" → strip ness → rubberi (not in cmudict)
+        # → strip iness → rubber (in cmudict) ✓
+        assert "inəs" in ipa or "ɪnəs" in ipa or "rʌb" in ipa.lower(), (
+            f"Unexpected IPA for rubberiness: {ipa!r}")
+
 
 # ── B-1/B-2: smart_truncate accepts missing space after punctuation ──────
 

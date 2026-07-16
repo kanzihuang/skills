@@ -86,7 +86,7 @@ Shared Python package and data files used by vocab-anki, vocab-book, and vocab-l
 | `ipa.py` | cmudict ARPAbet→IPA conversion with suffix-stripping fallback |
 | `utils.py` | Shared utilities: TTS, lemmatize_word, safe_filename, print_progress |
 | `sync_anki.py` | Main sync orchestrator (uses relative imports from lib package) |
-| `scripts/dedup_anki.py` | Step 2A-post: mechanical Anki dedup by (sentence, word) — marks `_already_in_anki` |
+| `scripts/dedup_anki.py` | Step 2A-post: mechanical Anki dedup by (sentence, word) — removes entries already in deck |
 | `scripts/` | Shared entry-point scripts (match_sentences, translate_deepl, audit_deck, extract_chapter, dedup_anki) |
 | `data/bnc_coca/` | Nation (2017) word family lists (25 levels × ~1000 families) |
 | `data/cmudict.dict` | CMU Pronouncing Dictionary (135K entries) |
@@ -111,7 +111,7 @@ See `SKILL.md` files and `lib/SHARED_WORKFLOW.md` for full details. Key principl
 - **No hard-coded semantic word lists in Python**: Python code handles mechanical/formal work (tokenization, regex, IPA lookup, COCA level mapping). Semantic classification — distinguishing emotional adjectives from true passives, heteronym disambiguation, identifying non-body-text sentences — is Claude's responsibility in the mandatory review gates (Step 2B, Step 2F). Hard-coded word sets create unbounded maintenance burden and violate separation of concerns.
 - **Per-sentence POS independence**: Each sentence's POS is determined independently using only within-sentence signals. Cross-sentence POS inference is forbidden — a word can genuinely have different POS in different contexts (e.g. "slant" as NOUN in "the slant of the line" vs. attributive use in "the slant change"). The `compound` dep — while defined by UD for noun-noun compounds — has no reliable within-sentence signal to distinguish adjective modifiers from attributive nouns (suffix-based heuristics were tested and found unreliable on TLP data). POS disambiguation for compound-dep tokens is Claude's responsibility in Step 2B/2F.
 - **AnkiConnect fail-fast with retry**: Every AnkiConnect call automatically retries once on ConnectionError (2-second delay). If the retry also fails, the workflow aborts immediately. `sync_anki.py` also performs a pre-flight `version` check before audio generation and deck creation.
-- **Mechanical Anki dedup before Claude work**: Step 2A-post (`dedup_anki.py`) queries Anki immediately after `match_sentences.py`, before any Claude work (Step 2B–2F). Dedup key is `(sentence, word)` — sentence text without `<b>` tags + surface form of the target word. Does NOT depend on POS or lemma, so POS corrections and lemma changes do not invalidate dedup results. Words already in the deck are marked `_already_in_anki` and skipped by all subsequent steps.
+- **Mechanical Anki dedup before Claude work**: Step 2A-post (`dedup_anki.py`) queries Anki immediately after `match_sentences.py`, before any Claude work (Step 2B–2F). Dedup key is `(sentence, word)` — sentence text without `<b>` tags + surface form of the target word. Does NOT depend on POS or lemma, so POS corrections and lemma changes do not invalidate dedup results. Words already in the deck are **removed from the JSON** — subsequent steps (translation, definitions) only see new words.
 
 ## Known Pitfalls & Troubleshooting
 
@@ -546,6 +546,8 @@ Symptom: "absurd" tagged NOUN in "Absurd as it might seem". Check: `grep '"pos":
 **Change (2026-07-08)**: `match_sentences.py`'s `_cmu_ipa()` now strips common derivational suffixes and retries the base form when the exact word is not in cmudict. Covers `-ly` (indulgently→indulgent+/li/), `-ness` (happiness→happy+/nəs/), `-ment`, `-tion`, `-sion`. Falls through gracefully when the base is also not in cmudict — Claude still provides IPA for those.
 
 **Change (2026-07-10)**: Added `-ion` suffix (dejection→deject+/ʃən/) — ordered after `-tion`/`-sion` so more-specific matches take priority.  Added y→i spelling recovery for `-ly`: when stripping `-ly` leaves a stem ending in `i` that is not in cmudict, retries with `i`→`y` (thriftily→thrifti→thrifty+/li/).  Both only fire when the exact word is not in cmudict; all common words already have cmudict entries, so false-positive risk is near zero.
+
+**Change (2026-07-16)**: Added `-iness` suffix (rubberiness→rubber+/inəs/) — combination of -y (adjective) + -ness (noun).  Strips `-iness`, tries the base form directly in cmudict.  Uses the same y→i spelling recovery as `-ly` for stems ending in `i`.  Added `un-` prefix (unintelligent→intelligent, prepend /ʌn/) — strips the prefix and looks up the base form.  Both reduce manual IPA workload for derived forms whose base word is in cmudict.
 
 This reduces the number of words needing manual IPA from Claude. The fallback only works when the base form is in cmudict (e.g., "indulgent" is in cmudict → "indulgently" gets IPA automatically). Words with stem changes (e.g., "simply" → "simple" — stripping "ly" gives "simp" which is not in cmudict) still need Claude-provided IPA.
 
@@ -1335,36 +1337,14 @@ Symptom: nouns like "oar", "sheath" tagged ADJ with dep=amod in
 match_sentences output.  Check: ``grep '"pos": "ADJ"'`` for entries
 whose word is lexically a noun used attributively.
 
-### dedup_anki.py 与 sync_anki.py 使用不同的去重键
+### dedup_anki.py — 物理删除已存在条目（2026-07-16 变更）
 
-| 脚本 | 去重键 | 依赖项 | 稳定条件 |
-|------|--------|--------|---------|
-| `dedup_anki.py` | `(sentence, word)` | 无 POS/lemma | 始终稳定 |
-| `sync_anki.py` | `WordId = {lemma}_{pos}_{suffix}` | POS + lemma | 受 POS 修正影响 |
+`dedup_anki.py` (Step 2A-post) 查询 Anki 后不再标记 `_already_in_anki`，
+而是直接**从 JSON 中物理删除**已在牌组中的条目。后续步骤（DeepL 翻译、
+Claude 定义生成、audio 生成、sync）只看到新词。
 
-当 Step 2F 修正 POS 时（如 `dorsal NOUN→ADJ`），WordId 随之变化。
-如果 `dedup_anki.py` 以旧 POS 标记了 `_already_in_anki=True`，但
-sync_anki.py 以新 WordId 查询时未发现匹配 → 该词被当作新词添加。
-这是**正确的行为**——两个不同 POS 的同一单词确实应产生不同的卡片。
-
-但在 prefetch 模式中，`_already_in_anki` 是唯一的过滤器（无 Anki 查询），
-跳过已标记词意味着不会为 POS 变更后的旧词生成新音频。只有在 sync 模式
-（有 Anki 查询）中，WordId 变更才会被检测到。
-
-Symptom: `_already_in_anki=True` 的词在 sync_anki.py 中被标记为"already in deck"
-（prefetch 不会生成其音频），但之后 sync 模式（有 Anki 查询）发现其 WordId 不在
-existing_map 中，将其加入 new_words。检查：sync 输出中某个标记了 _already_in_anki
-的词既不在 SKIP 列表中也不在 Added 列表中 → 音频缺失。
-
-### prefetch 模式过滤 _already_in_anki（2026-07-13 修复）
-
-prefetch 模式（`--prefetch`）设置 `existing_map = {}` 跳过 Anki 查询，
-现在通过 `_already_in_anki` 标记过滤已知词汇。标记由 Step 2A-post 的
-`dedup_anki.py` 以 `(sentence, word)` 键设置。prefetch 和 sync 模式均
-跳过这些词——避免为已有卡片重复生成和上传音频。
-
-Sync 模式仍同时执行 Anki 查询作为二次验证（defense-in-depth）。
-
+去重键 `(sentence, word)` 不依赖 POS/lemma，跨次运行稳定。
+Physical deletion supersedes the old `_already_in_anki` marker approach.
 ## Testing
 
 - **Every bug fix must include a unit test** that reproduces the failure before the fix is applied.
@@ -1557,7 +1537,7 @@ entries whose sentence contains `,"` (comma-quote dialogue attribution).
 
 - **不要跳过 AnkiWeb sync**：增量同步很快（~3s），无需跳过
 - **不要在 sync_anki.py 中做 Anki SQLite 优化**：`notesInfo`/`cardsInfo` 的 SQLite 开销是 Anki 层面的，无法在本仓库中优化
-- **不要硬编码跳过已有卡片查询**：`get_word_id_map_with_deck` 的 WordId 去重是必要的防御层——`_already_in_anki` 标记使用 `(sentence, word)` 键，与 `WordId = {lemma}_{pos}_{suffix}` 不同
+- **不要硬编码跳过已有卡片查询**：`get_word_id_map_with_deck` 的 WordId 去重是必要的防御层——`dedup_anki.py` 的 `(sentence, word)` 去重和 `sync_anki.py` 的 `WordId = {lemma}_{pos}_{suffix}` 去重使用不同键，互不替代
 
 ## License
 

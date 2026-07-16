@@ -113,7 +113,7 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 > - ``ModuleNotFoundError: lib`` → 未从 ``<skill_dir>`` 运行
 
 match_sentences.py 产出后立即连接 Anki，按 `(sentence, word)` 键与已有卡片
-比对。已存在的词标记 ``_already_in_anki``，Step 2B–2F 跳过。
+比对。已存在的词**从 JSON 中移除**——后续步骤（2B–2F）只处理新词。
 
 ```bash
 <skill_dir>/.venv/bin/python3 \
@@ -131,7 +131,7 @@ match_sentences.py 产出后立即连接 Anki，按 `(sentence, word)` 键与已
 
 ## Step 2B: 句子审核 + 完整性校验（Claude，1 agent）
 
-> ⚠️ **不可绕过（MUST）**。**跳过 `_already_in_anki` 标记的条目**——已在牌组中，无需重审。
+> ⚠️ **不可绕过（MUST）**。JSON 中只含新词——旧词已被 `dedup_anki.py` 移除。
 
 ### 2B. 手动审核（Claude）
 

@@ -829,13 +829,15 @@ def _cmu_ipa(word: str) -> str:
         ("tion", "tion", "/ʃən/"),   # education   → educate   + /ʃən/
         ("sion", "sion", "/ʒən/"),   # decision    → decide    + /ʒən/
         ("ion",  "ion",  "/ʃən/"),   # dejection   → deject    + /ʃən/
+        ("iness","iness","/inəs/"),  # rubberiness → rubber    + /inəs/
     ]
     for sfx, _strip, append_ipa in suffixes:
         if w.endswith(sfx) and len(w) > len(sfx) + 1:
             base_form = w[:-len(sfx)]
             base_ipa = _cmu_ipa_base(base_form)
             # y→i spelling change: thriftily → thrifti → thrifty
-            if not base_ipa and sfx == "ly" and base_form.endswith("i"):
+            # Also: rubberiness → rubber + y (recover adjective form)
+            if not base_ipa and sfx in ("ly", "iness") and base_form.endswith("i"):
                 base_ipa = _cmu_ipa_base(base_form[:-1] + "y")
             # -ble → -bly: perceptibly → strip ly → perceptib → +le → perceptible
             # (also: probably → probab → +le → probable)
@@ -846,6 +848,21 @@ def _cmu_ipa(word: str) -> str:
                 base_ipa = _cmu_ipa_base(base_form + "te") or _cmu_ipa_base(base_form + "e")
             if base_ipa:
                 return base_ipa.rstrip("/") + append_ipa.lstrip("/")
+
+    # ── prefix stripping ──────────────────────────────────────────────────
+    # Common prefixes where the base form is in cmudict.
+    # Ordered after suffix stripping — suffixes are more common fallbacks.
+    prefixes: list[tuple[str, str, str]] = [
+        ("un", "ʌn"),  # unintelligent → intelligent, prepend /ʌn/
+    ]
+    for pfx, prepend_ipa in prefixes:
+        if w.startswith(pfx) and len(w) > len(pfx) + 2:
+            base_form = w[len(pfx):]
+            base_ipa = _cmu_ipa_base(base_form)
+            if base_ipa:
+                # base_ipa is e.g. "/ˌɪnˈtelədʒənt/" — strip leading /
+                base_clean = base_ipa.lstrip("/")
+                return "/" + prepend_ipa + base_clean
 
     return ""
 

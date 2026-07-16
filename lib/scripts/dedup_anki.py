@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Mechanical Anki dedup by (sentence, word).  Runs after Step 2A, before Step 2B.
 
+Queries Anki for existing cards matching the same (sentence, word) key.
+Entries already in the deck are **removed from the JSON** — subsequent
+steps (translation, definitions, sync) only see new words.
+
 Does NOT depend on POS or lemma — only on sentence text and the surface form
 of the target word.  Both are stable across POS corrections and lemma changes.
-
-Anki cards store the sentence with ``<b>`` tags around the target word
-(e.g. ``"I <b>pondered</b> deeply."``).  We strip the tags to get the plain
-sentence text and extract the tag content to get the target word.
 
 Usage::
 
@@ -72,18 +72,21 @@ def main() -> None:
             if sent and word:
                 existing.add((sent, word))
 
-    # ── mark duplicates ──────────────────────────────────────────────────
+    # ── remove duplicates from JSON ──────────────────────────────────────
     n_existing = 0
+    new_words = []
     for w in words:
         key = (w['sentence'].strip(), w['word'])
         if key in existing:
-            w['_already_in_anki'] = True
             n_existing += 1
+        else:
+            new_words.append(w)
+    data['words'] = new_words
 
     # ── write back ───────────────────────────────────────────────────────
     json.dump(data, open(input_path, 'w', encoding='utf-8'),
               indent=2, ensure_ascii=False)
-    print(f"Anki dedup: {n_existing} in deck, {len(words) - n_existing} new")
+    print(f"Anki dedup: {n_existing} in deck (removed), {len(new_words)} new")
 
 
 if __name__ == '__main__':
