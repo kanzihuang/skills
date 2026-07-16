@@ -1342,7 +1342,13 @@ def process_words(
                     # "along") and postposed adverbs do NOT trigger this rule.
                     # In UD, manner adverbs modifying genuine passive verbs
                     # attach to the auxiliary, not the participle.
-                    if pos == "VERB" and token.tag_ == "VBN":
+                    #
+                    # Guard: aux child (has/have/had) → perfect tense verb.
+                    #   "had just summoned" — "just" is ADV+advmod, but "had"
+                    #   as aux indicates the VBN is a perfect-tense main verb,
+                    #   not an adjective.  aux + VBN is exclusively verbal.
+                    if (pos == "VERB" and token.tag_ == "VBN"
+                            and not any(c.dep_ == "aux" for c in token.children)):
                         for child in token.children:
                             if (child.dep_ == "advmod"
                                     and child.pos_ == "ADV"
