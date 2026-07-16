@@ -1407,12 +1407,12 @@ def process_words(
                     # proper noun (e.g. "the Terrace", "Gulf Stream").  Only
                     # fires when spaCy originally tagged the token as NOUN
                     # (not PROPN→NOUN conversions — those were intentional).
-                    # Guard: if the lowercase form is in form_index (our target
-                    # vocabulary), it's a common noun capitalised by position
-                    # (quote-initial, emphasis) — not a proper noun.
+                    # Guard: if the lowercase form appears anywhere in the
+                    # source text, the capitalisation may be positional
+                    # (quote-initial, emphasis) — do NOT promote.
                     if (not _was_propn and pos == "NOUN" and token.i != 0
                             and token.text and token.text[0].isupper()
-                            and token_lower not in form_index):
+                            and token_lower not in _all_lowercase_words):
                         pos = "PROPN"
 
                     key = (lemma.lower(), pos)

@@ -338,7 +338,15 @@ Symptom: genuine proper nouns (planet names, person names) tagged NOUN. Check: `
 
 **Change (2026-07-09)**: The mid-sentence capitalised NOUN→PROPN rule (`not _was_propn and pos == "NOUN" and token.i != 0 and text[0].isupper()`) converts common nouns at quote starts to PROPN (e.g. "Boa" in `said: "Boa constrictors..."`).  spaCy correctly tags these as NOUN, but the rule assumes any mid-sentence capitalised word is a proper noun — it doesn't account for quotation marks.
 
-**Fix**: Added `and token_lower not in form_index` guard.  If the lowercase form of the token is in our target vocabulary, it's a common noun capitalised by position (quote-initial) — not a proper noun.  Genuine proper nouns that spaCy tagged as NOUN (e.g. "Jupiter" without lowercase occurrences) still convert to PROPN because they were already handled by the PROPN→NOUN→revert path.
+**Fix (2026-07-16)**: Replaced `and token_lower not in form_index` guard with
+`and token_lower not in _all_lowercase_words`.  The old ``form_index`` guard
+used COCA membership — it blocked COCA words from PROPN promotion even when
+they are genuine proper nouns in the specific text (e.g. "Terrace" never
+appears lowercase in OMAS → always a place name).  The new guard checks the
+*source text*: if a word never appears in lowercase, all its capitalised
+occurrences are genuine proper nouns, not positional artefacts.
+Conversely, if lowercase occurrences exist (e.g. both "Boa" and "boa" in the
+text), the capitalised form at a quote start is positional — stay NOUN.
 
 Symptom: `(boa, NOUN)` + `(boa, PROPN)` duplicate entries for the same word, requiring Step 2F manual dedup.  Check: `grep '"lemma": "boa".*"pos": "PROPN"'` in match_sentences output.
 
