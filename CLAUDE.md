@@ -607,6 +607,16 @@ Symptom: "trudged" in "had trudged along" tagged ADJ instead of VERB.
 Check: `grep '"pos": "ADJ"'` in match_sentences output for VBN words
 with postposed particles or SCONJ advmod children.
 
+**Change (2026-07-16)**: Added `aux` child guard.  When a VBN token has an
+``aux`` child (has/have/had), it is a perfect-tense verb — do NOT promote to
+ADJ even when a preceding ADV advmod is present.  E.g. "had just **summoned**"
+= VERB (not ADJ).  The ``aux`` dependency is exclusively verbal in English.
+
+Symptom: perfect-tense verbs like "summoned" in "had just summoned" tagged
+ADJ with definition "[adj.] 被唤起的" instead of VERB.
+Check: ``grep '"pos": "ADJ"'`` for VBN entries whose sentence contains
+"had" + word.
+
 ### smart_truncate() — automated sentence truncation (Step 2B pre-pass)
 
 **Change (2026-07-09)**: `smart_truncate()` added to `match_sentences.py` as a mechanical pre-pass before Step 2B Claude review.  Scans for sentence-ending punctuation (`.!?`) in two directions from the target word.  Sentences that cannot be shortened are kept as-is.
