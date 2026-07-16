@@ -124,6 +124,10 @@ class AnkiConnect:
     # Note mutations
     # ------------------------------------------------------------------
 
+    def delete_notes(self, note_ids: list[int]) -> bool:
+        """Delete notes by ID. Returns True on success."""
+        return self._call("deleteNotes", notes=note_ids)
+
     def add_notes(self, notes: list[dict]) -> list[int | None]:
         """Add notes to the collection. Returns list of note IDs (None for dupes).
 

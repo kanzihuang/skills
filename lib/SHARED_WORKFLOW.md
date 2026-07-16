@@ -289,6 +289,7 @@ POS 对齐 + 释义准确 + 翻译一致性。`lemma` 不在此步检查（match
 | 翻译一致性 | `definition_cn` 与 `translation_cn` 语义对齐 |
 | be+VBN+by 情感形容词 | 对 `pos=VERB` + `word` 以 `-ed` 结尾 + 句中存在 "be...-ed...by" 结构的条目，执行 "very + word" 测试（"very disheartened" ✓ → 形容词）。若判定为情感/状态形容词 → `pos`→`ADJ`、`lemma`→`word`（表面词形）、`definition_cn` 改为形容词释义 |
 | `dep=dobj` 裸不定式 | `pos` 为 NOUN 或 ADJ 且 `dep=dobj` → 检查 head 是否为半情态动词（dare, need, help）或感知动词（see, hear, watch, feel, notice, observe）。若单词在句中作裸不定式 → `pos`→`VERB`，`definition_cn` 改为动词释义。详见 CLAUDE.md |
+| `-ing` 词形 NOUN 误标 | **所有 `pos=NOUN` 且以 `-ing` 结尾的词** → 逐条验证是否确实为动名词（名词），或实际为现在分词（ADJ 或 VERB）。此为 spaCy 已知高危误标模式，不可跳过。判别信号：(1) **前有逻辑主语** — "the **tail slapping**" 中 tail 是 slapping 的施事 → VERB；(2) **处于修饰语系列中** — "the **clicking**, thrusting jaws" 中 clicking 与 thrusting 并列修饰 jaws → ADJ；(3) **与其他 V-ing 并列** — "slapping **and banging**" 暗示动词性 → VERB/ADJ；(4) **head 为认知动词** — "**remember** the tail slapping" 与 see/hear/watch 同类 → VERB。反对机械硬编码动词列表——Claude 用语义理解逐条判别 |
 
 机械检查（word 匹配、IPA 格式、功能词结尾等）由 match_sentences.py 和 sync_anki.py 自动执行。
 

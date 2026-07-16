@@ -481,6 +481,56 @@ Symptom: verbs like "shimmer" tagged NOUN with `dep=dobj` after see/hear/watch.
 Check: `grep '"dep": "dobj"'` in match_sentences output for NOUN/ADJ entries
 whose head word is a perception verb.
 
+### spaCy -ing present participle mis-tagged as NOUN (NOT mechanically fixable)
+
+spaCy frequently mis-tags present participles (-ing words) as NOUN when they
+function as adjectives or verbs.  Two common sub-patterns:
+
+1. **Adjectival -ing in modifier series** (`dep=conj, pos=NOUN`):
+   "the clicking, thrusting all-swallowing jaws" — "clicking" is one of three
+   adjectives modifying "jaws", but spaCy parses it as a noun conjunct of
+   "head" and "eyes".  The dep=conj chain makes the word look coordinated
+   with genuine nouns.
+
+2. **Verbal -ing as reduced clause** (`dep=dobj, pos=NOUN`):
+   "I can remember the tail slapping and banging" — "slapping" is a present
+   participle (VERB) in a reduced clause ("the tail [was] slapping"), but
+   spaCy treats it as a gerund direct object of "remember".  The preceding
+   NP is the logical subject of the -ing verb.
+
+These share the same root cause as the bare-infinitive mis-tag: spaCy
+mis-parses the syntactic role of a non-finite verb form.  A mechanical fix
+would require hard-coded lists of perception/cognition verbs and/or
+adjective-participle lists, violating the "no hard-coded semantic word
+lists" design principle.  Distinguishing "the clicking sound" (genuine
+gerund, correct NOUN) from "the clicking, thrusting jaws" (adjective,
+should be ADJ) requires semantic understanding.
+
+Recognition signals for Step 2F review:
+- **Preceding logical subject**: a noun before the -ing word that can be the
+  agent of the action ("the **tail slapping**" → tail can slap → VERB)
+- **Modifier series**: the -ing word is followed by comma + more modifiers
+  ("the clicking, **thrusting** all-swallowing jaws" → ADJ)
+- **Parallel with other V-ing**: "slapping **and banging**" → verbal
+- **Head is cognition/perception verb**: "**remember** the tail slapping"
+  parallels see/hear/watch/feel bare-infinitive pattern → VERB
+- **"Very + word" test** for adjective candidates: "very clicking" ✗ →
+  not a prototypical adjective, but still functions adjectivally in context
+
+**Step 2F Claude review MUST check every `pos=NOUN` entry whose word ends
+in `-ing`.**  These are high-risk for mis-tag.  `sting` → "sting ray" is
+genuinely a noun compound (stingray).  `trembling` → "trembling sound" is
+borderline (gerund vs. adjective — the definition quality matters more than
+the exact POS label).  When in doubt, prioritize the definition accuracy
+and the learner's understanding.
+
+Symptom: -ing words tagged NOUN with dep=conj (modifier series) or dep=dobj
+(after cognition verb).  Definitions using `[n.]` for clearly verbal/adjectival
+usage.
+Check: `grep '"pos": "NOUN"'` in match_sentences output → scan all -ing entries
+manually in Step 2F.  No mechanical grep can distinguish true gerunds from
+mis-tagged participles.
+
 ### Sentence-initial inverted ADJ detection ("Absurd as it might seem")
 
 **Change (2026-07-08)**: `match_sentences.py` main loop now detects sentence-initial inverted adjective constructions. In "Absurd as it might seem" (= "As absurd as..."), spaCy tags "Absurd" as PROPN (capitalized at sentence start), then PROPN→NOUN converts to NOUN. The fix checks: `pos == "NOUN" AND token.i == 0 AND dep in ("advcl", "root", "ROOT") AND next_token == "as" AND lemminflect ADJ channel returns the surface form`.
