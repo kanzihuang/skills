@@ -336,16 +336,20 @@ Symptom: genuine proper nouns (planet names, person names) tagged NOUN. Check: `
 
 ### Mid-sentence capitalized NOUN→PROPN
 
-**Change (2026-07-16)**: The rule now fires on any non-sentence-initial
-capitalised NOUN → PROPN, with a single guard: skip tokens preceded by a
-quotation mark (``"`` ``"`` ``"`` ``'`` ``'``).  This is the simplest correct
-rule:
+**Change (2026-07-16)**: Character-level punctuation guard.  The rule walks
+backward from the token's character start in the sentence, skips spaces, and
+checks whether the first non-space character is punctuation.  If so the
+capitalisation is structural (quote / sentence boundary), not a proper-noun
+signal.  Only promotes when the preceding non-space character is a letter.
 
-- No ``form_index`` guard (blocked COCA words from PROPN promotion).
-- No ``_all_lowercase_words`` guard (same word can be common & proper noun
-  in one book, e.g. "a sunny terrace" vs "the Terrace").
-- Quote-initial guard: preceding token is a quotation mark → positional
-  capitalisation, not a proper-noun signal.
+| 例句 | 词 | 前邻非空字符 | 结果 |
+|------|-----|------------|------|
+| `the Terrace` | Terrace | `e` (字母) | PROPN |
+| `"Boa constrictors"` | Boa | `"` (引号) | NOUN |
+| `. Tigers live` | Tigers | `.` (句号) | NOUN |
+| `Gulf Stream` | Stream | `f` (字母) | PROPN |
+
+No ``form_index``, ``_all_lowercase_words``, or token-level guards needed.
 
 Symptom: `(boa, NOUN)` + `(boa, PROPN)` duplicate entries for the same word, requiring Step 2F manual dedup.  Check: `grep '"lemma": "boa".*"pos": "PROPN"'` in match_sentences output.
 

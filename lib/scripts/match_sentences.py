@@ -1402,17 +1402,25 @@ def process_words(
                             and token_lower not in _all_lowercase_words):
                         pos = "PROPN"
 
-                    # Mid-sentence capitalized NOUN → PROPN.  In English, a
-                    # common noun capitalised mid-sentence is almost always a
-                    # proper noun (e.g. "the Terrace", "Gulf Stream").  Only
-                    # fires when spaCy originally tagged the token as NOUN
-                    # (not PROPN→NOUN conversions — those were intentional).
-                    # Skip quote-initial tokens (preceded by a quotation mark)
-                    # — the capitalisation is positional, not a proper-noun signal.
+                    # Mid-sentence capitalized NOUN → PROPN.
+                    # Rule: word starts with uppercase, not sentence-initial,
+                    # and no punctuation between it and the preceding letter.
+                    # Walk back from the token start, skip spaces, then check
+                    # whether the first non-space character is punctuation —
+                    # if so the capitalisation is structural (quote / sentence
+                    # boundary), not a proper-noun signal.
                     if (not _was_propn and pos == "NOUN" and token.i != 0
-                            and token.text and token.text[0].isupper()
-                            and doc[token.i - 1].text not in ('"', '"', '"', "'", "'")):
-                        pos = "PROPN"
+                            and token.text and token.text[0].isupper()):
+                        prev_char = None
+                        for j in range(token.idx - 1, -1, -1):
+                            ch = short_sent[j]
+                            if ch != ' ':
+                                prev_char = ch
+                                break
+                        if prev_char is not None and prev_char not in (
+                                '.', '!', '?', ';', ':', ',',
+                                '"', '"', '"', "'", "'"):
+                            pos = "PROPN"
 
                     key = (lemma.lower(), pos)
 

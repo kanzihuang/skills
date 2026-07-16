@@ -2078,13 +2078,16 @@ class TestNormalizeQuotes:
         assert normalize_quotes("＂Hello＂") == '"Hello"'
 
 class TestMidSentenceCapitalizedNounStaysNoun:
-    """Quote-initial capitalised words — the mid-sentence NOUN→PROPN rule
-    skips tokens preceded by a quotation mark, since the capitalisation is
-    positional (quote-start), not a proper-noun signal.
+    """Character-level punctuation guard for mid-sentence NOUN→PROPN.
+
+    The rule walks backward from the token start, skips spaces, and checks
+    whether the first non-space character is punctuation.  If so the
+    capitalisation is structural (quote / sentence boundary), not a
+    proper-noun signal.
     """
 
     def test_quote_initial_capitalized_word_stays_noun(self):
-        """'Boa' capitalised at quote start → stays NOUN (preceded by '\"')."""
+        """'Boa' at quote start → preceded by '\"' → stays NOUN."""
         import json
         from lib.scripts.match_sentences import process_words
 
@@ -2103,12 +2106,37 @@ class TestMidSentenceCapitalizedNounStaysNoun:
         result = process_words(data, source)
         words = result["words"]
 
-        # 1 entry: (boa, NOUN).  "Boa" at quote start stays NOUN because the
-        # preceding token is '\"'.  Lowercase "boa" merges into same group.
         assert len(words) == 1, f"Expected 1 entry, got {len(words)}: {[(w['lemma'], w['pos']) for w in words]}"
         assert words[0]["lemma"] == "boa"
         assert words[0]["pos"] == "NOUN", \
             f"Expected NOUN, got {words[0]['pos']}"
+
+    def test_quote_internal_second_sentence_stays_noun(self):
+        """'Tigers' after '. ' inside a quote → preceded by '.' → stays NOUN."""
+        import json
+        from lib.scripts.match_sentences import process_words
+
+        source = (
+            'He said: "Boa constrictors are dangerous. Tigers live in the jungle." '
+            'He had seen a tiger once.'
+        )
+        data = {
+            "in_coca": [
+                {"lemma": "tiger", "rep": "tiger", "forms": ["tiger", "tigers"]},
+            ],
+            "book_title": "Test Book",
+            "book_author": "Test Author",
+        }
+
+        result = process_words(data, source)
+        words = result["words"]
+
+        # "Tigers" at internal sentence start: preceded by '. ' → stays NOUN
+        tiger_entries = [w for w in words if w["lemma"] == "tiger"]
+        assert len(tiger_entries) == 1, \
+            f"Expected 1 tiger entry, got {len(tiger_entries)}: {[(w['lemma'], w['pos']) for w in tiger_entries]}"
+        assert tiger_entries[0]["pos"] == "NOUN", \
+            f"Expected NOUN, got {tiger_entries[0]['pos']}"
 
     def test_genuine_propn_still_converts(self):
         """'Jupiter' not in form_index → should stay PROPN (or convert from NOUN)."""
