@@ -2078,21 +2078,13 @@ class TestNormalizeQuotes:
         assert normalize_quotes("＂Hello＂") == '"Hello"'
 
 class TestMidSentenceCapitalizedNounStaysNoun:
-    """Quote-initial capitalised common nouns — the mid-sentence NOUN→PROPN rule
-    promotes them; this is acceptable.  The rule uses only token.i != 0 +
-    capitalisation, with no form_index / lowercase guards, because the same
-    word can be a common noun and a proper noun in the same book (e.g. "a sunny
-    terrace" vs "the Terrace").  Edge cases like quote-initial capitalization
-    are rare and handled by Step 2F Claude review.
+    """Quote-initial capitalised words — the mid-sentence NOUN→PROPN rule
+    skips tokens preceded by a quotation mark, since the capitalisation is
+    positional (quote-start), not a proper-noun signal.
     """
 
-    def test_quote_initial_capitalized_word_promoted_to_propn(self):
-        """'Boa' capitalised at quote start → PROPN (simplified rule).
-
-        Produces 2 entries: (boa, PROPN) from the quote-initial occurrence
-        and (boa, NOUN) from the lowercase occurrence.  Step 2F can merge
-        them if needed.
-        """
+    def test_quote_initial_capitalized_word_stays_noun(self):
+        """'Boa' capitalised at quote start → stays NOUN (preceded by '\"')."""
         import json
         from lib.scripts.match_sentences import process_words
 
@@ -2111,11 +2103,12 @@ class TestMidSentenceCapitalizedNounStaysNoun:
         result = process_words(data, source)
         words = result["words"]
 
-        # With the simplified rule, we get 2 entries:
-        # (boa, PROPN) from "Boa" at quote start and (boa, NOUN) from "boa" lowercase.
-        assert len(words) == 2, f"Expected 2 entries, got {len(words)}: {[(w['lemma'], w['pos']) for w in words]}"
-        poses = {w["pos"] for w in words}
-        assert poses == {"PROPN", "NOUN"}, f"Expected PROPN + NOUN, got {poses}"
+        # 1 entry: (boa, NOUN).  "Boa" at quote start stays NOUN because the
+        # preceding token is '\"'.  Lowercase "boa" merges into same group.
+        assert len(words) == 1, f"Expected 1 entry, got {len(words)}: {[(w['lemma'], w['pos']) for w in words]}"
+        assert words[0]["lemma"] == "boa"
+        assert words[0]["pos"] == "NOUN", \
+            f"Expected NOUN, got {words[0]['pos']}"
 
     def test_genuine_propn_still_converts(self):
         """'Jupiter' not in form_index → should stay PROPN (or convert from NOUN)."""

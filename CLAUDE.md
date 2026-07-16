@@ -336,18 +336,16 @@ Symptom: genuine proper nouns (planet names, person names) tagged NOUN. Check: `
 
 ### Mid-sentence capitalized NOUN→PROPN
 
-**Change (2026-07-16)**: The rule is now guard-free: non-sentence-initial
-capitalised NOUN → PROPN, period.  The old ``form_index`` and
-``_all_lowercase_words`` guards were removed because:
+**Change (2026-07-16)**: The rule now fires on any non-sentence-initial
+capitalised NOUN → PROPN, with a single guard: skip tokens preceded by a
+quotation mark (``"`` ``"`` ``"`` ``'`` ``'``).  This is the simplest correct
+rule:
 
-- ``form_index``: blocked COCA words from promotion even when they are
-  genuine proper nouns in context (e.g. "Terrace" as a place name).
-- ``_all_lowercase_words``: the same word can be both a common noun AND
-  a proper noun in the same book (e.g. "a sunny terrace" vs "the Terrace").
-
-Edge cases (quote-initial capitalisation like ``said: "Boa constrictors"``)
-produce a false PROPN entry which Step 2F can correct — this is rarer than
-missed genuine proper nouns.
+- No ``form_index`` guard (blocked COCA words from PROPN promotion).
+- No ``_all_lowercase_words`` guard (same word can be common & proper noun
+  in one book, e.g. "a sunny terrace" vs "the Terrace").
+- Quote-initial guard: preceding token is a quotation mark → positional
+  capitalisation, not a proper-noun signal.
 
 Symptom: `(boa, NOUN)` + `(boa, PROPN)` duplicate entries for the same word, requiring Step 2F manual dedup.  Check: `grep '"lemma": "boa".*"pos": "PROPN"'` in match_sentences output.
 

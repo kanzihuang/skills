@@ -1407,13 +1407,11 @@ def process_words(
                     # proper noun (e.g. "the Terrace", "Gulf Stream").  Only
                     # fires when spaCy originally tagged the token as NOUN
                     # (not PROPN→NOUN conversions — those were intentional).
-                    # No lowercase / vocabulary guard: the same word can be
-                    # both a common noun AND a proper noun in the same book
-                    # (e.g. "a sunny terrace" vs "the Terrace").  Edge cases
-                    # (quote-initial capitalisation) are rare and handled by
-                    # Step 2F Claude review.
+                    # Skip quote-initial tokens (preceded by a quotation mark)
+                    # — the capitalisation is positional, not a proper-noun signal.
                     if (not _was_propn and pos == "NOUN" and token.i != 0
-                            and token.text and token.text[0].isupper()):
+                            and token.text and token.text[0].isupper()
+                            and doc[token.i - 1].text not in ('"', '"', '"', "'", "'")):
                         pos = "PROPN"
 
                     key = (lemma.lower(), pos)
