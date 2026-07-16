@@ -334,19 +334,20 @@ The revert runs AFTER the ADJ-promoting rules (NOUN+compound suffix, NOUN/VERB+a
 
 Symptom: genuine proper nouns (planet names, person names) tagged NOUN. Check: `grep '"pos": "PROPN"'` in match_sentences output — should be non-zero for texts containing proper nouns.
 
-### Mid-sentence capitalized NOUN→PROPN misclassifies quote-initial common nouns
+### Mid-sentence capitalized NOUN→PROPN
 
-**Change (2026-07-09)**: The mid-sentence capitalised NOUN→PROPN rule (`not _was_propn and pos == "NOUN" and token.i != 0 and text[0].isupper()`) converts common nouns at quote starts to PROPN (e.g. "Boa" in `said: "Boa constrictors..."`).  spaCy correctly tags these as NOUN, but the rule assumes any mid-sentence capitalised word is a proper noun — it doesn't account for quotation marks.
+**Change (2026-07-16)**: The rule is now guard-free: non-sentence-initial
+capitalised NOUN → PROPN, period.  The old ``form_index`` and
+``_all_lowercase_words`` guards were removed because:
 
-**Fix (2026-07-16)**: Replaced `and token_lower not in form_index` guard with
-`and token_lower not in _all_lowercase_words`.  The old ``form_index`` guard
-used COCA membership — it blocked COCA words from PROPN promotion even when
-they are genuine proper nouns in the specific text (e.g. "Terrace" never
-appears lowercase in OMAS → always a place name).  The new guard checks the
-*source text*: if a word never appears in lowercase, all its capitalised
-occurrences are genuine proper nouns, not positional artefacts.
-Conversely, if lowercase occurrences exist (e.g. both "Boa" and "boa" in the
-text), the capitalised form at a quote start is positional — stay NOUN.
+- ``form_index``: blocked COCA words from promotion even when they are
+  genuine proper nouns in context (e.g. "Terrace" as a place name).
+- ``_all_lowercase_words``: the same word can be both a common noun AND
+  a proper noun in the same book (e.g. "a sunny terrace" vs "the Terrace").
+
+Edge cases (quote-initial capitalisation like ``said: "Boa constrictors"``)
+produce a false PROPN entry which Step 2F can correct — this is rarer than
+missed genuine proper nouns.
 
 Symptom: `(boa, NOUN)` + `(boa, PROPN)` duplicate entries for the same word, requiring Step 2F manual dedup.  Check: `grep '"lemma": "boa".*"pos": "PROPN"'` in match_sentences output.
 
