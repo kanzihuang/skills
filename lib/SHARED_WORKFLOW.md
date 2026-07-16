@@ -97,6 +97,21 @@ WebSearch → curl 直链 → WebFetch 兜底。优先 Internet Archive / Projec
 
 ### Step 2A-post: Anki 去重（机械，词性产出后立即执行）
 
+> ⚠️ **必须先执行连通性预检**。以下命令必须成功（打印 AnkiConnect 版本号）才能继续。
+> 失败则终止整个流程——不要猜测 "Anki 未运行"，**先确认 Anki 已启动 + 插件已安装**。
+>
+> ```bash
+> <skill_dir>/.venv/bin/python3 -c "
+> from lib.ankiconnect import AnkiConnect
+> print(f'AnkiConnect v{AnkiConnect().version()}')
+> "
+> ```
+>
+> 常见失败模式：
+> - ``No such file or directory`` → ``<skill_dir>/.venv`` 不存在，当前工作目录不对，应先 ``cd <skill_dir>``
+> - ``ConnectionError`` → Anki 未启动或 AnkiConnect 插件未安装
+> - ``ModuleNotFoundError: lib`` → 未从 ``<skill_dir>`` 运行
+
 match_sentences.py 产出后立即连接 Anki，按 `(sentence, word)` 键与已有卡片
 比对。已存在的词标记 ``_already_in_anki``，Step 2B–2F 跳过。
 
@@ -108,6 +123,9 @@ match_sentences.py 产出后立即连接 Anki，按 `(sentence, word)` 键与已
 
 > AnkiConnect 不可达 → 重试一次 → 仍失败则 ``FATAL`` + ``sys.exit(1)``。
 > 去重键 ``(sentence, word)`` 不依赖 POS/lemma，跨次运行稳定。
+>
+> **"暂不同步到 Anki" 只跳过 Step 2H（同步）**——Step 2A-post（去重）仍需执行。
+> 去重是过滤已有卡片，不是同步。
 
 ---
 
